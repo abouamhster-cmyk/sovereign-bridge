@@ -1,13 +1,13 @@
 import os
 import requests
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 
 app = FastAPI()
 
-# --- CONFIGURATION ---
-# Remplace par ton secret Notion (ex: secret_xxxxx...)
+# --- CONFIGURATION SÉCURISÉE ---
+# Render lira cette valeur dans tes "Environment Variables"
 NOTION_TOKEN = os.environ.get("NOTION_TOKEN")
 
 DATABASE_IDS = {
@@ -23,21 +23,24 @@ headers = {
     "Notion-Version": "2022-06-28"
 }
 
-# --- MODELES DE DONNEES ---
+# --- MODÈLES DE DONNÉES ---
 class InboxItem(BaseModel):
     title: str
     item_type: Optional[str] = "Task"
     area: Optional[str] = "Business"
 
-# --- ROUTES API ---
+# --- ROUTES ---
 
 @app.get("/")
 def home():
-    return {"status": "SOVEREIGN Bridge is Online", "owner": "Rebecca"}
+    return {"status": "SOVEREIGN OS Online", "platform": "Render"}
 
 @app.post("/add_inbox")
 def add_inbox(item: InboxItem):
-    """Ajoute une ligne dans l'Inbox Notion"""
+    """Ajoute une entrée dans l'Inbox Notion de Rebecca"""
+    if not NOTION_TOKEN:
+        raise HTTPException(status_code=500, detail="Notion Token manquant sur le serveur")
+    
     url = "https://api.notion.com/v1/pages"
     data = {
         "parent": {"database_id": DATABASE_IDS["inbox"]},
@@ -48,7 +51,10 @@ def add_inbox(item: InboxItem):
         }
     }
     response = requests.post(url, headers=headers, json=data)
-    return response.json()
+    
+    if response.status_code != 200:
+        return {"error": response.json()}
+    return {"status": "Success", "data": "Note ajoutée à l'Inbox"}
 
 @app.get("/list_missions")
 def list_missions():
@@ -57,6 +63,4 @@ def list_missions():
     response = requests.post(url, headers=headers)
     return response.json()
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+# Render gère le port automatiquement via uvicorn dans sa commande de démarrage
