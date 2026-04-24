@@ -173,6 +173,40 @@ async def chat_endpoint(request: ChatRequest):
     return {"reply": "J'ai dû interrompre ma réflexion. Pouvez-vous préciser ?"}
 
 
+
+@app.get("/get_financials")
+def get_financials():
+    """Calcule le solde total de l'empire de Rebecca"""
+    try:
+        # 1. Lire les Dépenses
+        spend_url = f"https://api.notion.com/v1/databases/{DATABASE_IDS['spending']}/query"
+        spend_data = requests.post(spend_url, headers=headers).json()
+        total_spend = sum(
+            page["properties"].get("Amount", {}).get("number") or 0 
+            for page in spend_data.get("results",[])
+        )
+
+        # 2. Lire les Revenus
+        rev_url = f"https://api.notion.com/v1/databases/{DATABASE_IDS['revenue']}/query"
+        rev_data = requests.post(rev_url, headers=headers).json()
+        total_rev = sum(
+            page["properties"].get("Amount Received", {}).get("number") or 0 
+            for page in rev_data.get("results",[])
+        )
+
+        balance = total_rev - total_spend
+
+        return {
+            "total_revenue": total_rev,
+            "total_spent": total_spend,
+            "net_balance": balance
+        }
+    except Exception as e:
+        logger.error(f"Erreur finance: {str(e)}")
+        return {"total_revenue": 0, "total_spent": 0, "net_balance": 0}
+
+
+
 @app.get("/list_missions")
 def list_missions():
     """Route pour que le Frontend affiche les missions sur l'accueil"""
