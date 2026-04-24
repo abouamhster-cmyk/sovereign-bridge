@@ -1,5 +1,6 @@
 import os
 import requests
+import json
 from fastapi import FastAPI
 from pydantic import BaseModel
 from openai import OpenAI
@@ -31,19 +32,56 @@ headers = {
     "Notion-Version": "2022-06-28"
 }
 
-# --- LOGIQUE NOTION ---
-def save_to_notion(table_key, title_col, title_val):
+# --- FONCTION D'ÉCRITURE NOTION ---
+def call_notion_api(table_key, title_val, properties=None):
     db_id = DATABASE_IDS.get(table_key)
-    if not db_id: return "Table non trouvée"
-    url = "https://api.notion.com/v1/pages"
-    data = {
-        "parent": {"database_id": db_id},
-        "properties": {title_col: {"title": [{"text": {"content": title_val}}]}}
+    if not db_id: return "Tableau introuvable."
+    
+    # Définition du nom de la colonne titre selon la table
+    title_mapping = {
+        "task": "Task", "inbox": "Item", "mission": "Mission Name",
+        "spending": "Expense", "revenue": "Source", "family": "Item",
+        "kids": "Document", "move": "Task", "wins": "Win", "team": "Name",
+        "infrastructure": "Asset"
     }
-    requests.post(url, headers=headers, json=data)
-    return f"Succès : {title_val} ajouté dans {table_key}"
+    title_col = title_mapping.get(table_key, "Name")
+    
+    url = "https://api.notion.com/v1/pages"
+    payload = {
+        "parent": {"database_id": db_id},
+        "properties": {
+            title_col: {"title": [{"text": {"content": title_val}}]}
+        }
+    }
+    # Ajout d'autres propriétés (comme le montant) si nécessaire
+    if properties:
+        for k, v in properties.items():
+            if isinstance(v, (int, float)):
+                payload["properties"][k] = {"number": v}
+            else:
+                payload["properties"][k] = {"select": {"name": v}}
 
-# --- LOGIQUE CHAT ---
+    res = requests.post(url, headers=headers, json=payload)
+    return res.json()
+
+# --- DÉFINITION DES OUTILS POUR L'IA ---
+tools = [{
+    "type": "function",
+    "function": {
+        "name": "update_rebecca_empire",
+        "description": "Enregistre une information dans le Notion de Rebecca",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "table_key": {"type": "string", "enum": list(DATABASE_IDS.keys())},
+                "title_val": {"type": "string", "description": "Le texte principal à enregistrer"},
+                "amount": {"type": "number", "description": "Si c'est de l'argent (dépense ou revenu)"}
+            },
+            "required": ["table_key", "title_val"]
+        }
+    }
+}]
+
 class Message(BaseModel):
     role: str
     content: str
@@ -53,13 +91,26 @@ class ChatRequest(BaseModel):
 
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
-    # L'IA discute et décide si elle doit enregistrer dans Notion
+    # Appel OpenAI avec les outils
     response = client.chat.completions.create(
         model="gpt-4o",
-        messages=[{"role": m.role, "content": m.content} for m in request.messages]
+        messages=[{"role": m.role, "content": m.content} for m in request.messages],
+        tools=tools,
+        tool_choice="auto"
     )
-    return {"reply": response.choices[0].message.content}
+    
+    response_message = response.choices[0].message
+    
+    # Si l'IA décide d'appeler Notion
+    if response_message.tool_calls:
+        for tool_call in response_message.tool_calls:
+            args = json.loads(tool_call.function.arguments)
+            props = {"Amount (CFA/USD)": args.get("amount")} if args.get("amount") else None
+            call_notion_api(args['table_key'], args['title_val'], props)
+        
+        return {"reply": f"C'est fait Rebecca, j'ai mis à jour ton tableau {args['table_key']}."}
+
+    return {"reply": response_message.content}
 
 @app.get("/")
-def health():
-    return {"status": "Sovereign Backend Ready"}
+def health(): return {"status": "Sovereign AI Engine Live"}
