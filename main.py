@@ -1,15 +1,18 @@
 import os
 import requests
 import json
-from fastapi import FastAPI, HTTPException
+import logging
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from openai import OpenAI
-from typing import List, Optional, Dict
+from typing import List, Dict
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# --- CONFIGURATION CORS ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,7 +21,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- CLIENTS & SECRETS ---
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 NOTION_TOKEN = os.environ.get("NOTION_TOKEN")
 
@@ -42,73 +44,54 @@ headers = {
     "Notion-Version": "2022-06-28"
 }
 
-# --- LOGIQUE INTELLIGENTE DE MAPPING NOTION ---
 def send_to_notion(table_key: str, data: Dict):
     db_id = DATABASE_IDS.get(table_key)
-    if not db_id: return {"error": "Table non trouvée"}
+    if not db_id: return False, "Tableau introuvable"
 
-    # Mapping des noms de colonnes Titres par table
+    # Noms exacts vérifiés sur tes captures
     title_map = {
         "inbox": "Item", "mission": "Mission Name", "task": "Task",
         "spending": "Expense", "infrastructure": "Asset", "revenue": "Source",
-        "team": "Name", "family": "Item", "kids": "Document",
+        "team": "Name", "family": "Item", "kids": "Document Name", # Modifié ici
         "move": "Task", "wins": "Win"
     }
     
     title_col = title_map.get(table_key, "Name")
-    
-    # Construction de l'objet de propriétés Notion
-    notion_props = {
-        title_col: {"title": [{"text": {"content": data.get("title", "Sans titre")}}]}
-    }
+    notion_props = {title_col: {"title": [{"text": {"content": data.get("title", "Sans titre")}}]}}
 
-    # Intelligence de remplissage selon la table
+    # Mapping financier
     if table_key == "spending" and "amount" in data:
         notion_props["Amount (CFA/USD)"] = {"number": data["amount"]}
-        if "category" in data: notion_props["Category"] = {"select": {"name": data["category"]}}
-
     if table_key == "revenue" and "amount" in data:
         notion_props["Amount Received"] = {"number": data["amount"]}
 
-    if table_key == "task":
-        # L'IA génère les scores Sovereign de 1 à 5
-        notion_props["Urgency"] = {"number": data.get("urgency", 3)}
-        notion_props["Revenue Impact"] = {"number": data.get("revenue_impact", 1)}
-        notion_props["Strategic Value"] = {"number": data.get("strategic_value", 1)}
-        notion_props["Family Impact"] = {"number": data.get("family_impact", 1)}
-        notion_props["Energy Cost"] = {"number": data.get("energy_cost", 2)}
-
-    if table_key in ["infrastructure", "move"]:
-        # Gestion du type "Status" (rond de couleur Notion)
-        notion_props["Status"] = {"status": {"name": data.get("status", "Pas commencé")}}
-
-    if table_key == "family" and "date" in data:
+    # Mapping dates
+    if table_key in ["family", "task", "wins"] and "date" in data:
         notion_props["Date"] = {"date": {"start": data["date"]}}
 
-    url = "https://api.notion.com/v1/pages"
-    res = requests.post(url, headers=headers, json={"parent": {"database_id": db_id}, "properties": notion_props})
-    return res.json()
+    try:
+        res = requests.post("https://api.notion.com/v1/pages", headers=headers, json={"parent": {"database_id": db_id}, "properties": notion_props})
+        if res.status_code == 200:
+            return True, "Success"
+        else:
+            logger.error(f"NOTION API ERROR for {table_key}: {res.text}")
+            return False, res.text
+    except Exception as e:
+        return False, str(e)
 
-# --- DEFINITION DES OUTILS POUR L'IA (TOOLS) ---
+# --- TOOLS ---
 tools = [{
     "type": "function",
     "function": {
         "name": "manage_rebecca_empire",
-        "description": "Enregistre intelligemment une donnée dans le bon tableau Notion de Rebecca.",
+        "description": "Enregistre une donnée dans Notion.",
         "parameters": {
             "type": "object",
             "properties": {
                 "table_key": {"type": "string", "enum": list(DATABASE_IDS.keys())},
-                "title": {"type": "string", "description": "Titre ou description de l'entrée"},
-                "amount": {"type": "number", "description": "Montant financier si applicable"},
-                "category": {"type": "string", "description": "Catégorie (ex: Construction, Scolarité)"},
-                "status": {"type": "string", "description": "Status (ex: En cours, Terminé, Prêt)"},
-                "urgency": {"type": "integer", "minimum": 1, "maximum": 5},
-                "revenue_impact": {"type": "integer", "minimum": 1, "maximum": 5},
-                "strategic_value": {"type": "integer", "minimum": 1, "maximum": 5},
-                "family_impact": {"type": "integer", "minimum": 1, "maximum": 5},
-                "energy_cost": {"type": "integer", "minimum": 1, "maximum": 5},
-                "date": {"type": "string", "description": "Format YYYY-MM-DD"}
+                "title": {"type": "string"},
+                "amount": {"type": "number"},
+                "date": {"type": "string", "description": "YYYY-MM-DD"}
             },
             "required": ["table_key", "title"]
         }
@@ -120,25 +103,16 @@ class ChatRequest(BaseModel):
 
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
-    # Appel à GPT-4o avec connaissance des outils
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=request.messages,
-        tools=tools,
-        tool_choice="auto"
-    )
+    response = client.chat.completions.create(model="gpt-4o", messages=request.messages, tools=tools)
+    msg = response.choices[0].message
     
-    response_message = response.choices[0].message
-    
-    # Si l'IA veut appeler une fonction (Notion)
-    if response_message.tool_calls:
-        for tool_call in response_message.tool_calls:
+    if msg.tool_calls:
+        for tool_call in msg.tool_calls:
             args = json.loads(tool_call.function.arguments)
-            send_to_notion(args["table_key"], args)
-        
-        return {"reply": f"C'est fait, Rebecca. J'ai mis à jour votre {args['table_key']}."}
+            success, error_msg = send_to_notion(args["table_key"], args)
+            if success:
+                return {"reply": f"C'est fait, Rebecca. J'ai mis à jour votre {args['table_key']}."}
+            else:
+                return {"reply": f"Rebecca, j'ai tenté d'écrire dans {args['table_key']} mais Notion a renvoyé une erreur : {error_msg}. Vérifiez les noms des colonnes."}
 
-    return {"reply": response_message.content}
-
-@app.get("/")
-def health(): return {"status": "Sovereign AI Engine Live"}
+    return {"reply": msg.content}
