@@ -207,6 +207,8 @@ def get_financials():
 
 
 
+
+
 @app.get("/list_missions")
 def list_missions():
     """Route pour que le Frontend affiche les missions sur l'accueil"""
@@ -214,5 +216,7 @@ def list_missions():
     url = f"https://api.notion.com/v1/databases/{db_id}/query"
     res = requests.post(url, headers=headers)
     return res.json()
-    
-def health(): return {"status": "Sovereign Intelligence Online"}
+
+@app.get("/")
+def health(): 
+    return {"status": "Sovereign Intelligence Online"}
