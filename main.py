@@ -217,6 +217,20 @@ def list_missions():
     res = requests.post(url, headers=headers)
     return res.json()
 
+
+
+@app.get("/get_table/{table_key}")
+def get_table_data(table_key: str):
+    """Route pour que le Frontend lise n'importe quelle table Notion"""
+    db_id = DATABASE_IDS.get(table_key)
+    if not db_id: 
+        raise HTTPException(status_code=404, detail="Table introuvable")
+    
+    url = f"https://api.notion.com/v1/databases/{db_id}/query"
+    res = requests.post(url, headers=headers)
+    return res.json()
+
+
 @app.get("/")
 def health(): 
     return {"status": "Sovereign Intelligence Online"}
