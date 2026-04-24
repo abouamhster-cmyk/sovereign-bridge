@@ -6,20 +6,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from openai import OpenAI
-from typing import List, Dict, Optional
+from typing import List, Dict
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 NOTION_TOKEN = os.environ.get("NOTION_TOKEN")
@@ -38,70 +31,48 @@ DATABASE_IDS = {
     "wins": "345a95e67e288003b204ed870d366360"
 }
 
-headers = {
-    "Authorization": f"Bearer {NOTION_TOKEN}",
-    "Content-Type": "application/json",
-    "Notion-Version": "2022-06-28"
-}
+headers = {"Authorization": f"Bearer {NOTION_TOKEN}", "Content-Type": "application/json", "Notion-Version": "2022-06-28"}
 
-# --- FONCTION DE LECTURE (POUR QUE L'IA VOIE) ---
+# --- OUTILS NOTION ---
 def query_notion(table_key: str):
     db_id = DATABASE_IDS.get(table_key)
-    if not db_id: return {"error": "Table non trouvée"}
-    url = f"https://api.notion.com/v1/databases/{db_id}/query"
-    res = requests.post(url, headers=headers)
-    return res.json()
+    return requests.post(f"https://api.notion.com/v1/databases/{db_id}/query", headers=headers).json()
 
-# --- FONCTION D'ÉCRITURE AMÉLIORÉE ---
 def send_to_notion(table_key: str, data: Dict):
     db_id = DATABASE_IDS.get(table_key)
-    if not db_id: return False, "Table non trouvée"
-
-    title_map = {
-        "inbox": "Item", "mission": "Mission Name", "task": "Task",
-        "spending": "Expense", "infrastructure": "Asset", "revenue": "Source",
-        "team": "Name", "family": "Item", "kids": "Document Name",
-        "move": "Task", "wins": "Win"
-    }
-    
+    title_map = {"inbox": "Item", "mission": "Mission Name", "task": "Task", "spending": "Expense", "infrastructure": "Asset", "revenue": "Source", "team": "Name", "family": "Item", "kids": "Document Name", "move": "Task", "wins": "Win"}
     title_col = title_map.get(table_key, "Name")
+    
     notion_props = {title_col: {"title": [{"text": {"content": data.get("title", "Sans titre")}}]}}
-
-    # Remplissage intelligent des colonnes (basé sur tes captures)
+    
     if "amount" in data:
         prop_name = "Amount Received" if table_key == "revenue" else "Amount"
         notion_props[prop_name] = {"number": data["amount"]}
-    
     if "category" in data and table_key == "spending":
         notion_props["Category"] = {"select": {"name": data["category"]}}
-
     if "date" in data:
         notion_props["Date"] = {"date": {"start": data["date"]}}
+    if "mission_uuid" in data: # Utilisation du vrai ID de page
+        notion_props["🎯 MISSIONS"] = {"relation": [{"id": data["mission_uuid"]}]}
 
-    # LIER UNE MISSION (Relation)
-    if "mission_id" in data:
-        notion_props["🎯 MISSIONS"] = {"relation": [{"id": data["mission_id"]}]}
+    res = requests.post("https://api.notion.com/v1/pages", headers=headers, json={"parent": {"database_id": db_id}, "properties": notion_props})
+    return res.status_code == 200, res.text
 
-    url = "https://api.notion.com/v1/pages"
-    res = requests.post(url, headers=headers, json={"parent": {"database_id": db_id}, "properties": notion_props})
-    return (True, "Success") if res.status_code == 200 else (False, res.text)
-
-# --- CONFIGURATION DES OUTILS IA ---
+# --- DÉFINITION DES TOOLS POUR OPENAI ---
 tools = [
     {
         "type": "function",
         "function": {
             "name": "write_to_empire",
-            "description": "Enregistre une donnée. Utilise les colonnes : title, amount, category, date, mission_id.",
+            "description": "Enregistre une donnée. Obligatoire : table_key, title. Optionnel : amount, date, mission_uuid (UUID réel de Notion).",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "table_key": {"type": "string", "enum": list(DATABASE_IDS.keys())},
                     "title": {"type": "string"},
                     "amount": {"type": "number"},
-                    "category": {"type": "string"},
                     "date": {"type": "string"},
-                    "mission_id": {"type": "string", "description": "ID de la mission pour lier la donnée"}
+                    "mission_uuid": {"type": "string", "description": "L'ID technique (UUID) de la mission trouvé via read_empire_table"}
                 },
                 "required": ["table_key", "title"]
             }
@@ -111,12 +82,10 @@ tools = [
         "type": "function",
         "function": {
             "name": "read_empire_table",
-            "description": "Lit le contenu d'un tableau pour faire un point ou trouver un ID.",
+            "description": "Lit un tableau pour trouver des infos ou des UUIDs de missions.",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "table_key": {"type": "string", "enum": list(DATABASE_IDS.keys())}
-                },
+                "properties": {"table_key": {"type": "string", "enum": list(DATABASE_IDS.keys())}},
                 "required": ["table_key"]
             }
         }
@@ -128,30 +97,31 @@ class ChatRequest(BaseModel):
 
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=request.messages,
-        tools=tools
-    )
+    current_messages = request.messages
     
-    msg = response.choices[0].message
-    if msg.tool_calls:
+    # Boucle de réflexion (max 3 itérations pour éviter les boucles infinies)
+    for _ in range(3):
+        response = client.chat.completions.create(model="gpt-4o", messages=current_messages, tools=tools)
+        msg = response.choices[0].message
+        current_messages.append(msg)
+
+        if not msg.tool_calls:
+            return {"reply": msg.content}
+
         for tool_call in msg.tool_calls:
             name = tool_call.function.name
             args = json.loads(tool_call.function.arguments)
             
-            if name == "write_to_empire":
-                success, feedback = send_to_notion(args["table_key"], args)
-                return {"reply": f"C'est fait Rebecca. ({args['table_key']})" if success else f"Erreur : {feedback}"}
-            
             if name == "read_empire_table":
-                data = query_notion(args["table_key"])
-                # On renvoie les données à l'IA pour qu'elle les analyse
-                new_messages = request.messages + [msg, {"role": "tool", "tool_call_id": tool_call.id, "content": json.dumps(data)}]
-                second_response = client.chat.completions.create(model="gpt-4o", messages=new_messages)
-                return {"reply": second_response.choices[0].message.content}
-
-    return {"reply": msg.content}
+                result = query_notion(args["table_key"])
+                content = json.dumps(result)
+            elif name == "write_to_empire":
+                success, feedback = send_to_notion(args["table_key"], args)
+                content = "Succès" if success else f"Erreur Notion : {feedback}"
+            
+            current_messages.append({"role": "tool", "tool_call_id": tool_call.id, "content": content})
+    
+    return {"reply": "J'ai dû interrompre ma réflexion. Pouvez-vous préciser ?"}
 
 @app.get("/")
-def health(): return {"status": "Sovereign Intelligence Live"}
+def health(): return {"status": "Sovereign Intelligence Online"}
