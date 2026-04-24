@@ -172,5 +172,13 @@ async def chat_endpoint(request: ChatRequest):
     
     return {"reply": "J'ai dû interrompre ma réflexion. Pouvez-vous préciser ?"}
 
-@app.get("/")
+
+@app.get("/list_missions")
+def list_missions():
+    """Route pour que le Frontend affiche les missions sur l'accueil"""
+    db_id = DATABASE_IDS.get("mission")
+    url = f"https://api.notion.com/v1/databases/{db_id}/query"
+    res = requests.post(url, headers=headers)
+    return res.json()
+    
 def health(): return {"status": "Sovereign Intelligence Online"}
