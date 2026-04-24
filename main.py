@@ -2,19 +2,17 @@ import os
 import requests
 import json
 import logging
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from openai import OpenAI
 from typing import List, Dict, Optional
 
-# Configuration des logs
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# Configuration CORS pour ton application Next.js
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -23,7 +21,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Clients et Configuration
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 NOTION_TOKEN = os.environ.get("NOTION_TOKEN")
 
@@ -47,17 +44,19 @@ headers = {
     "Notion-Version": "2022-06-28"
 }
 
-def get_real_columns(db_id):
-    """Récupère les vrais noms des colonnes pour debug en cas d'erreur"""
-    url = f"https://api.notion.com/v1/databases/{db_id}"
-    res = requests.get(url, headers=headers)
-    return list(res.json().get("properties", {}).keys()) if res.status_code == 200 else []
+# --- FONCTION DE LECTURE (POUR QUE L'IA VOIE) ---
+def query_notion(table_key: str):
+    db_id = DATABASE_IDS.get(table_key)
+    if not db_id: return {"error": "Table non trouvée"}
+    url = f"https://api.notion.com/v1/databases/{db_id}/query"
+    res = requests.post(url, headers=headers)
+    return res.json()
 
+# --- FONCTION D'ÉCRITURE AMÉLIORÉE ---
 def send_to_notion(table_key: str, data: Dict):
     db_id = DATABASE_IDS.get(table_key)
-    if not db_id: return False, "Table introuvable"
+    if not db_id: return False, "Table non trouvée"
 
-    # Mapping précis des colonnes Titres (Name) vérifié sur tes captures
     title_map = {
         "inbox": "Item", "mission": "Mission Name", "task": "Task",
         "spending": "Expense", "infrastructure": "Asset", "revenue": "Source",
@@ -66,98 +65,93 @@ def send_to_notion(table_key: str, data: Dict):
     }
     
     title_col = title_map.get(table_key, "Name")
-    notion_props = {
-        title_col: {"title": [{"text": {"content": data.get("title", "Sans titre")}}]}
-    }
+    notion_props = {title_col: {"title": [{"text": {"content": data.get("title", "Sans titre")}}]}}
 
-    # Logique financière (Noms de colonnes sans espaces)
+    # Remplissage intelligent des colonnes (basé sur tes captures)
     if "amount" in data:
-        if table_key == "spending":
-            notion_props["Amount"] = {"number": data["amount"]}
-        elif table_key == "revenue":
-            notion_props["Amount Received"] = {"number": data["amount"]}
+        prop_name = "Amount Received" if table_key == "revenue" else "Amount"
+        notion_props[prop_name] = {"number": data["amount"]}
+    
+    if "category" in data and table_key == "spending":
+        notion_props["Category"] = {"select": {"name": data["category"]}}
 
-    # Logique de Date
     if "date" in data:
         notion_props["Date"] = {"date": {"start": data["date"]}}
 
-    # Logique de Status (pour move ou infrastructure)
-    if "status" in data and table_key in ["move", "infrastructure"]:
-        notion_props["Status"] = {"status": {"name": data["status"]}}
+    # LIER UNE MISSION (Relation)
+    if "mission_id" in data:
+        notion_props["🎯 MISSIONS"] = {"relation": [{"id": data["mission_id"]}]}
 
-    try:
-        url = "https://api.notion.com/v1/pages"
-        res = requests.post(url, headers=headers, json={"parent": {"database_id": db_id}, "properties": notion_props})
-        
-        if res.status_code == 200:
-            return True, "Success"
-        else:
-            real_cols = get_real_columns(db_id)
-            error_detail = f"Erreur Notion sur '{table_key}'. Colonnes réelles: {real_cols}. Erreur: {res.text}"
-            logger.error(error_detail)
-            return False, error_detail
-    except Exception as e:
-        return False, str(e)
+    url = "https://api.notion.com/v1/pages"
+    res = requests.post(url, headers=headers, json={"parent": {"database_id": db_id}, "properties": notion_props})
+    return (True, "Success") if res.status_code == 200 else (False, res.text)
 
-# --- CHAT LOGIC ---
-
-class Message(BaseModel):
-    role: str
-    content: str
-
-class ChatRequest(BaseModel):
-    messages: List[Message]
-
-@app.post("/chat")
-async def chat_endpoint(request: ChatRequest):
-    # Outils disponibles pour l'IA
-    tools = [{
+# --- CONFIGURATION DES OUTILS IA ---
+tools = [
+    {
         "type": "function",
         "function": {
-            "name": "manage_rebecca_empire",
-            "description": "Enregistre des données (dépenses, tâches, documents, notes) dans le Notion de Rebecca.",
+            "name": "write_to_empire",
+            "description": "Enregistre une donnée. Utilise les colonnes : title, amount, category, date, mission_id.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "table_key": {"type": "string", "enum": list(DATABASE_IDS.keys())},
-                    "title": {"type": "string", "description": "Le texte principal"},
-                    "amount": {"type": "number", "description": "Le montant si financier"},
-                    "date": {"type": "string", "description": "Format YYYY-MM-DD"},
-                    "status": {"type": "string", "description": "État (ex: À faire, Terminé)"}
+                    "title": {"type": "string"},
+                    "amount": {"type": "number"},
+                    "category": {"type": "string"},
+                    "date": {"type": "string"},
+                    "mission_id": {"type": "string", "description": "ID de la mission pour lier la donnée"}
                 },
                 "required": ["table_key", "title"]
             }
         }
-    }]
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_empire_table",
+            "description": "Lit le contenu d'un tableau pour faire un point ou trouver un ID.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "table_key": {"type": "string", "enum": list(DATABASE_IDS.keys())}
+                },
+                "required": ["table_key"]
+            }
+        }
+    }
+]
 
-    try:
-        # Appel OpenAI
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[{"role": m.role, "content": m.content} for m in request.messages],
-            tools=tools,
-            tool_choice="auto"
-        )
-        
-        response_message = response.choices[0].message
+class ChatRequest(BaseModel):
+    messages: List[Dict]
 
-        # Vérification si l'IA veut utiliser l'outil Notion
-        if response_message.tool_calls:
-            for tool_call in response_message.tool_calls:
-                args = json.loads(tool_call.function.arguments)
+@app.post("/chat")
+async def chat_endpoint(request: ChatRequest):
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=request.messages,
+        tools=tools
+    )
+    
+    msg = response.choices[0].message
+    if msg.tool_calls:
+        for tool_call in msg.tool_calls:
+            name = tool_call.function.name
+            args = json.loads(tool_call.function.arguments)
+            
+            if name == "write_to_empire":
                 success, feedback = send_to_notion(args["table_key"], args)
-                
-                if success:
-                    return {"reply": f"C'est fait Rebecca, c'est noté dans {args['table_key']}."}
-                else:
-                    return {"reply": f"Il y a un petit souci technique avec le tableau {args['table_key']}. Voici l'erreur : {feedback}"}
+                return {"reply": f"C'est fait Rebecca. ({args['table_key']})" if success else f"Erreur : {feedback}"}
+            
+            if name == "read_empire_table":
+                data = query_notion(args["table_key"])
+                # On renvoie les données à l'IA pour qu'elle les analyse
+                new_messages = request.messages + [msg, {"role": "tool", "tool_call_id": tool_call.id, "content": json.dumps(data)}]
+                second_response = client.chat.completions.create(model="gpt-4o", messages=new_messages)
+                return {"reply": second_response.choices[0].message.content}
 
-        return {"reply": response_message.content}
-
-    except Exception as e:
-        logger.error(f"Global Error: {str(e)}")
-        return {"reply": "Désolé Rebecca, une erreur système s'est produite."}
+    return {"reply": msg.content}
 
 @app.get("/")
-def health():
-    return {"status": "SOVEREIGN ENGINE LIVE"}
+def health(): return {"status": "Sovereign Intelligence Live"}
