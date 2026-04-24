@@ -46,26 +46,25 @@ headers = {
 
 def send_to_notion(table_key: str, data: Dict):
     db_id = DATABASE_IDS.get(table_key)
-    if not db_id: return False, "Tableau introuvable"
+    if not db_id: return False, "Table non trouvée"
 
-    # Noms exacts vérifiés sur tes captures
     title_map = {
         "inbox": "Item", "mission": "Mission Name", "task": "Task",
         "spending": "Expense", "infrastructure": "Asset", "revenue": "Source",
-        "team": "Name", "family": "Item", "kids": "Document Name", # Modifié ici
+        "team": "Name", "family": "Item", "kids": "Document Name",
         "move": "Task", "wins": "Win"
     }
     
     title_col = title_map.get(table_key, "Name")
     notion_props = {title_col: {"title": [{"text": {"content": data.get("title", "Sans titre")}}]}}
 
-    # Mapping financier
+    # On utilise maintenant le nom simplifié 'Amount' pour les deux tables financières
     if table_key == "spending" and "amount" in data:
-        notion_props["Amount (CFA/USD)"] = {"number": data["amount"]}
+        notion_props["Amount"] = {"number": data["amount"]}
+    
     if table_key == "revenue" and "amount" in data:
-        notion_props["Amount Received"] = {"number": data["amount"]}
+        notion_props["Amount"] = {"number": data["amount"]}
 
-    # Mapping dates
     if table_key in ["family", "task", "wins"] and "date" in data:
         notion_props["Date"] = {"date": {"start": data["date"]}}
 
@@ -74,7 +73,6 @@ def send_to_notion(table_key: str, data: Dict):
         if res.status_code == 200:
             return True, "Success"
         else:
-            logger.error(f"NOTION API ERROR for {table_key}: {res.text}")
             return False, res.text
     except Exception as e:
         return False, str(e)
