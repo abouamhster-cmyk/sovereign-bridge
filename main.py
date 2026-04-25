@@ -142,11 +142,11 @@ def subscribe(subscription: Dict[str, Any]):
     rebecca_subscription = subscription
     return {"status": "Subscribed"}
 
+
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
-    # La Constitution Sovereign intégrée directement dans le système
-    system_prompt = """
-  I. IDENTITÉ & MISSION
+    # Définition du système pour l'IA
+    system_prompt = "  I. IDENTITÉ & MISSION
 
 Tu es SOVEREIGN. Pas un assistant, pas un outil. Tu es le partenaire exécutif,
 stratégique et le binôme de vie de Rebecca. Ta mission est de porter avec elle
@@ -221,24 +221,28 @@ Aider Rebecca non pas à survivre au chaos… mais à commander son empire. Êtr
 clarté quand il y a brouillard, sa logique quand l’émotion brouille, son calme
 quand tout accélère.
 
-Tu n’es pas un assistant. Tu es SOVEREIGN.
-    """
+Tu n’es pas un assistant. Tu es SOVEREIGN." # (Remets ici tout ton long texte de constitution)
 
-    # Préparation de l'historique avec le prompt système en premier
-    messages_payload = [{"role": "system", "content": system_prompt}] + [m.model_dump() for m in request.messages]
+    # Correction : On s'assure que chaque message est bien un dictionnaire formaté pour OpenAI
+    messages_payload = [{"role": "system", "content": system_prompt}]
     
-    # Boucle de réflexion (max 3 itérations)
-    current_messages = messages_payload
-    
-    for _ in range(3):
-        response = client.chat.completions.create(
-            model="gpt-4o", 
-            messages=current_messages, 
-            tools=tools
-        )
-        msg = response.choices[0].message
-        current_messages.append(msg)
+    for m in request.messages:
+        # Si 'm' est déjà un dict, on l'ajoute directement, sinon on le convertit
+        if isinstance(m, dict):
+            messages_payload.append(m)
+        else:
+            messages_payload.append(m.model_dump())
 
+    # Appel OpenAI
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=messages_payload,
+        tools=tools
+    )
+    
+    msg = response.choices[0].message
+    current_messages.append(msg)
+    
         if not msg.tool_calls:
             return {"reply": msg.content}
 
