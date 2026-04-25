@@ -4,3 +4,5 @@ requests
 pydantic
 openai>=1.0.0
 pywebpush
+supabase>=2.0.0
+python-dotenv
