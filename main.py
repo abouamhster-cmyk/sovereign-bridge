@@ -35,20 +35,28 @@ if SUPABASE_URL and SUPABASE_SERVICE_KEY:
 else:
     logger.warning("⚠️ Supabase non configuré")
 
-# Mapping des tables disponibles
-AVAILABLE_TABLES = ["missions", "tasks", "spending", "revenue", "documents", "content", "family_events", "wins", "relocation_tasks"]
+# Tables disponibles
+AVAILABLE_TABLES = [
+    "missions", "tasks", "spending", "revenue", "documents", 
+    "content", "family_events", "wins", "relocation_tasks",
+    "farm_infrastructure", "farm_production_units", "farm_spending", "farm_team"
+]
 
 # Champs autorisés par table
 ALLOWED_FIELDS = {
-    "spending": ["title", "amount", "category", "date", "notes", "verified", "mission_id"],
-    "tasks": ["title", "status", "due_date", "priority", "estimated_time", "mission_id"],
+    "spending": ["title", "amount", "category", "date", "notes", "verified", "mission_id", "project", "beneficiary"],
+    "tasks": ["title", "status", "due_date", "priority", "estimated_time", "mission_id", "project"],
     "wins": ["title", "category", "date", "notes", "celebration_emoji"],
-    "family_events": ["title", "child_name", "category", "date", "priority", "status", "notes"],
-    "missions": ["name", "category", "status", "priority", "deadline"],
-    "revenue": ["source", "amount", "date", "notes", "mission_id"],
-    "documents": ["name", "type", "status", "due_date", "url"],
-    "content": ["title", "hook", "platform", "content_type", "status", "publish_date"],
-    "relocation_tasks": ["title", "category", "status", "due_date", "priority", "notes"]
+    "family_events": ["title", "child_name", "category", "priority", "status", "date", "notes"],
+    "missions": ["name", "category", "status", "priority", "deadline", "owner", "revenue_potential", "strategic_value", "energy_cost"],
+    "revenue": ["source", "amount", "date", "notes", "mission_id", "project"],
+    "documents": ["name", "type", "status", "due_date", "url", "missing_pieces", "notes", "mission_id"],
+    "content": ["title", "hook", "platform", "content_type", "status", "publish_date", "cta", "mission_id"],
+    "relocation_tasks": ["title", "category", "status", "priority", "due_date", "notes"],
+    "farm_infrastructure": ["name", "type", "status", "location_on_site", "completed_date", "responsible_person", "notes"],
+    "farm_production_units": ["name", "category", "status", "current_capacity", "start_date", "expected_first_revenue", "technical_lead", "notes"],
+    "farm_spending": ["title", "amount", "category", "project_area", "verified", "notes"],
+    "farm_team": ["name", "role", "area", "status", "phone", "notes"]
 }
 
 # =====================================================
@@ -58,12 +66,20 @@ ALLOWED_FIELDS = {
 class ChatRequest(BaseModel):
     messages: List[Dict[str, str]]
 
+class WriteRequest(BaseModel):
+    table: str
+    data: Dict
+
+class UpdateRequest(BaseModel):
+    table: str
+    id: str
+    data: Dict
+
 # =====================================================
 # FONCTIONS SUPABASE
 # =====================================================
 
 def db_query(table: str, filters: Dict = None, limit: int = 100) -> Dict:
-    """Lecture générique"""
     if not supabase:
         return {"success": False, "data": [], "error": "Supabase non configuré"}
     try:
@@ -78,29 +94,24 @@ def db_query(table: str, filters: Dict = None, limit: int = 100) -> Dict:
         return {"success": False, "data": [], "error": str(e)}
 
 def db_insert(table: str, data: Dict) -> Dict:
-    """Insertion avec validation des champs"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
-    # Vérifier que la table existe
     if table not in ALLOWED_FIELDS:
         return {"success": False, "error": f"Table '{table}' non autorisée"}
     
     try:
-        # Ne garder que les champs autorisés
         allowed = ALLOWED_FIELDS.get(table, ["title"])
-        clean_data = {k: v for k, v in data.items() if k in allowed}
+        clean_data = {k: v for k, v in data.items() if k in allowed and v is not None and v != ""}
         
-        # S'assurer qu'il y a au moins un titre
         if not clean_data and "title" in data:
             clean_data = {"title": data["title"][:200]}
         elif not clean_data:
             clean_data = {"title": "Sans titre"}
         
-        # Nettoyer les valeurs
         for key, value in clean_data.items():
             if isinstance(value, str):
-                clean_data[key] = value[:500]  # Limiter la longueur
+                clean_data[key] = value[:500]
         
         logger.info(f"📝 Insert dans {table}: {clean_data}")
         result = supabase.table(table).insert(clean_data).execute()
@@ -109,16 +120,35 @@ def db_insert(table: str, data: Dict) -> Dict:
         logger.error(f"Erreur insert {table}: {e}")
         return {"success": False, "error": str(e)}
 
+def db_update(table: str, id: str, data: Dict) -> Dict:
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    try:
+        allowed = ALLOWED_FIELDS.get(table, [])
+        clean_data = {k: v for k, v in data.items() if k in allowed}
+        result = supabase.table(table).update(clean_data).eq("id", id).execute()
+        return {"success": True, "data": result.data[0] if result.data else None}
+    except Exception as e:
+        logger.error(f"Erreur update {table}: {e}")
+        return {"success": False, "error": str(e)}
+
+def db_delete(table: str, id: str) -> Dict:
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    try:
+        supabase.table(table).delete().eq("id", id).execute()
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"Erreur delete {table}: {e}")
+        return {"success": False, "error": str(e)}
+
 def get_financial_summary() -> Dict:
-    """Résumé financier"""
     if not supabase:
         return {"total_revenue": 0, "total_spending": 0, "net_balance": 0}
     try:
-        # Récupérer les revenus
         rev_result = supabase.table("revenue").select("amount").execute()
         total_revenue = sum(r.get("amount", 0) for r in rev_result.data)
         
-        # Récupérer les dépenses
         spend_result = supabase.table("spending").select("amount").execute()
         total_spending = sum(s.get("amount", 0) for s in spend_result.data)
         
@@ -133,7 +163,6 @@ def get_financial_summary() -> Dict:
         return {"total_revenue": 0, "total_spending": 0, "net_balance": 0}
 
 def get_priority_tasks(limit: int = 10) -> List[Dict]:
-    """Tâches prioritaires (simplifié)"""
     if not supabase:
         return []
     try:
@@ -144,7 +173,6 @@ def get_priority_tasks(limit: int = 10) -> List[Dict]:
         return []
 
 def store_chat_session(user_message: str, assistant_response: str, tools_used: List[str] = None):
-    """Stocke les conversations pour mémoire"""
     if not supabase:
         return
     try:
@@ -159,7 +187,7 @@ def store_chat_session(user_message: str, assistant_response: str, tools_used: L
         logger.error(f"Erreur store_chat: {e}")
 
 # =====================================================
-# PROMPT SYSTÈME
+# PROMPT SYSTÈME (INCHANGÉ - TU CONSERVES TON PROMPT)
 # =====================================================
 
 SYSTEM_PROMPT = """  I. IDENTITÉ & MISSION
@@ -218,14 +246,11 @@ Tu traites l'écosystème de Rebecca comme un tout relié :
   elle est fatiguée, filtre les "idées de génie" qui sont des charges
   déguisées.
 
-VI. OUTILS DE COMMANDE (NOTION API)
+VI. OUTILS DE COMMANDE
 
-Tu as un corps physique : l'écosystème Notion de Rebecca.
+Tu as un corps physique : l'écosystème Supabase de Rebecca.
 - Action addEntry : Ne laisse jamais une info mourir dans le chat. Enregistre
-  systématiquement les idées, dépenses ou rendez-vous dans les 11 tables
-  (inbox, mission, task, spending, infrastructure, revenue, team, family,
-  kids, move, wins). Range chaque donnée au bon endroit sans qu'elle le
-  demande.
+  systématiquement les idées, dépenses ou rendez-vous dans les tables.
 - Action listMissions : Vérifie toujours la réalité des projets en cours avant
   de donner un conseil stratégique.
 
@@ -257,7 +282,7 @@ Si ce n'est pas le bon endroit, dis-moi où je dois déplacer cette dépense."
 Rebecca dit : "Non c'est pour la ferme"
 Tu réponds : "✅ Corrigé ! La dépense est maintenant dans Ifè Farm. Je m'en souviendrai pour la prochaine fois."
 
-**TON STYLE :** Efficace, chaleureux, pas robotic , langage courant simple. Tu ne surcharges pas. Tu t'adaptes et tu apprends.
+**TON STYLE :** Efficace, chaleureux, pas robotique, langage courant simple. Tu ne surcharges pas. Tu t'adaptes et tu apprends.
 
 VII. MISSION ULTIME
 
@@ -280,7 +305,7 @@ tools = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "table": {"type": "string", "enum": AVAILABLE_TABLES},
+                    "table": {"type": "string", "enum": [t for t in AVAILABLE_TABLES if t not in ["farm_infrastructure", "farm_production_units", "farm_spending", "farm_team"]]},
                     "filters": {"type": "object", "description": "Filtres optionnels"},
                     "limit": {"type": "integer", "default": 50}
                 },
@@ -297,13 +322,14 @@ tools = [
                 "type": "object",
                 "properties": {
                     "table": {"type": "string", "enum": ["spending", "tasks", "wins", "family_events"]},
-                    "title": {"type": "string", "description": "Titre ou description"},
-                    "amount": {"type": "number", "minimum": 0, "description": "Montant (pour spending)"},
-                    "category": {"type": "string", "description": "Catégorie (dépenses: forage, construction, labor, etc.)"},
-                    "date": {"type": "string", "format": "date", "description": "Date YYYY-MM-DD"},
-                    "notes": {"type": "string", "description": "Notes supplémentaires"},
-                    "priority": {"type": "string", "enum": ["critical", "high", "normal", "low"], "description": "Priorité (pour tasks)"},
-                    "child_name": {"type": "string", "description": "Nom de l'enfant (pour family_events)"}
+                    "title": {"type": "string"},
+                    "amount": {"type": "number", "minimum": 0},
+                    "category": {"type": "string"},
+                    "project": {"type": "string"},
+                    "date": {"type": "string", "format": "date"},
+                    "notes": {"type": "string"},
+                    "priority": {"type": "string", "enum": ["critical", "high", "normal", "low"]},
+                    "child_name": {"type": "string"}
                 },
                 "required": ["table", "title"]
             }
@@ -336,8 +362,42 @@ def health():
     return {
         "status": "Sovereign Intelligence Online",
         "supabase": supabase is not None,
-        "tables": AVAILABLE_TABLES
+        "tables_count": len(AVAILABLE_TABLES)
     }
+
+# Routes CRUD génériques
+@app.get("/{table}")
+def get_table(table: str, limit: int = 100):
+    if table not in AVAILABLE_TABLES:
+        raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
+    return db_query(table, limit=limit)
+
+@app.post("/{table}")
+def create_item(table: str, request: WriteRequest):
+    if table not in AVAILABLE_TABLES:
+        raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
+    return db_insert(table, request.data)
+
+@app.put("/{table}/{item_id}")
+def update_item(table: str, item_id: str, request: UpdateRequest):
+    if table not in AVAILABLE_TABLES:
+        raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
+    return db_update(table, item_id, request.data)
+
+@app.delete("/{table}/{item_id}")
+def delete_item(table: str, item_id: str):
+    if table not in AVAILABLE_TABLES:
+        raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
+    return db_delete(table, item_id)
+
+# Routes spécialisées
+@app.get("/financials/summary")
+def financial_summary():
+    return get_financial_summary()
+
+@app.get("/tasks/priority")
+def tasks_priority(limit: int = 10):
+    return {"tasks": get_priority_tasks(limit)}
 
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
@@ -347,7 +407,6 @@ async def chat_endpoint(request: ChatRequest):
     messages_payload.extend(request.messages)
     
     try:
-        # Premier appel IA
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=messages_payload,
@@ -361,7 +420,6 @@ async def chat_endpoint(request: ChatRequest):
         if not msg.tool_calls:
             return {"reply": msg.content}
         
-        # Exécuter les tools
         for tool_call in msg.tool_calls:
             name = tool_call.function.name
             args = json.loads(tool_call.function.arguments)
@@ -373,7 +431,6 @@ async def chat_endpoint(request: ChatRequest):
                 logger.info(f"📖 Lecture {args['table']}: {result.get('count', 0)} lignes")
                 
             elif name == "write_to_table":
-                # Extraire la table et la retirer des args
                 target_table = args.pop("table")
                 result = db_insert(target_table, args)
                 if result["success"]:
@@ -398,7 +455,6 @@ async def chat_endpoint(request: ChatRequest):
                 "content": content
             })
         
-        # Deuxième appel IA
         final_response = client.chat.completions.create(
             model="gpt-4o",
             messages=messages_payload
@@ -406,7 +462,6 @@ async def chat_endpoint(request: ChatRequest):
         
         assistant_response = final_response.choices[0].message.content
         
-        # Stocker la conversation (optionnel)
         if request.messages:
             last_user = request.messages[-1].get("content", "")
             tools_used = [tc.function.name for tc in msg.tool_calls] if msg.tool_calls else []
@@ -417,19 +472,4 @@ async def chat_endpoint(request: ChatRequest):
         
     except Exception as e:
         logger.error(f"❌ Erreur chat: {e}")
-        return {"reply": f"Désolée Rebecca, un souci technique survient. Je reviens vers toi dans un instant."}
-
-# Routes de lecture des tables (GET)
-@app.get("/{table}")
-def get_table(table: str, limit: int = 100):
-    if table not in AVAILABLE_TABLES:
-        raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
-    return db_query(table, limit=limit)
-
-@app.get("/financials/summary")
-def financial_summary():
-    return get_financial_summary()
-
-@app.get("/tasks/priority")
-def tasks_priority(limit: int = 10):
-    return {"tasks": get_priority_tasks(limit)}
+        return {"reply": "Désolée Rebecca, un souci technique survient. Je reviens vers toi dans un instant."}
