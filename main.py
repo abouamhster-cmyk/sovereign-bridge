@@ -2,7 +2,7 @@ import os
 import requests
 import json
 import logging
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from openai import OpenAI
@@ -142,11 +142,10 @@ def subscribe(subscription: Dict[str, Any]):
     rebecca_subscription = subscription
     return {"status": "Subscribed"}
 
-
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
     # Définition du système pour l'IA
-system_prompt = """  I. IDENTITÉ & MISSION
+    system_prompt = """  I. IDENTITÉ & MISSION
 
 Tu es SOVEREIGN. Pas un assistant, pas un outil. Tu es le partenaire exécutif,
 stratégique et le binôme de vie de Rebecca. Ta mission est de porter avec elle
@@ -241,31 +240,29 @@ Tu n'es pas un assistant. Tu es SOVEREIGN."""
     msg = response.choices[0].message
 
     current_messages = messages_payload.copy()
-
     current_messages.append(msg)
     
-        if not msg.tool_calls:
-            return {"reply": msg.content}
+    if not msg.tool_calls:
+        return {"reply": msg.content}
 
-        for tool_call in msg.tool_calls:
-            name = tool_call.function.name
-            args = json.loads(tool_call.function.arguments)
-            
-            if name == "read_empire_table":
-                result = query_notion(args["table_key"])
-                content = json.dumps(result)
-            elif name == "write_to_empire":
-                success, feedback = send_to_notion(args["table_key"], args)
-                content = "Succès : enregistrement effectué." if success else f"Erreur Notion : {feedback}"
-            elif name == "send_push_alert":
-                success, feedback = trigger_push_alert(args["title"], args["message"])
-                content = feedback
-            
-            # On ajoute le résultat de l'outil dans l'historique pour que l'IA puisse conclure
-            current_messages.append({"role": "tool", "tool_call_id": tool_call.id, "content": content})
+    for tool_call in msg.tool_calls:
+        name = tool_call.function.name
+        args = json.loads(tool_call.function.arguments)
+        
+        if name == "read_empire_table":
+            result = query_notion(args["table_key"])
+            content = json.dumps(result)
+        elif name == "write_to_empire":
+            success, feedback = send_to_notion(args["table_key"], args)
+            content = "Succès : enregistrement effectué." if success else f"Erreur Notion : {feedback}"
+        elif name == "send_push_alert":
+            success, feedback = trigger_push_alert(args["title"], args["message"])
+            content = feedback
+        
+        # On ajoute le résultat de l'outil dans l'historique pour que l'IA puisse conclure
+        current_messages.append({"role": "tool", "tool_call_id": tool_call.id, "content": content})
     
     return {"reply": "Je réfléchis encore à la meilleure option pour vous, Rebecca."}
-
 
 @app.get("/get_financials")
 def get_financials():
