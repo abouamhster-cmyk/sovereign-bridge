@@ -1,3 +1,6 @@
+
+
+
 import os
 import json
 import logging
@@ -25,11 +28,15 @@ SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
 
 if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY manquante")
-if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
-    raise ValueError("SUPABASE_URL ou SUPABASE_SERVICE_KEY manquante")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
+supabase: Client = None
+if SUPABASE_URL and SUPABASE_SERVICE_KEY:
+    supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+    logger.info("✅ Supabase connecté")
+else:
+    logger.warning("⚠️ Supabase non configuré")
 
 # Mapping tables
 TABLE_MAPPING = {
@@ -42,18 +49,22 @@ TABLE_MAPPING = {
     "family_events": "family_events",
     "wins": "wins",
     "relocation_tasks": "relocation_tasks",
-    "farm_infrastructure": "farm_infrastructure",
-    "farm_production_units": "farm_production_units",
-    "farm_spending": "farm_spending",
-    "farm_team": "farm_team"
 }
 
 # =====================================================
-# FONCTIONS BASE DE DONNÉES
+# MODÈLES PYDANTIC
+# =====================================================
+
+class ChatRequest(BaseModel):
+    messages: List[Dict[str, str]]
+
+# =====================================================
+# FONCTIONS SUPABASE
 # =====================================================
 
 def db_query(table: str, filters: Dict = None, limit: int = 100) -> Dict:
-    """Lecture générique"""
+    if not supabase:
+        return {"success": False, "data": [], "error": "Supabase non configuré"}
     try:
         query = supabase.table(table).select("*").limit(limit)
         if filters:
@@ -66,44 +77,19 @@ def db_query(table: str, filters: Dict = None, limit: int = 100) -> Dict:
         return {"success": False, "data": [], "error": str(e)}
 
 def db_insert(table: str, data: Dict) -> Dict:
-    """Insertion générique avec validation basique"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
     try:
-        # Nettoyage basique
-        clean_data = {}
-        for key, value in data.items():
-            if value is not None and value != "":
-                clean_data[key] = value
-        
+        clean_data = {k: v for k, v in data.items() if v is not None and v != ""}
         result = supabase.table(table).insert(clean_data).execute()
         return {"success": True, "data": result.data[0] if result.data else None}
     except Exception as e:
         logger.error(f"Erreur insert {table}: {e}")
         return {"success": False, "error": str(e)}
 
-def db_update(table: str, id: str, data: Dict) -> Dict:
-    """Mise à jour générique"""
-    try:
-        result = supabase.table(table).update(data).eq("id", id).execute()
-        return {"success": True, "data": result.data[0] if result.data else None}
-    except Exception as e:
-        logger.error(f"Erreur update {table}: {e}")
-        return {"success": False, "error": str(e)}
-
-def db_delete(table: str, id: str) -> Dict:
-    """Suppression générique"""
-    try:
-        supabase.table(table).delete().eq("id", id).execute()
-        return {"success": True}
-    except Exception as e:
-        logger.error(f"Erreur delete {table}: {e}")
-        return {"success": False, "error": str(e)}
-
-# =====================================================
-# FONCTIONS SPÉCIALISÉES
-# =====================================================
-
 def get_financial_summary() -> Dict:
-    """Résumé financier"""
+    if not supabase:
+        return {"total_revenue": 0, "total_spending": 0, "net_balance": 0}
     try:
         result = supabase.rpc("get_financial_summary").execute()
         return result.data if result.data else {"total_revenue": 0, "total_spending": 0, "net_balance": 0}
@@ -112,7 +98,8 @@ def get_financial_summary() -> Dict:
         return {"total_revenue": 0, "total_spending": 0, "net_balance": 0}
 
 def get_priority_tasks(limit: int = 10) -> List[Dict]:
-    """Tâches prioritaires"""
+    if not supabase:
+        return []
     try:
         result = supabase.rpc("get_priority_tasks", {"p_limit": limit}).execute()
         return result.data if result.data else []
@@ -120,17 +107,9 @@ def get_priority_tasks(limit: int = 10) -> List[Dict]:
         logger.error(f"Erreur priority_tasks: {e}")
         return []
 
-def get_ai_context(limit: int = 10) -> Dict:
-    """Contexte pour l'IA (mémoire)"""
-    try:
-        result = supabase.rpc("get_ai_context", {"p_user_id": "rebecca", "p_limit": limit}).execute()
-        return result.data if result.data else {"memory": [], "recent_chats": []}
-    except Exception as e:
-        logger.error(f"Erreur ai_context: {e}")
-        return {"memory": [], "recent_chats": []}
-
 def store_chat_session(user_message: str, assistant_response: str, tools_used: List[str] = None):
-    """Stocke les conversations"""
+    if not supabase:
+        return
     try:
         supabase.table("chat_sessions").insert({
             "user_message": user_message[:500],
@@ -140,64 +119,6 @@ def store_chat_session(user_message: str, assistant_response: str, tools_used: L
         }).execute()
     except Exception as e:
         logger.error(f"Erreur store_chat: {e}")
-
-# =====================================================
-# TOOLS POUR OPENAI
-# =====================================================
-
-tools = [
-    {
-        "type": "function",
-        "function": {
-            "name": "read_table",
-            "description": "Lit les données d'une table",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "table": {"type": "string", "enum": list(TABLE_MAPPING.keys())},
-                    "filters": {"type": "object", "description": "Filtres optionnels"},
-                    "limit": {"type": "integer", "description": "Nombre max de résultats", "default": 50}
-                },
-                "required": ["table"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "write_to_table",
-            "description": "Écrit une nouvelle entrée dans une table",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "table": {"type": "string", "enum": ["spending", "tasks", "wins", "family_events", "farm_spending"]},
-                    "title": {"type": "string"},
-                    "amount": {"type": "number", "minimum": 0},
-                    "category": {"type": "string"},
-                    "date": {"type": "string", "format": "date"},
-                    "notes": {"type": "string"}
-                },
-                "required": ["table", "title"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_financial_summary",
-            "description": "Retourne le résumé financier (revenus, dépenses, solde)",
-            "parameters": {"type": "object", "properties": {}, "required": []}
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_priority_tasks",
-            "description": "Retourne les tâches prioritaires",
-            "parameters": {"type": "object", "properties": {"limit": {"type": "integer"}}, "required": []}
-        }
-    }
-]
 
 # =====================================================
 # PROMPT SYSTÈME
@@ -279,72 +200,77 @@ quand tout accélère.
 Tu n'es pas un assistant. Tu es SOVEREIGN."""
 
 # =====================================================
+# TOOLS
+# =====================================================
+
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "read_table",
+            "description": "Lit les données d'une table",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "table": {"type": "string", "enum": list(TABLE_MAPPING.keys())},
+                    "filters": {"type": "object", "description": "Filtres optionnels"},
+                    "limit": {"type": "integer", "default": 50}
+                },
+                "required": ["table"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_to_table",
+            "description": "Écrit une nouvelle entrée (spending, tasks, wins, family_events)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "table": {"type": "string", "enum": ["spending", "tasks", "wins", "family_events"]},
+                    "title": {"type": "string"},
+                    "amount": {"type": "number", "minimum": 0},
+                    "category": {"type": "string"},
+                    "date": {"type": "string", "format": "date"},
+                    "notes": {"type": "string"}
+                },
+                "required": ["table", "title"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_financial_summary",
+            "description": "Retourne le résumé financier (revenus, dépenses, solde)",
+            "parameters": {"type": "object", "properties": {}, "required": []}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_priority_tasks",
+            "description": "Retourne les tâches prioritaires",
+            "parameters": {"type": "object", "properties": {"limit": {"type": "integer"}}, "required": []}
+        }
+    }
+]
+
+# =====================================================
 # ROUTES API
 # =====================================================
 
-class ChatRequest(BaseModel):
-    messages: List[Dict]
-
-class WriteRequest(BaseModel):
-    table: str
-    data: Dict
-
-class UpdateRequest(BaseModel):
-    table: str
-    id: str
-    data: Dict
-
 @app.get("/")
 def health():
-    return {"status": "Sovereign Intelligence Online", "supabase": True}
-
-# Routes CRUD génériques
-@app.get("/{table}")
-def get_table(table: str, limit: int = 100):
-    if table not in TABLE_MAPPING:
-        raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
-    return db_query(TABLE_MAPPING[table], limit=limit)
-
-@app.post("/{table}")
-def create_item(table: str, request: WriteRequest):
-    if table not in TABLE_MAPPING:
-        raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
-    return db_insert(TABLE_MAPPING[table], request.data)
-
-@app.put("/{table}/{item_id}")
-def update_item(table: str, item_id: str, request: UpdateRequest):
-    if table not in TABLE_MAPPING:
-        raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
-    return db_update(TABLE_MAPPING[table], item_id, request.data)
-
-@app.delete("/{table}/{item_id}")
-def delete_item(table: str, item_id: str):
-    if table not in TABLE_MAPPING:
-        raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
-    return db_delete(TABLE_MAPPING[table], item_id)
-
-# Routes spécialisées
-@app.get("/financials/summary")
-def financial_summary():
-    return get_financial_summary()
-
-@app.get("/tasks/priority")
-def priority_tasks(limit: int = 10):
-    return {"tasks": get_priority_tasks(limit)}
-
-@app.get("/context/ai")
-def ai_context(limit: int = 10):
-    return get_ai_context(limit)
+    return {"status": "Sovereign Intelligence Online", "supabase": supabase is not None}
 
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
-    messages_payload = [{"role": "system", "content": SYSTEM_PROMPT}]
+    logger.info(f"📨 Reçu: {len(request.messages)} messages")
     
-    for m in request.messages:
-        if isinstance(m, dict):
-            messages_payload.append(m)
-        else:
-            messages_payload.append(m.model_dump())
+    messages_payload = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages_payload.extend(request.messages)
     
     # Premier appel IA
     response = client.chat.completions.create(
@@ -367,7 +293,7 @@ async def chat_endpoint(request: ChatRequest):
         content = ""
         
         if name == "read_table":
-            result = db_query(args["table"], args.get("filters", {}), args.get("limit", 50))
+            result = db_query(args["table"], args.get("filters"), args.get("limit", 50))
             content = json.dumps(result, ensure_ascii=False)
             
         elif name == "write_to_table":
@@ -398,7 +324,20 @@ async def chat_endpoint(request: ChatRequest):
     
     # Stocker la conversation
     if request.messages:
-        last_user = request.messages[-1].get("content", "") if isinstance(request.messages[-1], dict) else request.messages[-1].content
+        last_user = request.messages[-1].get("content", "")
         store_chat_session(last_user, assistant_response)
     
+    logger.info(f"📨 Réponse envoyée")
     return {"reply": assistant_response}
+
+# Routes de lecture des tables (GET uniquement)
+@app.get("/{table}")
+def get_table(table: str, limit: int = 100):
+    if table not in TABLE_MAPPING:
+        raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
+    return db_query(TABLE_MAPPING[table], limit=limit)
+
+@app.get("/financials/summary")
+def financial_summary():
+    return get_financial_summary()
+
