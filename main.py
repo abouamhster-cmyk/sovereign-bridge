@@ -1,5 +1,4 @@
 import os
-import requests
 import json
 import logging
 from fastapi import FastAPI, HTTPException
@@ -7,7 +6,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from openai import OpenAI
 from typing import List, Dict, Any
-from pywebpush import webpush, WebPushException
+from supabase import create_client, Client
+from datetime import datetime
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -15,139 +15,195 @@ logger = logging.getLogger(__name__)
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-# --- CONFIGURATION SECRETS ---
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-NOTION_TOKEN = os.environ.get("NOTION_TOKEN")
-VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY") # Clé pour les notifications
+# =====================================================
+# CONFIGURATION
+# =====================================================
 
-DATABASE_IDS = {
-    "inbox": "345a95e67e2880fa9f59cf10841aad32",
-    "mission": "345a95e67e28803d8751e0d78048c3bd",
-    "task": "345a95e67e28801481badd2ec8442615",
-    "spending": "345a95e67e28809991f7d26de9168c09",
-    "infrastructure": "345a95e67e288095852bd57abfd167f2",
-    "revenue": "346a95e67e2880ab9a96ce90c44df26b",
-    "team": "345a95e67e28806a9b0fec8a149ecade",
-    "family": "345a95e67e2880b89ef4c839c26ecf67",
-    "kids": "345a95e67e28805ab193dae4e21fe5b2",
-    "move": "345a95e67e2880608e6dc46295ac3113",
-    "wins": "345a95e67e288003b204ed870d366360",
-    "content": "345a95e67e2880ee8a5dd7b7df92ce15",
-    "document: "34da95e67e2880978e73ee45652a216c"
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
+
+if not OPENAI_API_KEY:
+    raise ValueError("OPENAI_API_KEY manquante")
+if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+    raise ValueError("SUPABASE_URL ou SUPABASE_SERVICE_KEY manquante")
+
+client = OpenAI(api_key=OPENAI_API_KEY)
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
+# Mapping tables
+TABLE_MAPPING = {
+    "missions": "missions",
+    "tasks": "tasks",
+    "spending": "spending",
+    "revenue": "revenue",
+    "documents": "documents",
+    "content": "content",
+    "family_events": "family_events",
+    "wins": "wins",
+    "relocation_tasks": "relocation_tasks",
+    "farm_infrastructure": "farm_infrastructure",
+    "farm_production_units": "farm_production_units",
+    "farm_spending": "farm_spending",
+    "farm_team": "farm_team"
 }
 
-headers = {"Authorization": f"Bearer {NOTION_TOKEN}", "Content-Type": "application/json", "Notion-Version": "2022-06-28"}
+# =====================================================
+# FONCTIONS BASE DE DONNÉES
+# =====================================================
 
-# Stockage temporaire de l'abonnement du navigateur de Rebecca
-rebecca_subscription = {}
-
-# --- OUTILS NOTION ---
-def query_notion(table_key: str):
-    db_id = DATABASE_IDS.get(table_key)
-    return requests.post(f"https://api.notion.com/v1/databases/{db_id}/query", headers=headers).json()
-
-def send_to_notion(table_key: str, data: Dict):
-    db_id = DATABASE_IDS.get(table_key)
-    title_map = {"inbox": "Item", "mission": "Mission Name", "task": "Task", "spending": "Expense", "infrastructure": "Asset", "revenue": "Source", "team": "Name", "family": "Item", "kids": "Document Name", "move": "Task", "wins": "Win"}
-    title_col = title_map.get(table_key, "Name")
-    
-    notion_props = {title_col: {"title":[{"text": {"content": data.get("title", "Sans titre")}}]}}
-    
-    if "amount" in data:
-        prop_name = "Amount Received" if table_key == "revenue" else "Amount"
-        notion_props[prop_name] = {"number": data["amount"]}
-    if "category" in data and table_key == "spending":
-        notion_props["Category"] = {"select": {"name": data["category"]}}
-    if "date" in data:
-        notion_props["Date"] = {"date": {"start": data["date"]}}
-    if "mission_uuid" in data:
-        notion_props["🎯 MISSIONS"] = {"relation": [{"id": data["mission_uuid"]}]}
-
-    res = requests.post("https://api.notion.com/v1/pages", headers=headers, json={"parent": {"database_id": db_id}, "properties": notion_props})
-    return res.status_code == 200, res.text
-
-def trigger_push_alert(title: str, message: str):
-    global rebecca_subscription
-    if not rebecca_subscription:
-        return False, "Le navigateur de Rebecca n'est pas connecté aux alertes."
-    if not VAPID_PRIVATE_KEY:
-        return False, "Clé VAPID manquante sur le serveur."
+def db_query(table: str, filters: Dict = None, limit: int = 100) -> Dict:
+    """Lecture générique"""
     try:
-        webpush(
-            subscription_info=rebecca_subscription,
-            data=json.dumps({"title": title, "body": message}),
-            vapid_private_key=VAPID_PRIVATE_KEY,
-            vapid_claims={"sub": "mailto:admin@sovereign.com"}
-        )
-        return True, "Alerte envoyée au téléphone."
-    except WebPushException as ex:
-        return False, str(ex)
+        query = supabase.table(table).select("*").limit(limit)
+        if filters:
+            for key, value in filters.items():
+                query = query.eq(key, value)
+        result = query.execute()
+        return {"success": True, "data": result.data, "count": len(result.data)}
+    except Exception as e:
+        logger.error(f"Erreur query {table}: {e}")
+        return {"success": False, "data": [], "error": str(e)}
 
-# --- DÉFINITION DES TOOLS POUR OPENAI ---
-tools =[
+def db_insert(table: str, data: Dict) -> Dict:
+    """Insertion générique avec validation basique"""
+    try:
+        # Nettoyage basique
+        clean_data = {}
+        for key, value in data.items():
+            if value is not None and value != "":
+                clean_data[key] = value
+        
+        result = supabase.table(table).insert(clean_data).execute()
+        return {"success": True, "data": result.data[0] if result.data else None}
+    except Exception as e:
+        logger.error(f"Erreur insert {table}: {e}")
+        return {"success": False, "error": str(e)}
+
+def db_update(table: str, id: str, data: Dict) -> Dict:
+    """Mise à jour générique"""
+    try:
+        result = supabase.table(table).update(data).eq("id", id).execute()
+        return {"success": True, "data": result.data[0] if result.data else None}
+    except Exception as e:
+        logger.error(f"Erreur update {table}: {e}")
+        return {"success": False, "error": str(e)}
+
+def db_delete(table: str, id: str) -> Dict:
+    """Suppression générique"""
+    try:
+        supabase.table(table).delete().eq("id", id).execute()
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"Erreur delete {table}: {e}")
+        return {"success": False, "error": str(e)}
+
+# =====================================================
+# FONCTIONS SPÉCIALISÉES
+# =====================================================
+
+def get_financial_summary() -> Dict:
+    """Résumé financier"""
+    try:
+        result = supabase.rpc("get_financial_summary").execute()
+        return result.data if result.data else {"total_revenue": 0, "total_spending": 0, "net_balance": 0}
+    except Exception as e:
+        logger.error(f"Erreur financial_summary: {e}")
+        return {"total_revenue": 0, "total_spending": 0, "net_balance": 0}
+
+def get_priority_tasks(limit: int = 10) -> List[Dict]:
+    """Tâches prioritaires"""
+    try:
+        result = supabase.rpc("get_priority_tasks", {"p_limit": limit}).execute()
+        return result.data if result.data else []
+    except Exception as e:
+        logger.error(f"Erreur priority_tasks: {e}")
+        return []
+
+def get_ai_context(limit: int = 10) -> Dict:
+    """Contexte pour l'IA (mémoire)"""
+    try:
+        result = supabase.rpc("get_ai_context", {"p_user_id": "rebecca", "p_limit": limit}).execute()
+        return result.data if result.data else {"memory": [], "recent_chats": []}
+    except Exception as e:
+        logger.error(f"Erreur ai_context: {e}")
+        return {"memory": [], "recent_chats": []}
+
+def store_chat_session(user_message: str, assistant_response: str, tools_used: List[str] = None):
+    """Stocke les conversations"""
+    try:
+        supabase.table("chat_sessions").insert({
+            "user_message": user_message[:500],
+            "assistant_response": assistant_response[:1000],
+            "tools_used": tools_used or [],
+            "user_id": "rebecca"
+        }).execute()
+    except Exception as e:
+        logger.error(f"Erreur store_chat: {e}")
+
+# =====================================================
+# TOOLS POUR OPENAI
+# =====================================================
+
+tools = [
     {
         "type": "function",
         "function": {
-            "name": "write_to_empire",
-            "description": "Enregistre une donnée. Obligatoire : table_key, title. Optionnel : amount, date, mission_uuid.",
+            "name": "read_table",
+            "description": "Lit les données d'une table",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "table_key": {"type": "string", "enum": list(DATABASE_IDS.keys())},
+                    "table": {"type": "string", "enum": list(TABLE_MAPPING.keys())},
+                    "filters": {"type": "object", "description": "Filtres optionnels"},
+                    "limit": {"type": "integer", "description": "Nombre max de résultats", "default": 50}
+                },
+                "required": ["table"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_to_table",
+            "description": "Écrit une nouvelle entrée dans une table",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "table": {"type": "string", "enum": ["spending", "tasks", "wins", "family_events", "farm_spending"]},
                     "title": {"type": "string"},
-                    "amount": {"type": "number"},
-                    "date": {"type": "string"},
-                    "mission_uuid": {"type": "string"}
+                    "amount": {"type": "number", "minimum": 0},
+                    "category": {"type": "string"},
+                    "date": {"type": "string", "format": "date"},
+                    "notes": {"type": "string"}
                 },
-                "required": ["table_key", "title"]
+                "required": ["table", "title"]
             }
         }
     },
     {
         "type": "function",
         "function": {
-            "name": "read_empire_table",
-            "description": "Lit un tableau pour trouver des infos ou des UUIDs de missions.",
-            "parameters": {
-                "type": "object",
-                "properties": {"table_key": {"type": "string", "enum": list(DATABASE_IDS.keys())}},
-                "required": ["table_key"]
-            }
+            "name": "get_financial_summary",
+            "description": "Retourne le résumé financier (revenus, dépenses, solde)",
+            "parameters": {"type": "object", "properties": {}, "required": []}
         }
     },
     {
         "type": "function",
         "function": {
-            "name": "send_push_alert",
-            "description": "Envoie une notification push native sur l'appareil de Rebecca.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string", "description": "Titre de l'alerte"},
-                    "message": {"type": "string", "description": "Contenu du rappel"}
-                },
-                "required": ["title", "message"]
-            }
+            "name": "get_priority_tasks",
+            "description": "Retourne les tâches prioritaires",
+            "parameters": {"type": "object", "properties": {"limit": {"type": "integer"}}, "required": []}
         }
     }
 ]
 
-class ChatRequest(BaseModel):
-    messages: List[Dict]
+# =====================================================
+# PROMPT SYSTÈME
+# =====================================================
 
-# --- ROUTES API ---
-
-@app.post("/subscribe")
-def subscribe(subscription: Dict[str, Any]):
-    """Reçoit la clé du navigateur de Rebecca pour lui envoyer des push"""
-    global rebecca_subscription
-    rebecca_subscription = subscription
-    return {"status": "Subscribed"}
-
-
-@app.post("/chat")
-async def chat_endpoint(request: ChatRequest):
-    system_prompt = """  I. IDENTITÉ & MISSION
+SYSTEM_PROMPT = """  I. IDENTITÉ & MISSION
 
 Tu es SOVEREIGN. Pas un assistant, pas un outil. Tu es le partenaire exécutif,
 stratégique et le binôme de vie de Rebecca. Ta mission est de porter avec elle
@@ -222,122 +278,127 @@ quand tout accélère.
 
 Tu n'es pas un assistant. Tu es SOVEREIGN."""
 
-    messages_payload = [{"role": "system", "content": system_prompt}]
+# =====================================================
+# ROUTES API
+# =====================================================
+
+class ChatRequest(BaseModel):
+    messages: List[Dict]
+
+class WriteRequest(BaseModel):
+    table: str
+    data: Dict
+
+class UpdateRequest(BaseModel):
+    table: str
+    id: str
+    data: Dict
+
+@app.get("/")
+def health():
+    return {"status": "Sovereign Intelligence Online", "supabase": True}
+
+# Routes CRUD génériques
+@app.get("/{table}")
+def get_table(table: str, limit: int = 100):
+    if table not in TABLE_MAPPING:
+        raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
+    return db_query(TABLE_MAPPING[table], limit=limit)
+
+@app.post("/{table}")
+def create_item(table: str, request: WriteRequest):
+    if table not in TABLE_MAPPING:
+        raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
+    return db_insert(TABLE_MAPPING[table], request.data)
+
+@app.put("/{table}/{item_id}")
+def update_item(table: str, item_id: str, request: UpdateRequest):
+    if table not in TABLE_MAPPING:
+        raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
+    return db_update(TABLE_MAPPING[table], item_id, request.data)
+
+@app.delete("/{table}/{item_id}")
+def delete_item(table: str, item_id: str):
+    if table not in TABLE_MAPPING:
+        raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
+    return db_delete(TABLE_MAPPING[table], item_id)
+
+# Routes spécialisées
+@app.get("/financials/summary")
+def financial_summary():
+    return get_financial_summary()
+
+@app.get("/tasks/priority")
+def priority_tasks(limit: int = 10):
+    return {"tasks": get_priority_tasks(limit)}
+
+@app.get("/context/ai")
+def ai_context(limit: int = 10):
+    return get_ai_context(limit)
+
+@app.post("/chat")
+async def chat_endpoint(request: ChatRequest):
+    messages_payload = [{"role": "system", "content": SYSTEM_PROMPT}]
     
     for m in request.messages:
         if isinstance(m, dict):
             messages_payload.append(m)
         else:
             messages_payload.append(m.model_dump())
-
-    # Premier appel à l'IA
+    
+    # Premier appel IA
     response = client.chat.completions.create(
         model="gpt-4o",
         messages=messages_payload,
-        tools=tools
+        tools=tools,
+        tool_choice="auto"
     )
     
     msg = response.choices[0].message
     messages_payload.append(msg)
     
-    # Si pas de tool, retourner la réponse directement
     if not msg.tool_calls:
         return {"reply": msg.content}
     
-    # Exécuter les tools demandés
+    # Exécuter les tools
     for tool_call in msg.tool_calls:
         name = tool_call.function.name
         args = json.loads(tool_call.function.arguments)
+        content = ""
         
-        if name == "read_empire_table":
-            result = query_notion(args["table_key"])
-            content = json.dumps(result)
-        elif name == "write_to_empire":
-            success, feedback = send_to_notion(args["table_key"], args)
-            content = "Succès : enregistrement effectué." if success else f"Erreur Notion : {feedback}"
-        elif name == "send_push_alert":
-            success, feedback = trigger_push_alert(args["title"], args["message"])
-            content = feedback
+        if name == "read_table":
+            result = db_query(args["table"], args.get("filters", {}), args.get("limit", 50))
+            content = json.dumps(result, ensure_ascii=False)
+            
+        elif name == "write_to_table":
+            result = db_insert(args["table"], args)
+            content = "✅ Enregistrement réussi" if result["success"] else f"❌ Erreur: {result.get('error', 'inconnue')}"
+            
+        elif name == "get_financial_summary":
+            result = get_financial_summary()
+            content = json.dumps(result, ensure_ascii=False)
+            
+        elif name == "get_priority_tasks":
+            result = get_priority_tasks(args.get("limit", 10))
+            content = json.dumps(result, ensure_ascii=False)
         
-        # Ajouter le résultat du tool
         messages_payload.append({
-            "role": "tool", 
-            "tool_call_id": tool_call.id, 
+            "role": "tool",
+            "tool_call_id": tool_call.id,
             "content": content
         })
     
-    # DEUXIÈME APPEL À L'IA - C'EST CE QUI MANQUAIT !
-    # L'IA reçoit les résultats des tools et peut répondre correctement
+    # Deuxième appel IA
     final_response = client.chat.completions.create(
         model="gpt-4o",
         messages=messages_payload
     )
     
-    return {"reply": final_response.choices[0].message.content}
-
-
-
-
-
-
-
-@app.get("/get_financials")
-def get_financials():
-    """Calcule le solde total de l'empire de Rebecca"""
-    try:
-        # 1. Lire les Dépenses
-        spend_url = f"https://api.notion.com/v1/databases/{DATABASE_IDS['spending']}/query"
-        spend_data = requests.post(spend_url, headers=headers).json()
-        total_spend = sum(
-            page["properties"].get("Amount", {}).get("number") or 0 
-            for page in spend_data.get("results",[])
-        )
-
-        # 2. Lire les Revenus
-        rev_url = f"https://api.notion.com/v1/databases/{DATABASE_IDS['revenue']}/query"
-        rev_data = requests.post(rev_url, headers=headers).json()
-        total_rev = sum(
-            page["properties"].get("Amount Received", {}).get("number") or 0 
-            for page in rev_data.get("results",[])
-        )
-
-        balance = total_rev - total_spend
-
-        return {
-            "total_revenue": total_rev,
-            "total_spent": total_spend,
-            "net_balance": balance
-        }
-    except Exception as e:
-        logger.error(f"Erreur finance: {str(e)}")
-        return {"total_revenue": 0, "total_spent": 0, "net_balance": 0}
-
-
-
-
-
-@app.get("/list_missions")
-def list_missions():
-    """Route pour que le Frontend affiche les missions sur l'accueil"""
-    db_id = DATABASE_IDS.get("mission")
-    url = f"https://api.notion.com/v1/databases/{db_id}/query"
-    res = requests.post(url, headers=headers)
-    return res.json()
-
-
-
-@app.get("/get_table/{table_key}")
-def get_table_data(table_key: str):
-    """Route pour que le Frontend lise n'importe quelle table Notion"""
-    db_id = DATABASE_IDS.get(table_key)
-    if not db_id: 
-        raise HTTPException(status_code=404, detail="Table introuvable")
+    assistant_response = final_response.choices[0].message.content
     
-    url = f"https://api.notion.com/v1/databases/{db_id}/query"
-    res = requests.post(url, headers=headers)
-    return res.json()
-
-
-@app.get("/")
-def health(): 
-    return {"status": "Sovereign Intelligence Online"}
+    # Stocker la conversation
+    if request.messages:
+        last_user = request.messages[-1].get("content", "") if isinstance(request.messages[-1], dict) else request.messages[-1].content
+        store_chat_session(last_user, assistant_response)
+    
+    return {"reply": assistant_response}
