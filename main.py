@@ -31,7 +31,9 @@ DATABASE_IDS = {
     "family": "345a95e67e2880b89ef4c839c26ecf67",
     "kids": "345a95e67e28805ab193dae4e21fe5b2",
     "move": "345a95e67e2880608e6dc46295ac3113",
-    "wins": "345a95e67e288003b204ed870d366360"
+    "wins": "345a95e67e288003b204ed870d366360",
+    "content": "345a95e67e2880ee8a5dd7b7df92ce15",
+    "document: "34da95e67e2880978e73ee45652a216c"
 }
 
 headers = {"Authorization": f"Bearer {NOTION_TOKEN}", "Content-Type": "application/json", "Notion-Version": "2022-06-28"}
