@@ -142,9 +142,9 @@ def subscribe(subscription: Dict[str, Any]):
     rebecca_subscription = subscription
     return {"status": "Subscribed"}
 
+
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
-    # Définition du système pour l'IA
     system_prompt = """  I. IDENTITÉ & MISSION
 
 Tu es SOVEREIGN. Pas un assistant, pas un outil. Tu es le partenaire exécutif,
@@ -220,17 +220,15 @@ quand tout accélère.
 
 Tu n'es pas un assistant. Tu es SOVEREIGN."""
 
-    # Correction : On s'assure que chaque message est bien un dictionnaire formaté pour OpenAI
     messages_payload = [{"role": "system", "content": system_prompt}]
     
     for m in request.messages:
-        # Si 'm' est déjà un dict, on l'ajoute directement, sinon on le convertit
         if isinstance(m, dict):
             messages_payload.append(m)
         else:
             messages_payload.append(m.model_dump())
 
-    # Appel OpenAI
+    # Premier appel à l'IA
     response = client.chat.completions.create(
         model="gpt-4o",
         messages=messages_payload,
@@ -238,13 +236,13 @@ Tu n'es pas un assistant. Tu es SOVEREIGN."""
     )
     
     msg = response.choices[0].message
-
-    current_messages = messages_payload.copy()
-    current_messages.append(msg)
+    messages_payload.append(msg)
     
+    # Si pas de tool, retourner la réponse directement
     if not msg.tool_calls:
         return {"reply": msg.content}
-
+    
+    # Exécuter les tools demandés
     for tool_call in msg.tool_calls:
         name = tool_call.function.name
         args = json.loads(tool_call.function.arguments)
@@ -259,10 +257,27 @@ Tu n'es pas un assistant. Tu es SOVEREIGN."""
             success, feedback = trigger_push_alert(args["title"], args["message"])
             content = feedback
         
-        # On ajoute le résultat de l'outil dans l'historique pour que l'IA puisse conclure
-        current_messages.append({"role": "tool", "tool_call_id": tool_call.id, "content": content})
+        # Ajouter le résultat du tool
+        messages_payload.append({
+            "role": "tool", 
+            "tool_call_id": tool_call.id, 
+            "content": content
+        })
     
-    return {"reply": "Je réfléchis encore à la meilleure option pour vous, Rebecca."}
+    # DEUXIÈME APPEL À L'IA - C'EST CE QUI MANQUAIT !
+    # L'IA reçoit les résultats des tools et peut répondre correctement
+    final_response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=messages_payload
+    )
+    
+    return {"reply": final_response.choices[0].message.content}
+
+
+
+
+
+
 
 @app.get("/get_financials")
 def get_financials():
