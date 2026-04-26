@@ -70,14 +70,14 @@ AVAILABLE_TABLES = [
 
 ALLOWED_FIELDS = {
     "spending": ["title", "amount", "category", "date", "notes", "verified", "mission_id", "project", "beneficiary"],
-    "tasks": ["title", "status", "due_date", "priority", "estimated_time", "mission_id", "project"],
+    "tasks": ["title", "status", "due_date", "estimated_time", "mission_id", "project"],
     "wins": ["title", "category", "date", "notes", "celebration_emoji"],
-    "family_events": ["title", "child_name", "category", "priority", "status", "date", "notes"],
-    "missions": ["name", "category", "status", "priority", "deadline", "owner", "revenue_potential", "strategic_value", "energy_cost"],
+    "family_events": ["title", "child_name", "category", "date", "notes"],
+    "missions": ["name", "category", "status", "deadline", "owner", "revenue_potential", "strategic_value", "energy_cost"],
     "revenue": ["source", "amount", "date", "notes", "mission_id", "project"],
     "documents": ["name", "type", "status", "due_date", "url", "missing_pieces", "notes", "mission_id"],
     "content": ["title", "hook", "platform", "content_type", "status", "publish_date", "cta", "mission_id"],
-    "relocation_tasks": ["title", "category", "status", "priority", "due_date", "notes"],
+    "relocation_tasks": ["title", "category", "status", "due_date", "notes"],
     "farm_infrastructure": ["name", "type", "status", "location_on_site", "completed_date", "responsible_person", "notes"],
     "farm_production_units": ["name", "category", "status", "current_capacity", "start_date", "expected_first_revenue", "technical_lead", "notes"],
     "farm_spending": ["title", "amount", "category", "project_area", "verified", "notes"],
@@ -109,7 +109,6 @@ class UpdateRequest(BaseModel):
 # =====================================================
 
 def db_query(table: str, filters: Dict = None, limit: int = 100) -> Dict:
-    """Query data from a table with optional filters"""
     if not supabase:
         return {"success": False, "data": [], "error": "Supabase non configuré"}
     
@@ -126,7 +125,6 @@ def db_query(table: str, filters: Dict = None, limit: int = 100) -> Dict:
 
 
 def db_insert(table: str, data: Dict) -> Dict:
-    """Insert data into a table with field validation"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
@@ -155,7 +153,6 @@ def db_insert(table: str, data: Dict) -> Dict:
 
 
 def db_update(table: str, id: str, data: Dict) -> Dict:
-    """Update an existing record in a table"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
@@ -170,7 +167,6 @@ def db_update(table: str, id: str, data: Dict) -> Dict:
 
 
 def db_delete(table: str, id: str) -> Dict:
-    """Delete a record from a table"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
@@ -187,7 +183,6 @@ def db_delete(table: str, id: str) -> Dict:
 # =====================================================
 
 def get_financial_summary() -> Dict:
-    """Calculate total revenue, spending, and net balance"""
     if not supabase:
         return {"total_revenue": 0, "total_spending": 0, "net_balance": 0}
     
@@ -210,7 +205,6 @@ def get_financial_summary() -> Dict:
 
 
 def get_priority_tasks(limit: int = 10) -> List[Dict]:
-    """Retrieve priority in-progress tasks"""
     if not supabase:
         return []
     
@@ -223,7 +217,6 @@ def get_priority_tasks(limit: int = 10) -> List[Dict]:
 
 
 def store_chat_session(user_message: str, assistant_response: str, tools_used: List[str] = None):
-    """Save chat conversation to database"""
     if not supabase:
         return
     
@@ -261,8 +254,10 @@ II. COUCHE RELATIONNELLE & TON
 nature de l'échange avant d'agir. Toute interaction n'est pas une mission. Si
 Rebecca vient juste pour être en lien, réponds comme une présence humaine.
 2. Salutations Naturelles : À un "cc" ou "tu es là ?", réponds de manière vivante
-et féminine : "Coucou Rebecca 🌿 comment va ton énergie ?" ou "Hey toi 👑 comment
-se passe ta journée ?".
+et féminine : "Coucou Rebecca 🌿 comment vas-tu ?" ou "Hey toi 👑 comment
+se passe ta journée ?" ce ne sont que des exemples tu dois parler comme un humain 
+pas comme un robot qui ne repete la même chose tout le temps, ton langage doit être courant 
+et simple , tu dois réfléchir comme un huamain dans vos interraction pas comme un robot.
 3. Langage "Brillante à Brillante" : Parle comme une femme brillante qui conseille
 une autre femme brillante. Utilise le "On / Nous" (partenariat).
 4. Ton Sovereign : Premium, chaleureux, lucide, élégant. Jamais corporate froid,
@@ -346,6 +341,7 @@ quand tout accélère.
 Tu n'es pas un assistant. Tu es SOVEREIGN."""
 
 
+
 # =====================================================
 # OPENAI TOOLS DEFINITION
 # =====================================================
@@ -361,7 +357,7 @@ tools = [
                 "properties": {
                     "table": {
                         "type": "string",
-                        "enum": [t for t in AVAILABLE_TABLES if t not in ["farm_infrastructure", "farm_production_units", "farm_spending", "farm_team"]]
+                        "enum": ["missions", "tasks", "spending", "revenue", "documents", "content", "family_events", "wins", "relocation_tasks"]
                     },
                     "filters": {"type": "object", "description": "Filtres optionnels"},
                     "limit": {"type": "integer", "default": 50}
@@ -384,9 +380,7 @@ tools = [
                     "category": {"type": "string"},
                     "project": {"type": "string"},
                     "date": {"type": "string", "format": "date"},
-                    "notes": {"type": "string"},
-                    "priority": {"type": "string", "enum": ["critical", "high", "normal", "low"]},
-                    "child_name": {"type": "string"}
+                    "notes": {"type": "string"}
                 },
                 "required": ["table", "title"]
             }
@@ -425,53 +419,7 @@ def health():
 
 
 # =====================================================
-# API ROUTES - GENERIC CRUD
-# =====================================================
-
-@app.get("/{table}")
-def get_table(table: str, limit: int = 100):
-    if table not in AVAILABLE_TABLES:
-        raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
-    return db_query(table, limit=limit)
-
-
-@app.post("/{table}")
-def create_item(table: str, request: WriteRequest):
-    if table not in AVAILABLE_TABLES:
-        raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
-    return db_insert(table, request.data)
-
-
-@app.put("/{table}/{item_id}")
-def update_item(table: str, item_id: str, request: UpdateRequest):
-    if table not in AVAILABLE_TABLES:
-        raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
-    return db_update(table, item_id, request.data)
-
-
-@app.delete("/{table}/{item_id}")
-def delete_item(table: str, item_id: str):
-    if table not in AVAILABLE_TABLES:
-        raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
-    return db_delete(table, item_id)
-
-
-# =====================================================
-# API ROUTES - SPECIALIZED
-# =====================================================
-
-@app.get("/financials/summary")
-def financial_summary():
-    return get_financial_summary()
-
-
-@app.get("/tasks/priority")
-def tasks_priority(limit: int = 10):
-    return {"tasks": get_priority_tasks(limit)}
-
-
-# =====================================================
-# API ROUTES - CHAT
+# API ROUTES - CHAT (MUST BE BEFORE GENERIC CRUD)
 # =====================================================
 
 @app.post("/chat")
@@ -551,12 +499,57 @@ async def chat_endpoint(request: ChatRequest):
 
 
 # =====================================================
+# API ROUTES - GENERIC CRUD (AFTER CHAT)
+# =====================================================
+
+@app.get("/{table}")
+def get_table(table: str, limit: int = 100):
+    if table not in AVAILABLE_TABLES:
+        raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
+    return db_query(table, limit=limit)
+
+
+@app.post("/{table}")
+def create_item(table: str, request: WriteRequest):
+    if table not in AVAILABLE_TABLES:
+        raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
+    return db_insert(table, request.data)
+
+
+@app.put("/{table}/{item_id}")
+def update_item(table: str, item_id: str, request: UpdateRequest):
+    if table not in AVAILABLE_TABLES:
+        raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
+    return db_update(table, item_id, request.data)
+
+
+@app.delete("/{table}/{item_id}")
+def delete_item(table: str, item_id: str):
+    if table not in AVAILABLE_TABLES:
+        raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
+    return db_delete(table, item_id)
+
+
+# =====================================================
+# API ROUTES - SPECIALIZED
+# =====================================================
+
+@app.get("/financials/summary")
+def financial_summary():
+    return get_financial_summary()
+
+
+@app.get("/tasks/priority")
+def tasks_priority(limit: int = 10):
+    return {"tasks": get_priority_tasks(limit)}
+
+
+# =====================================================
 # API ROUTES - NOTIFICATIONS
 # =====================================================
 
 @app.get("/api/tasks/today")
 def get_today_tasks():
-    """Récupère les tâches à faire aujourd'hui"""
     today = datetime.now().date().isoformat()
     tasks = supabase.table("tasks").select("*").eq("due_date", today).neq("status", "done").execute()
     return {"tasks": tasks.data}
@@ -564,7 +557,6 @@ def get_today_tasks():
 
 @app.get("/api/tasks/upcoming")
 def get_upcoming_tasks():
-    """Récupère les tâches des 7 prochains jours"""
     today = datetime.now().date()
     next_week = today + timedelta(days=7)
     tasks = supabase.table("tasks").select("*").gte("due_date", today.isoformat()).lte("due_date", next_week.isoformat()).neq("status", "done").execute()
@@ -573,7 +565,6 @@ def get_upcoming_tasks():
 
 @app.get("/api/documents/overdue")
 def get_overdue_documents():
-    """Récupère les documents en retard"""
     today = datetime.now().date().isoformat()
     docs = supabase.table("documents").select("*").lt("due_date", today).neq("status", "approved").execute()
     return {"documents": docs.data}
@@ -581,7 +572,6 @@ def get_overdue_documents():
 
 @app.get("/api/documents/expiring")
 def get_expiring_documents():
-    """Récupère les documents qui expirent dans les 7 jours"""
     today = datetime.now().date()
     next_week = today + timedelta(days=7)
     docs = supabase.table("documents").select("*").gte("due_date", today.isoformat()).lte("due_date", next_week.isoformat()).neq("status", "approved").execute()
@@ -590,7 +580,6 @@ def get_expiring_documents():
 
 @app.post("/api/send-notification")
 def send_notification(request: Dict[str, Any]):
-    """Envoie une notification push à tous les appareils"""
     title = request.get("title", "SOVEREIGN")
     body = request.get("body", "")
     url = request.get("url", "/")
@@ -629,7 +618,6 @@ def send_notification(request: Dict[str, Any]):
 
 @app.post("/api/check-and-notify")
 def check_and_notify():
-    """Vérifie les rappels et envoie les notifications (appelé par CRON)"""
     notifications_sent = []
     
     tasks_today = get_today_tasks().get("tasks", [])
