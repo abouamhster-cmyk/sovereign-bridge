@@ -73,7 +73,7 @@ ALLOWED_FIELDS = {
     "tasks": ["title", "status", "due_date", "estimated_time", "mission_id", "project"],
     "wins": ["title", "category", "date", "notes", "celebration_emoji"],
     "family_events": ["title", "child_name", "category", "date", "notes"],
-    "missions": ["name", "category", "status", "deadline", "owner", "revenue_potential", "strategic_value", "energy_cost"],
+    "missions": ["name", "category", "status", "priority", "deadline", "owner", "revenue_potential", "strategic_value", "energy_cost"],
     "revenue": ["source", "amount", "date", "notes", "mission_id", "project"],
     "documents": ["name", "type", "status", "due_date", "url", "missing_pieces", "notes", "mission_id"],
     "content": ["title", "hook", "platform", "content_type", "status", "publish_date", "cta", "mission_id"],
@@ -374,7 +374,7 @@ tools = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "table": {"type": "string", "enum": ["spending", "tasks", "wins", "family_events", "revenue"]},
+                    "table": {"type": "string", "enum": ["spending", "tasks", "wins", "family_events", "revenue", "missions"]},
                     "title": {"type": "string"},
                     "amount": {"type": "number", "minimum": 0},
                     "category": {"type": "string"},
