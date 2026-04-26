@@ -1,27 +1,49 @@
 import os
 import json
 import logging
+from datetime import datetime, timedelta
+from typing import List, Dict, Any
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from openai import OpenAI
-from typing import List, Dict, Any
 from supabase import create_client, Client
-from datetime import datetime
+from pywebpush import webpush, WebPushException
+
+
+# =====================================================
+# LOGGING CONFIGURATION
+# =====================================================
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI()
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 # =====================================================
-# CONFIGURATION
+# FASTAPI INITIALIZATION
+# =====================================================
+
+app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"]
+)
+
+
+# =====================================================
+# ENVIRONMENT VARIABLES & CLIENTS
 # =====================================================
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
+VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY")
+VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY")
+VAPID_CLAIMS = {"sub": "mailto:sovereign@rebecca.com"}
 
 if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY manquante")
@@ -35,14 +57,17 @@ if SUPABASE_URL and SUPABASE_SERVICE_KEY:
 else:
     logger.warning("⚠️ Supabase non configuré")
 
-# Tables disponibles
+
+# =====================================================
+# DATABASE SCHEMA CONFIGURATION
+# =====================================================
+
 AVAILABLE_TABLES = [
-    "missions", "tasks", "spending", "revenue", "documents", 
+    "missions", "tasks", "spending", "revenue", "documents",
     "content", "family_events", "wins", "relocation_tasks",
     "farm_infrastructure", "farm_production_units", "farm_spending", "farm_team"
 ]
 
-# Champs autorisés par table
 ALLOWED_FIELDS = {
     "spending": ["title", "amount", "category", "date", "notes", "verified", "mission_id", "project", "beneficiary"],
     "tasks": ["title", "status", "due_date", "priority", "estimated_time", "mission_id", "project"],
@@ -59,29 +84,35 @@ ALLOWED_FIELDS = {
     "farm_team": ["name", "role", "area", "status", "phone", "notes"]
 }
 
+
 # =====================================================
-# MODÈLES PYDANTIC
+# PYDANTIC MODELS
 # =====================================================
 
 class ChatRequest(BaseModel):
     messages: List[Dict[str, str]]
 
+
 class WriteRequest(BaseModel):
     table: str
     data: Dict
+
 
 class UpdateRequest(BaseModel):
     table: str
     id: str
     data: Dict
 
+
 # =====================================================
-# FONCTIONS SUPABASE
+# DATABASE OPERATIONS
 # =====================================================
 
 def db_query(table: str, filters: Dict = None, limit: int = 100) -> Dict:
+    """Query data from a table with optional filters"""
     if not supabase:
         return {"success": False, "data": [], "error": "Supabase non configuré"}
+    
     try:
         query = supabase.table(table).select("*").limit(limit)
         if filters:
@@ -93,7 +124,9 @@ def db_query(table: str, filters: Dict = None, limit: int = 100) -> Dict:
         logger.error(f"Erreur query {table}: {e}")
         return {"success": False, "data": [], "error": str(e)}
 
+
 def db_insert(table: str, data: Dict) -> Dict:
+    """Insert data into a table with field validation"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
@@ -120,9 +153,12 @@ def db_insert(table: str, data: Dict) -> Dict:
         logger.error(f"Erreur insert {table}: {e}")
         return {"success": False, "error": str(e)}
 
+
 def db_update(table: str, id: str, data: Dict) -> Dict:
+    """Update an existing record in a table"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
+    
     try:
         allowed = ALLOWED_FIELDS.get(table, [])
         clean_data = {k: v for k, v in data.items() if k in allowed}
@@ -132,9 +168,12 @@ def db_update(table: str, id: str, data: Dict) -> Dict:
         logger.error(f"Erreur update {table}: {e}")
         return {"success": False, "error": str(e)}
 
+
 def db_delete(table: str, id: str) -> Dict:
+    """Delete a record from a table"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
+    
     try:
         supabase.table(table).delete().eq("id", id).execute()
         return {"success": True}
@@ -142,9 +181,16 @@ def db_delete(table: str, id: str) -> Dict:
         logger.error(f"Erreur delete {table}: {e}")
         return {"success": False, "error": str(e)}
 
+
+# =====================================================
+# BUSINESS LOGIC FUNCTIONS
+# =====================================================
+
 def get_financial_summary() -> Dict:
+    """Calculate total revenue, spending, and net balance"""
     if not supabase:
         return {"total_revenue": 0, "total_spending": 0, "net_balance": 0}
+    
     try:
         rev_result = supabase.table("revenue").select("amount").execute()
         total_revenue = sum(r.get("amount", 0) for r in rev_result.data)
@@ -162,9 +208,12 @@ def get_financial_summary() -> Dict:
         logger.error(f"Erreur financial_summary: {e}")
         return {"total_revenue": 0, "total_spending": 0, "net_balance": 0}
 
+
 def get_priority_tasks(limit: int = 10) -> List[Dict]:
+    """Retrieve priority in-progress tasks"""
     if not supabase:
         return []
+    
     try:
         result = supabase.table("tasks").select("*").eq("status", "in_progress").limit(limit).execute()
         return result.data if result.data else []
@@ -172,9 +221,12 @@ def get_priority_tasks(limit: int = 10) -> List[Dict]:
         logger.error(f"Erreur priority_tasks: {e}")
         return []
 
+
 def store_chat_session(user_message: str, assistant_response: str, tools_used: List[str] = None):
+    """Save chat conversation to database"""
     if not supabase:
         return
+    
     try:
         supabase.table("chat_sessions").insert({
             "user_message": user_message[:500],
@@ -186,8 +238,9 @@ def store_chat_session(user_message: str, assistant_response: str, tools_used: L
     except Exception as e:
         logger.error(f"Erreur store_chat: {e}")
 
+
 # =====================================================
-# PROMPT SYSTÈME (INCHANGÉ - TU CONSERVES TON PROMPT)
+# SYSTEM PROMPT (UNCHANGED)
 # =====================================================
 
 SYSTEM_PROMPT = """  I. IDENTITÉ & MISSION
@@ -292,8 +345,9 @@ quand tout accélère.
 
 Tu n'es pas un assistant. Tu es SOVEREIGN."""
 
+
 # =====================================================
-# TOOLS
+# OPENAI TOOLS DEFINITION
 # =====================================================
 
 tools = [
@@ -305,7 +359,10 @@ tools = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "table": {"type": "string", "enum": [t for t in AVAILABLE_TABLES if t not in ["farm_infrastructure", "farm_production_units", "farm_spending", "farm_team"]]},
+                    "table": {
+                        "type": "string",
+                        "enum": [t for t in AVAILABLE_TABLES if t not in ["farm_infrastructure", "farm_production_units", "farm_spending", "farm_team"]]
+                    },
                     "filters": {"type": "object", "description": "Filtres optionnels"},
                     "limit": {"type": "integer", "default": 50}
                 },
@@ -353,8 +410,9 @@ tools = [
     }
 ]
 
+
 # =====================================================
-# ROUTES API
+# API ROUTES - HEALTH & ROOT
 # =====================================================
 
 @app.get("/")
@@ -365,12 +423,17 @@ def health():
         "tables_count": len(AVAILABLE_TABLES)
     }
 
-# Routes CRUD génériques
+
+# =====================================================
+# API ROUTES - GENERIC CRUD
+# =====================================================
+
 @app.get("/{table}")
 def get_table(table: str, limit: int = 100):
     if table not in AVAILABLE_TABLES:
         raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
     return db_query(table, limit=limit)
+
 
 @app.post("/{table}")
 def create_item(table: str, request: WriteRequest):
@@ -378,11 +441,13 @@ def create_item(table: str, request: WriteRequest):
         raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
     return db_insert(table, request.data)
 
+
 @app.put("/{table}/{item_id}")
 def update_item(table: str, item_id: str, request: UpdateRequest):
     if table not in AVAILABLE_TABLES:
         raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
     return db_update(table, item_id, request.data)
+
 
 @app.delete("/{table}/{item_id}")
 def delete_item(table: str, item_id: str):
@@ -390,14 +455,24 @@ def delete_item(table: str, item_id: str):
         raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
     return db_delete(table, item_id)
 
-# Routes spécialisées
+
+# =====================================================
+# API ROUTES - SPECIALIZED
+# =====================================================
+
 @app.get("/financials/summary")
 def financial_summary():
     return get_financial_summary()
 
+
 @app.get("/tasks/priority")
 def tasks_priority(limit: int = 10):
     return {"tasks": get_priority_tasks(limit)}
+
+
+# =====================================================
+# API ROUTES - CHAT
+# =====================================================
 
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
@@ -473,3 +548,115 @@ async def chat_endpoint(request: ChatRequest):
     except Exception as e:
         logger.error(f"❌ Erreur chat: {e}")
         return {"reply": "Désolée Rebecca, un souci technique survient. Je reviens vers toi dans un instant."}
+
+
+# =====================================================
+# API ROUTES - NOTIFICATIONS
+# =====================================================
+
+@app.get("/api/tasks/today")
+def get_today_tasks():
+    """Récupère les tâches à faire aujourd'hui"""
+    today = datetime.now().date().isoformat()
+    tasks = supabase.table("tasks").select("*").eq("due_date", today).neq("status", "done").execute()
+    return {"tasks": tasks.data}
+
+
+@app.get("/api/tasks/upcoming")
+def get_upcoming_tasks():
+    """Récupère les tâches des 7 prochains jours"""
+    today = datetime.now().date()
+    next_week = today + timedelta(days=7)
+    tasks = supabase.table("tasks").select("*").gte("due_date", today.isoformat()).lte("due_date", next_week.isoformat()).neq("status", "done").execute()
+    return {"tasks": tasks.data}
+
+
+@app.get("/api/documents/overdue")
+def get_overdue_documents():
+    """Récupère les documents en retard"""
+    today = datetime.now().date().isoformat()
+    docs = supabase.table("documents").select("*").lt("due_date", today).neq("status", "approved").execute()
+    return {"documents": docs.data}
+
+
+@app.get("/api/documents/expiring")
+def get_expiring_documents():
+    """Récupère les documents qui expirent dans les 7 jours"""
+    today = datetime.now().date()
+    next_week = today + timedelta(days=7)
+    docs = supabase.table("documents").select("*").gte("due_date", today.isoformat()).lte("due_date", next_week.isoformat()).neq("status", "approved").execute()
+    return {"documents": docs.data}
+
+
+@app.post("/api/send-notification")
+def send_notification(request: Dict[str, Any]):
+    """Envoie une notification push à tous les appareils"""
+    title = request.get("title", "SOVEREIGN")
+    body = request.get("body", "")
+    url = request.get("url", "/")
+    
+    subscriptions = supabase.table("push_subscriptions").select("*").execute()
+    
+    results = []
+    for sub in subscriptions.data:
+        try:
+            webpush(
+                subscription_info={
+                    "endpoint": sub["endpoint"],
+                    "keys": sub["keys"]
+                },
+                data=json.dumps({
+                    "title": title,
+                    "body": body,
+                    "url": url,
+                    "icon": "/icons/icon-192x192.png",
+                    "badge": "/icons/icon-96x96.png",
+                    "timestamp": datetime.now().isoformat()
+                }),
+                vapid_private_key=VAPID_PRIVATE_KEY,
+                vapid_claims=VAPID_CLAIMS
+            )
+            results.append({"status": "sent", "endpoint": sub["endpoint"][:50]})
+        except WebPushException as ex:
+            if ex.response and ex.response.status_code == 410:
+                supabase.table("push_subscriptions").delete().eq("endpoint", sub["endpoint"]).execute()
+                results.append({"status": "expired", "endpoint": sub["endpoint"][:50]})
+            else:
+                results.append({"status": "error", "error": str(ex)})
+    
+    return {"success": True, "results": results}
+
+
+@app.post("/api/check-and-notify")
+def check_and_notify():
+    """Vérifie les rappels et envoie les notifications (appelé par CRON)"""
+    notifications_sent = []
+    
+    tasks_today = get_today_tasks().get("tasks", [])
+    for task in tasks_today:
+        send_notification({
+            "title": "📋 Tâche du jour",
+            "body": f"{task['title']} - À faire aujourd'hui",
+            "url": "/tasks"
+        })
+        notifications_sent.append(f"Task: {task['title']}")
+    
+    overdue_docs = get_overdue_documents().get("documents", [])
+    for doc in overdue_docs:
+        send_notification({
+            "title": "⚠️ Document en retard",
+            "body": f"{doc['name']} - En retard",
+            "url": "/documents"
+        })
+        notifications_sent.append(f"Doc overdue: {doc['name']}")
+    
+    current_hour = datetime.now().hour
+    if 7 <= current_hour <= 9:
+        send_notification({
+            "title": "🌅 Bonjour Rebecca",
+            "body": "Ton brief quotidien est prêt !",
+            "url": "/brief"
+        })
+        notifications_sent.append("Morning brief")
+    
+    return {"notifications_sent": notifications_sent, "count": len(notifications_sent)}
