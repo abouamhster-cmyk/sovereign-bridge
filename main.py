@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import re
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
 
@@ -135,7 +136,20 @@ def db_insert(table: str, data: Dict) -> Dict:
         allowed = ALLOWED_FIELDS.get(table, ["title"])
         clean_data = {k: v for k, v in data.items() if k in allowed and v is not None and v != ""}
         
-        # 🔧 CORRECTION : Pour la table missions, mapper 'title' vers 'name'
+        # Utiliser la mémoire pour la classification intelligente
+        if table == "spending" and "title" in data:
+            smart_cat = get_smart_category(data.get("title", ""))
+            if smart_cat and "category" not in clean_data:
+                clean_data["category"] = smart_cat
+                logger.info(f"🧠 Mémoire utilisée: '{data['title']}' -> catégorie '{smart_cat}'")
+        
+        if table == "spending" and "project" not in clean_data and "title" in data:
+            smart_project = get_smart_category(data.get("title", ""))
+            if smart_project and "project" not in clean_data:
+                clean_data["project"] = smart_project
+                logger.info(f"🧠 Mémoire utilisée: '{data['title']}' -> projet '{smart_project}'")
+        
+        # Pour la table missions, mapper 'title' vers 'name'
         if table == "missions" and "title" in data and "name" not in clean_data:
             clean_data["name"] = data["title"]
             if "title" in clean_data:
@@ -344,8 +358,25 @@ Aider Rebecca non pas à survivre au chaos... mais à commander son empire. Êtr
 clarté quand il y a brouillard, sa logique quand l'émotion brouille, son calme
 quand tout accélère.
 
+**DÉTECTION DES CORRECTIONS ET APPRENTISSAGE :**
+Quand Rebecca dit "Non c'est pour X" ou "C'est plutôt Y" ou "Corrige ça", tu DOIS :
+1. Confirmer la correction : "✅ Corrigé !"
+2. Retourner un JSON spécial à la fin de ta réponse pour enregistrer l'apprentissage :
+   [LEARN:category:original:correction]
+
+Exemple :
+"[LEARN:project:matériaux:Ifè Farm]"
+"[LEARN:category:main d oeuvre:labor]"
+
+Ces tags sont invisibles pour l'utilisateur mais permettent d'apprendre.
+
 Tu n'es pas un assistant. Tu es SOVEREIGN."""
 
+
+
+# =====================================================
+# OPENAI TOOLS DEFINITION
+# =====================================================
 
 
 # =====================================================
@@ -491,13 +522,29 @@ async def chat_endpoint(request: ChatRequest):
         
         assistant_response = final_response.choices[0].message.content
         
+        # Parser les tags d'apprentissage
+        learn_pattern = r'\[LEARN:([^:]+):([^:]+):([^\]]+)\]'
+        matches = re.findall(learn_pattern, assistant_response)
+        
+        for match in matches:
+            category, original, correction = match
+            logger.info(f"📚 Apprentissage: {category} - '{original}' -> '{correction}'")
+            
+            if category == "project":
+                record_user_correction(original, correction, "project_mapping")
+            elif category == "category":
+                record_user_correction(original, correction, "category_mapping")
+        
+        # Nettoyer la réponse des tags
+        clean_response = re.sub(learn_pattern, '', assistant_response).strip()
+        
         if request.messages:
             last_user = request.messages[-1].get("content", "")
             tools_used = [tc.function.name for tc in msg.tool_calls] if msg.tool_calls else []
-            store_chat_session(last_user, assistant_response, tools_used)
+            store_chat_session(last_user, clean_response, tools_used)
         
         logger.info(f"📨 Réponse envoyée")
-        return {"reply": assistant_response}
+        return {"reply": clean_response}
         
     except Exception as e:
         logger.error(f"❌ Erreur chat: {e}")
@@ -654,3 +701,533 @@ def check_and_notify():
         notifications_sent.append("Morning brief")
     
     return {"notifications_sent": notifications_sent, "count": len(notifications_sent)}
+
+
+# =====================================================
+# IA PROACTIVE - ANALYSE ET SUGGESTIONS
+# =====================================================
+
+def analyze_proactive_suggestions() -> List[Dict]:
+    if not supabase:
+        return []
+    
+    suggestions = []
+    today = datetime.now().date().isoformat()
+    tomorrow = (datetime.now().date() + timedelta(days=1)).isoformat()
+    
+    # Tâches urgentes
+    urgent_tasks = supabase.table("tasks").select("*").in_("due_date", [today, tomorrow]).neq("status", "done").execute()
+    if urgent_tasks.data:
+        suggestions.append({
+            "type": "urgent_tasks",
+            "priority": "high",
+            "title": f"⚠️ {len(urgent_tasks.data)} tâche(s) urgente(s)",
+            "message": f"Tu as {len(urgent_tasks.data)} tâche(s) à faire aujourd'hui ou demain.",
+            "action_url": "/tasks",
+            "action_label": "Voir les tâches"
+        })
+    
+    # Documents en retard
+    overdue_docs = supabase.table("documents").select("*").lt("due_date", today).neq("status", "approved").execute()
+    if overdue_docs.data:
+        suggestions.append({
+            "type": "overdue_docs",
+            "priority": "high",
+            "title": f"📄 {len(overdue_docs.data)} document(s) en retard",
+            "message": "Des documents importants sont en retard.",
+            "action_url": "/documents",
+            "action_label": "Voir les documents"
+        })
+    
+    # Opportunités à fort potentiel
+    high_value_opps = supabase.table("opportunities").select("*").eq("probability", "high").neq("stage", "won").execute()
+    if high_value_opps.data:
+        total_value = sum(o.get("estimated_value", 0) for o in high_value_opps.data)
+        suggestions.append({
+            "type": "high_value_opportunities",
+            "priority": "medium",
+            "title": f"💰 {len(high_value_opps.data)} opportunité(s) à forte valeur",
+            "message": f"Potentiel total de {total_value:,.0f} CFA à saisir.",
+            "action_url": "/opportunities",
+            "action_label": "Voir les opportunités"
+        })
+    
+    # Inactivité
+    seven_days_ago = (datetime.now().date() - timedelta(days=7)).isoformat()
+    recent_spending = supabase.table("spending").select("*").gte("date", seven_days_ago).limit(1).execute()
+    if not recent_spending.data:
+        suggestions.append({
+            "type": "inactivity",
+            "priority": "low",
+            "title": "📝 Pas de dépenses récentes",
+            "message": "Aucune dépense enregistrée depuis 7 jours.",
+            "action_url": "/money",
+            "action_label": "Ajouter une dépense"
+        })
+    
+    # Victoires récentes
+    recent_wins = supabase.table("wins").select("*").gte("date", seven_days_ago).execute()
+    if recent_wins.data:
+        suggestions.append({
+            "type": "celebration",
+            "priority": "low",
+            "title": f"🎉 {len(recent_wins.data)} victoire(s) récente(s)",
+            "message": "Continue sur cette lancée !",
+            "action_url": "/wins",
+            "action_label": "Voir mes victoires"
+        })
+    
+    # Brief du matin
+    if 7 <= datetime.now().hour <= 9:
+        suggestions.append({
+            "type": "morning_brief",
+            "priority": "medium",
+            "title": "🌅 Bonjour Rebecca",
+            "message": "Ton brief quotidien est prêt.",
+            "action_url": "/brief",
+            "action_label": "Voir le brief"
+        })
+    
+    return suggestions
+
+
+@app.get("/api/proactive-suggestions")
+def get_proactive_suggestions():
+    return {"suggestions": analyze_proactive_suggestions()}
+
+
+# =====================================================
+# MÉMOIRE IA - APPRENTISSAGE
+# =====================================================
+
+def save_to_memory(key: str, value: Dict, context: str = None):
+    if not supabase:
+        return
+    
+    try:
+        existing = supabase.table("ai_memory").select("*").eq("key", key).execute()
+        if existing.data:
+            supabase.table("ai_memory").update({
+                "value": value,
+                "context": context,
+                "updated_at": datetime.now().isoformat()
+            }).eq("key", key).execute()
+        else:
+            supabase.table("ai_memory").insert({
+                "key": key,
+                "value": value,
+                "context": context,
+                "user_id": "rebecca"
+            }).execute()
+        logger.info(f"💾 Mémoire sauvegardée: {key}")
+    except Exception as e:
+        logger.error(f"Erreur sauvegarde mémoire: {e}")
+
+
+def get_from_memory(key: str) -> Dict:
+    if not supabase:
+        return {}
+    
+    try:
+        result = supabase.table("ai_memory").select("*").eq("key", key).execute()
+        if result.data:
+            return result.data[0].get("value", {})
+    except Exception as e:
+        logger.error(f"Erreur lecture mémoire: {e}")
+    return {}
+
+
+def record_user_correction(original_input: str, correction: str, category: str):
+    key = f"correction_{category}"
+    existing = get_from_memory(key)
+    
+    if not existing:
+        existing = {"patterns": [], "count": 0}
+    
+    existing["patterns"].append({
+        "original": original_input,
+        "corrected": correction,
+        "timestamp": datetime.now().isoformat()
+    })
+    existing["count"] += 1
+    
+    if len(existing["patterns"]) > 20:
+        existing["patterns"] = existing["patterns"][-20:]
+    
+    save_to_memory(key, existing, f"Corrections utilisateur pour {category}")
+    update_smart_mapping(original_input, correction)
+
+
+def update_smart_mapping(original: str, corrected: str):
+    key = "smart_category_mapping"
+    mappings = get_from_memory(key)
+    
+    if not mappings:
+        mappings = {}
+    
+    original_clean = original.lower().strip()
+    corrected_clean = corrected.lower().strip()
+    
+    if original_clean not in mappings:
+        mappings[original_clean] = {"corrected_to": corrected_clean, "count": 1}
+    else:
+        mappings[original_clean]["count"] += 1
+    
+    save_to_memory(key, mappings, "Mapping intelligent des catégories")
+
+
+def get_smart_category(input_text: str) -> str:
+    input_clean = input_text.lower().strip()
+    mappings = get_from_memory("smart_category_mapping")
+    
+    if not mappings:
+        return None
+    
+    if input_clean in mappings:
+        return mappings[input_clean]["corrected_to"]
+    
+    for key, value in mappings.items():
+        if key in input_clean or input_clean in key:
+            return value["corrected_to"]
+    
+    return None
+
+
+# =====================================================
+# IA PRIORITÉS - CALCUL INTELLIGENT
+# =====================================================
+
+def calculate_priority_score(task: Dict) -> int:
+    score = 0
+    
+    if task.get("due_date"):
+        due_date = datetime.fromisoformat(task["due_date"]).date()
+        days_diff = (due_date - datetime.now().date()).days
+        
+        if days_diff < 0:
+            score += 10
+        elif days_diff == 0:
+            score += 8
+        elif days_diff == 1:
+            score += 6
+        elif days_diff <= 3:
+            score += 4
+        elif days_diff <= 7:
+            score += 2
+    else:
+        score += 1
+    
+    status = task.get("status", "")
+    if status == "today":
+        score += 8
+    elif status == "in_progress":
+        score += 5
+    elif status == "not_started":
+        score += 2
+    
+    priority = task.get("priority", "")
+    if priority == "critical":
+        score += 10
+    elif priority == "high":
+        score += 7
+    elif priority == "normal":
+        score += 3
+    elif priority == "low":
+        score += 1
+    
+    mission_id = task.get("mission_id")
+    if mission_id:
+        mission = supabase.table("missions").select("*").eq("id", mission_id).execute()
+        if mission.data:
+            score += mission.data[0].get("revenue_potential", 0)
+            score += mission.data[0].get("strategic_value", 0)
+    
+    return min(score, 40)
+
+
+def get_priority_reason(task: Dict, score: int) -> str:
+    reasons = []
+    
+    if task.get("due_date"):
+        due_date = datetime.fromisoformat(task["due_date"]).date()
+        days_diff = (due_date - datetime.now().date()).days
+        
+        if days_diff < 0:
+            reasons.append("en retard")
+        elif days_diff == 0:
+            reasons.append("à faire aujourd'hui")
+        elif days_diff == 1:
+            reasons.append("à faire demain")
+        elif days_diff <= 3:
+            reasons.append(f"échéance dans {days_diff} jours")
+    
+    if task.get("status") == "today":
+        reasons.append("priorité du jour")
+    elif task.get("status") == "in_progress":
+        reasons.append("déjà commencée")
+    
+    if task.get("priority") == "critical":
+        reasons.append("critique")
+    elif task.get("priority") == "high":
+        reasons.append("haute importance")
+    
+    if not reasons:
+        reasons.append("à traiter bientôt")
+    
+    return f"⚠️ {', '.join(reasons)}"
+
+
+def get_additional_priorities() -> List[Dict]:
+    priorities = []
+    today = datetime.now().date().isoformat()
+    
+    # Documents en retard
+    overdue_docs = supabase.table("documents").select("*").lt("due_date", today).neq("status", "approved").limit(2).execute()
+    for doc in overdue_docs.data:
+        priorities.append({
+            "id": doc["id"],
+            "title": f"📄 {doc['name']}",
+            "type": "document",
+            "score": 35,
+            "due_date": doc.get("due_date"),
+            "priority_reason": "⚠️ document en retard",
+            "action_url": f"/documents?edit={doc['id']}"
+        })
+    
+    # Opportunités à forte valeur
+    high_opps = supabase.table("opportunities").select("*").eq("probability", "high").neq("stage", "won").limit(2).execute()
+    for opp in high_opps.data:
+        value = opp.get("estimated_value", 0)
+        priorities.append({
+            "id": opp["id"],
+            "title": f"💰 {opp['title']}",
+            "type": "opportunity",
+            "score": 30,
+            "priority_reason": f"potentiel de {value:,.0f} CFA",
+            "action_url": f"/opportunities?edit={opp['id']}"
+        })
+    
+    return priorities
+
+
+def get_ai_priorities(limit: int = 3) -> List[Dict]:
+    if not supabase:
+        return []
+    
+    tasks = supabase.table("tasks").select("*").neq("status", "done").execute()
+    if not tasks.data:
+        return []
+    
+    scored_tasks = []
+    for task in tasks.data:
+        score = calculate_priority_score(task)
+        scored_tasks.append({
+            "id": task["id"],
+            "title": task["title"],
+            "score": score,
+            "due_date": task.get("due_date"),
+            "status": task.get("status"),
+            "priority_reason": get_priority_reason(task, score)
+        })
+    
+    scored_tasks.sort(key=lambda x: x["score"], reverse=True)
+    additional_priorities = get_additional_priorities()
+    all_priorities = scored_tasks[:limit] + additional_priorities
+    all_priorities.sort(key=lambda x: x.get("score", 0), reverse=True)
+    
+    return all_priorities[:limit]
+
+
+@app.get("/api/ai-priorities")
+def get_ai_priorities_api():
+    return {"priorities": get_ai_priorities(3)}
+
+
+# =====================================================
+# CALM GUIDANCE - GÉNÉRATION DYNAMIQUE
+# =====================================================
+
+def generate_calm_guidance() -> Dict:
+    if not supabase:
+        return {
+            "message": "🌿 Respire. Une chose à la fois.",
+            "tone": "neutral",
+            "advice": "Prends soin de toi."
+        }
+    
+    today = datetime.now().date().isoformat()
+    now = datetime.now()
+    current_hour = now.hour
+    
+    urgent_tasks = supabase.table("tasks").select("*").in_("due_date", [today, (now.date() + timedelta(days=1)).isoformat()]).neq("status", "done").execute()
+    overdue_docs = supabase.table("documents").select("*").lt("due_date", today).neq("status", "approved").execute()
+    pending_tasks = supabase.table("tasks").select("*").eq("status", "in_progress").execute()
+    active_missions = supabase.table("missions").select("*").eq("status", "active").execute()
+    recent_wins = supabase.table("wins").select("*").gte("date", (now.date() - timedelta(days=7)).isoformat()).execute()
+    
+    load_score = 0
+    load_score += len(urgent_tasks.data) * 10
+    load_score += len(overdue_docs.data) * 8
+    load_score += len(pending_tasks.data) * 3
+    load_score += len(active_missions.data) * 2
+    
+    if 5 <= current_hour < 12:
+        time_greeting = "🌅 Bonjour"
+    elif 12 <= current_hour < 18:
+        time_greeting = "☀️ Bon après-midi"
+    else:
+        time_greeting = "🌙 Bonsoir"
+    
+    if load_score >= 30:
+        message = f"{time_greeting} Rebecca. La charge est élevée aujourd'hui. Respire. Concentre-toi sur l'essentiel seulement."
+        advice = "Ignore le reste. Une mission à la fois. Tu n'as pas à tout faire aujourd'hui."
+    elif load_score >= 15:
+        message = f"{time_greeting} Rebecca. Tu as du mouvement. Garde ton rythme, mais n'oublie pas de respirer."
+        advice = "Priorise tes 3 tâches les plus importantes. Le reste peut attendre."
+    elif load_score >= 5:
+        message = f"{time_greeting} Rebecca. La journée est calme. Profites-en pour avancer sereinement."
+        advice = "Utilise cette énergie pour prendre de l'avance ou célébrer tes victoires."
+    else:
+        message = f"{time_greeting} Rebecca. Tout est sous contrôle. C'est une bonne journée."
+        advice = "Prends ce temps pour toi, ou pour avancer sur un projet qui te tient à cœur."
+    
+    specific_advice = []
+    if len(urgent_tasks.data) > 0:
+        specific_advice.append(f"⚠️ {len(urgent_tasks.data)} tâche(s) urgente(s) à traiter")
+    if len(overdue_docs.data) > 0:
+        specific_advice.append(f"📄 {len(overdue_docs.data)} document(s) en retard")
+    if len(recent_wins.data) > 0 and load_score < 15:
+        specific_advice.append(f"🎉 {len(recent_wins.data)} victoire(s) récente(s) à célébrer")
+    if not specific_advice and load_score < 5:
+        specific_advice.append("🌿 Profite de ce calme pour souffler")
+    
+    full_guidance = message + "\n\n" + advice
+    if specific_advice:
+        full_guidance += "\n\n📌 " + "\n📌 ".join(specific_advice)
+    
+    return {
+        "message": full_guidance,
+        "load_score": load_score,
+        "specific_advice": specific_advice
+    }
+
+
+@app.get("/api/calm-guidance")
+def get_calm_guidance():
+    return generate_calm_guidance()
+
+
+# =====================================================
+# BRIEF QUOTIDIEN AUTOMATIQUE
+# =====================================================
+
+def generate_daily_brief() -> Dict:
+    if not supabase:
+        return {
+            "top_priorities": ["Vérifier tes tâches", "Point finances", "Prendre soin de toi"],
+            "calm_guidance": "🌿 Une journée à la fois."
+        }
+    
+    today = datetime.now().date().isoformat()
+    
+    tasks_today = supabase.table("tasks").select("*").eq("due_date", today).neq("status", "done").execute()
+    overdue_tasks = supabase.table("tasks").select("*").lt("due_date", today).neq("status", "done").execute()
+    active_missions = supabase.table("missions").select("*").eq("status", "active").execute()
+    pending_docs = supabase.table("documents").select("*").neq("status", "approved").limit(3).execute()
+    recent_wins = supabase.table("wins").select("*").gte("date", (datetime.now().date() - timedelta(days=7)).isoformat()).execute()
+    
+    top_priorities = []
+    for task in tasks_today.data[:2]:
+        top_priorities.append(f"📋 {task['title']}")
+    for doc in overdue_tasks.data[:1]:
+        top_priorities.append(f"⚠️ {doc['title']} (en retard)")
+    if active_missions.data:
+        top_priorities.append(f"🎯 Avancer sur {active_missions.data[0]['name']}")
+    
+    default_priorities = [
+        "💰 Vérifier tes finances",
+        "👨‍👩‍👧‍👦 Prévoir du temps famille",
+        "🌿 Prendre 5 minutes pour toi"
+    ]
+    while len(top_priorities) < 3:
+        top_priorities.append(default_priorities[len(top_priorities) - 3])
+    
+    calm_guidance = generate_calm_guidance()
+    
+    family_focus = "👨‍👩‍👧‍👦 Du temps avec les enfants ce soir" if datetime.now().hour < 14 else "👨‍👩‍👧‍👦 Préparer demain pour la famille"
+    money_move = "💰 Vérifier les dépenses du jour" if tasks_today.data else "💰 Revoir les opportunités en cours"
+    business_move = "📈 Avancer sur une mission clé" if active_missions.data else "📈 Définir les priorités business"
+    stabilization_action = "🧘 10 minutes de pause" if len(tasks_today.data) > 2 else "🌿 Profiter du calme"
+    
+    return {
+        "top_priorities": top_priorities[:3],
+        "family_focus": family_focus,
+        "money_move": money_move,
+        "business_move": business_move,
+        "stabilization_action": stabilization_action,
+        "calm_guidance": calm_guidance.get("message", "🌿 Une journée à la fois."),
+        "stats": {
+            "tasks_today": len(tasks_today.data),
+            "overdue_tasks": len(overdue_tasks.data),
+            "active_missions": len(active_missions.data),
+            "pending_docs": len(pending_docs.data),
+            "wins_this_week": len(recent_wins.data)
+        }
+    }
+
+
+@app.post("/api/generate-daily-brief")
+def generate_and_save_daily_brief():
+    today = datetime.now().date().isoformat()
+    
+    existing = supabase.table("daily_briefs").select("*").eq("date", today).execute()
+    if existing.data:
+        return {"message": "Brief déjà généré aujourd'hui", "brief": existing.data[0]}
+    
+    brief_data = generate_daily_brief()
+    
+    supabase.table("daily_briefs").insert({
+        "date": today,
+        "top_priorities": brief_data["top_priorities"],
+        "family_focus": brief_data["family_focus"],
+        "money_move": brief_data["money_move"],
+        "business_move": brief_data["business_move"],
+        "stabilization_action": brief_data["stabilization_action"],
+        "calm_guidance": brief_data["calm_guidance"],
+        "stats": brief_data["stats"]
+    }).execute()
+    
+    try:
+        send_notification({
+            "title": "🌅 Ton brief quotidien est prêt",
+            "body": f"Top priorités : {brief_data['top_priorities'][0]}",
+            "url": "/brief"
+        })
+    except Exception as e:
+        logger.error(f"Erreur envoi notification brief: {e}")
+    
+    return {"success": True, "brief": brief_data}
+
+
+@app.post("/api/check-task-reminders")
+def check_task_reminders():
+    today = datetime.now().date().isoformat()
+    tomorrow = (datetime.now().date() + timedelta(days=1)).isoformat()
+    
+    tasks_today = supabase.table("tasks").select("*").eq("due_date", today).neq("status", "done").execute()
+    for task in tasks_today.data:
+        send_notification({
+            "title": "📋 Tâche du jour",
+            "body": f"'{task['title']}' - À faire aujourd'hui",
+            "url": "/tasks"
+        })
+    
+    tasks_tomorrow = supabase.table("tasks").select("*").eq("due_date", tomorrow).neq("status", "done").execute()
+    for task in tasks_tomorrow.data:
+        send_notification({
+            "title": "⏰ Rappel",
+            "body": f"'{task['title']}' - À faire demain",
+            "url": "/tasks"
+        })
+    
+    return {"tasks_today": len(tasks_today.data), "tasks_tomorrow": len(tasks_tomorrow.data)}
