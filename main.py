@@ -1231,3 +1231,54 @@ def check_task_reminders():
         })
     
     return {"tasks_today": len(tasks_today.data), "tasks_tomorrow": len(tasks_tomorrow.data)}
+
+# Ajoute après les autres routes GET
+@app.get("/wins/recent")
+def get_recent_wins(limit: int = 5):
+    """Récupère les victoires récentes"""
+    seven_days_ago = (datetime.now().date() - timedelta(days=7)).isoformat()
+    wins = supabase.table("wins").select("*").gte("date", seven_days_ago).order("date", desc=True).limit(limit).execute()
+    return {"wins": wins.data}
+
+
+
+@app.get("/tasks/by-status/{status}")
+def get_tasks_by_status(status: str, limit: int = 20):
+    """Récupère les tâches par statut"""
+    tasks = supabase.table("tasks").select("*").eq("status", status).limit(limit).execute()
+    return {"tasks": tasks.data}
+
+
+@app.get("/spending/by-project")
+def get_spending_by_project():
+    """Récupère le total des dépenses par projet"""
+    spending = supabase.table("spending").select("project, amount").execute()
+    
+    result = {}
+    for s in spending.data:
+        project = s.get("project", "Non classé")
+        result[project] = result.get(project, 0) + s.get("amount", 0)
+    
+    return {"projects": result}
+
+# Ajoute après les autres routes GET
+@app.get("/wins/recent")
+def get_recent_wins(limit: int = 5):
+    """Récupère les victoires récentes"""
+    seven_days_ago = (datetime.now().date() - timedelta(days=7)).isoformat()
+    wins = supabase.table("wins").select("*").gte("date", seven_days_ago).order("date", desc=True).limit(limit).execute()
+    return {"wins": wins.data}
+
+
+
+@app.get("/revenue/by-project")
+def get_revenue_by_project():
+    """Récupère le total des revenus par projet"""
+    revenue = supabase.table("revenue").select("project, amount").execute()
+    
+    result = {}
+    for r in revenue.data:
+        project = r.get("project", "Non classé")
+        result[project] = result.get(project, 0) + r.get("amount", 0)
+    
+    return {"projects": result}
