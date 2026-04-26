@@ -135,6 +135,12 @@ def db_insert(table: str, data: Dict) -> Dict:
         allowed = ALLOWED_FIELDS.get(table, ["title"])
         clean_data = {k: v for k, v in data.items() if k in allowed and v is not None and v != ""}
         
+        # 🔧 CORRECTION : Pour la table missions, mapper 'title' vers 'name'
+        if table == "missions" and "title" in data and "name" not in clean_data:
+            clean_data["name"] = data["title"]
+            if "title" in clean_data:
+                del clean_data["title"]
+        
         if not clean_data and "title" in data:
             clean_data = {"title": data["title"][:200]}
         elif not clean_data:
