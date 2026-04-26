@@ -374,7 +374,7 @@ tools = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "table": {"type": "string", "enum": ["spending", "tasks", "wins", "family_events"]},
+                    "table": {"type": "string", "enum": ["spending", "tasks", "wins", "family_events", "revenue"]},
                     "title": {"type": "string"},
                     "amount": {"type": "number", "minimum": 0},
                     "category": {"type": "string"},
