@@ -1880,3 +1880,58 @@ def get_priority_reason_text(task: Dict, score: int) -> str:
         return "🔶 Haute importance"
     
     return "📋 À traiter"
+
+
+
+
+
+# =====================================================
+# API ROUTES - NOTIFICATIONS PUSH
+# =====================================================
+
+@app.post("/api/subscribe")
+def subscribe_push(request: Dict[str, Any]):
+    """Enregistre un abonnement push pour les notifications"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        endpoint = request.get("endpoint")
+        keys = request.get("keys")
+        
+        if not endpoint or not keys:
+            return {"success": False, "error": "endpoint et keys requis"}
+        
+        # Upsert pour éviter les doublons
+        result = supabase.table("push_subscriptions").upsert({
+            "endpoint": endpoint,
+            "keys": keys,
+            "user_id": "rebecca",
+            "updated_at": datetime.now().isoformat()
+        }).execute()
+        
+        logger.info(f"✅ Abonnement push enregistré: {endpoint[:50]}...")
+        return {"success": True}
+        
+    except Exception as e:
+        logger.error(f"Erreur subscription push: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/unsubscribe")
+def unsubscribe_push(request: Dict[str, Any]):
+    """Supprime un abonnement push"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        endpoint = request.get("endpoint")
+        if endpoint:
+            supabase.table("push_subscriptions").delete().eq("endpoint", endpoint).execute()
+            logger.info(f"❌ Abonnement push supprimé: {endpoint[:50]}...")
+        
+        return {"success": True}
+        
+    except Exception as e:
+        logger.error(f"Erreur unsubscription push: {e}")
+        return {"success": False, "error": str(e)}
