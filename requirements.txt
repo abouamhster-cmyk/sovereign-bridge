@@ -8,3 +8,5 @@ supabase>=2.0.0
 python-dotenv
 pywebpush>=1.14.0
 httpx
+pypdf
+python-docx
