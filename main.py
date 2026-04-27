@@ -1124,9 +1124,7 @@ def analyze_proactive_suggestions() -> List[Dict]:
     return suggestions
 
 
-@app.get("/api/proactive-suggestions")
-def get_proactive_suggestions():
-    return {"suggestions": analyze_proactive_suggestions()}
+
 
 
 # =====================================================
@@ -1371,9 +1369,7 @@ def get_ai_priorities(limit: int = 3) -> List[Dict]:
     return all_priorities[:limit]
 
 
-@app.get("/api/ai-priorities")
-def get_ai_priorities_api():
-    return {"priorities": get_ai_priorities(3)}
+
 
 
 # =====================================================
@@ -1445,9 +1441,6 @@ def generate_calm_guidance() -> Dict:
     }
 
 
-@app.get("/api/calm-guidance")
-def get_calm_guidance():
-    return generate_calm_guidance()
 
 
 # =====================================================
@@ -1615,3 +1608,275 @@ def get_revenue_by_project():
         result[project] = result.get(project, 0) + r.get("amount", 0)
     
     return {"projects": result}
+
+
+# =====================================================
+# API ROUTES - DASHBOARD INTELLIGENCE (PRODUCTION)
+# =====================================================
+
+@app.get("/api/calm-guidance")
+async def get_calm_guidance():
+    """
+    Génère un message de guidance personnalisé basé sur la charge réelle.
+    Utilisé par le dashboard pour afficher un message adapté.
+    """
+    if not supabase:
+        return {
+            "message": "🌿 Respire. Une chose à la fois.",
+            "advice": "Prends soin de toi.",
+            "load_score": 0,
+            "specific_advice": []
+        }
+    
+    today = datetime.now().date().isoformat()
+    now = datetime.now()
+    
+    # Récupération des données réelles
+    urgent_tasks = supabase.table("tasks").select("*").eq("due_date", today).neq("status", "done").execute()
+    overdue_docs = supabase.table("documents").select("*").lt("due_date", today).neq("status", "approved").execute()
+    pending_tasks = supabase.table("tasks").select("*").eq("status", "in_progress").execute()
+    active_missions = supabase.table("missions").select("*").eq("status", "active").execute()
+    recent_wins = supabase.table("wins").select("*").gte("date", (now.date() - timedelta(days=7)).isoformat()).execute()
+    
+    # Calcul du score de charge
+    load_score = 0
+    load_score += len(urgent_tasks.data) * 10
+    load_score += len(overdue_docs.data) * 8
+    load_score += len(pending_tasks.data) * 3
+    load_score += len(active_missions.data) * 2
+    
+    # Message selon l'heure
+    hour = now.hour
+    if 5 <= hour < 12:
+        greeting = "🌅 Bonjour"
+    elif 12 <= hour < 18:
+        greeting = "☀️ Bon après-midi"
+    else:
+        greeting = "🌙 Bonsoir"
+    
+    # Message selon la charge
+    if load_score >= 30:
+        message = f"{greeting} Rebecca. La charge est élevée aujourd'hui. Respire. Concentre-toi sur l'essentiel seulement."
+        advice = "Ignore le reste. Une mission à la fois."
+    elif load_score >= 15:
+        message = f"{greeting} Rebecca. Tu as du mouvement. Garde ton rythme."
+        advice = "Priorise tes 3 tâches les plus importantes."
+    elif load_score >= 5:
+        message = f"{greeting} Rebecca. La journée est calme. Profites-en."
+        advice = "Avance sereinement."
+    else:
+        message = f"{greeting} Rebecca. Tout est sous contrôle."
+        advice = "Prends ce temps pour toi."
+    
+    # Conseils spécifiques
+    specific_advice = []
+    if len(urgent_tasks.data) > 0:
+        specific_advice.append(f"⚠️ {len(urgent_tasks.data)} tâche(s) urgente(s)")
+    if len(overdue_docs.data) > 0:
+        specific_advice.append(f"📄 {len(overdue_docs.data)} document(s) en retard")
+    if len(recent_wins.data) > 0 and load_score < 15:
+        specific_advice.append(f"🎉 {len(recent_wins.data)} victoire(s) récente(s)")
+    
+    return {
+        "message": message,
+        "advice": advice,
+        "load_score": load_score,
+        "specific_advice": specific_advice
+    }
+
+
+@app.get("/api/proactive-suggestions")
+async def get_proactive_suggestions():
+    """
+    Analyse les données et retourne des suggestions proactives.
+    Utilisé pour afficher les alertes intelligentes sur le dashboard.
+    """
+    if not supabase:
+        return {"suggestions": []}
+    
+    suggestions = []
+    today = datetime.now().date().isoformat()
+    tomorrow = (datetime.now().date() + timedelta(days=1)).isoformat()
+    
+    # 1. Tâches urgentes (aujourd'hui ou demain)
+    urgent_tasks = supabase.table("tasks").select("*").in_("due_date", [today, tomorrow]).neq("status", "done").execute()
+    if urgent_tasks.data:
+        suggestions.append({
+            "type": "urgent_tasks",
+            "priority": "high",
+            "title": f"⚠️ {len(urgent_tasks.data)} tâche(s) urgente(s)",
+            "message": f"À faire aujourd'hui ou demain.",
+            "action_url": "/tasks",
+            "action_label": "Voir les tâches"
+        })
+    
+    # 2. Documents en retard
+    overdue_docs = supabase.table("documents").select("*").lt("due_date", today).neq("status", "approved").execute()
+    if overdue_docs.data:
+        suggestions.append({
+            "type": "overdue_docs",
+            "priority": "high",
+            "title": f"📄 {len(overdue_docs.data)} document(s) en retard",
+            "message": "Des documents importants sont en retard.",
+            "action_url": "/documents",
+            "action_label": "Voir les documents"
+        })
+    
+    # 3. Opportunités à forte valeur
+    high_value_opps = supabase.table("opportunities").select("*").eq("probability", "high").neq("stage", "won").execute()
+    if high_value_opps.data:
+        total_value = sum(o.get("estimated_value", 0) for o in high_value_opps.data)
+        suggestions.append({
+            "type": "high_value_opportunities",
+            "priority": "medium",
+            "title": f"💰 {len(high_value_opps.data)} opportunité(s)",
+            "message": f"Potentiel total de {total_value:,.0f} CFA",
+            "action_url": "/opportunities",
+            "action_label": "Voir les opportunités"
+        })
+    
+    # 4. Victoires récentes à célébrer
+    seven_days_ago = (datetime.now().date() - timedelta(days=7)).isoformat()
+    recent_wins = supabase.table("wins").select("*").gte("date", seven_days_ago).execute()
+    if recent_wins.data:
+        suggestions.append({
+            "type": "celebration",
+            "priority": "low",
+            "title": f"🎉 {len(recent_wins.data)} victoire(s) récente(s)",
+            "message": "Continue sur cette lancée !",
+            "action_url": "/wins",
+            "action_label": "Voir mes victoires"
+        })
+    
+    # 5. Brief du matin (entre 7h et 9h)
+    if 7 <= datetime.now().hour <= 9:
+        suggestions.append({
+            "type": "morning_brief",
+            "priority": "medium",
+            "title": "🌅 Bonjour Rebecca",
+            "message": "Ton brief quotidien est prêt.",
+            "action_url": "/brief",
+            "action_label": "Voir le brief"
+        })
+    
+    return {"suggestions": suggestions}
+
+
+@app.get("/api/ai-priorities")
+async def get_ai_priorities(limit: int = 3):
+    """
+    Calcule les priorités IA basées sur urgence, deadline, importance.
+    Retourne les tâches les plus importantes du moment.
+    """
+    if not supabase:
+        return {"priorities": []}
+    
+    # Récupérer toutes les tâches non terminées
+    tasks = supabase.table("tasks").select("*").neq("status", "done").execute()
+    
+    if not tasks.data:
+        return {"priorities": []}
+    
+    scored_tasks = []
+    for task in tasks.data:
+        score = 0
+        
+        # Score basé sur la deadline
+        if task.get("due_date"):
+            due_date = datetime.fromisoformat(task["due_date"]).date()
+            days_left = (due_date - datetime.now().date()).days
+            
+            if days_left < 0:
+                score += 15  # En retard
+            elif days_left == 0:
+                score += 12  # Aujourd'hui
+            elif days_left == 1:
+                score += 10  # Demain
+            elif days_left <= 3:
+                score += 7
+            elif days_left <= 7:
+                score += 4
+            else:
+                score += 1
+        else:
+            score += 1
+        
+        # Score basé sur le statut
+        status = task.get("status", "")
+        if status == "today":
+            score += 8
+        elif status == "in_progress":
+            score += 5
+        elif status == "not_started":
+            score += 2
+        
+        # Score basé sur la priorité
+        priority = task.get("priority", "")
+        if priority == "critical":
+            score += 10
+        elif priority == "high":
+            score += 7
+        elif priority == "normal":
+            score += 3
+        
+        # Score basé sur le projet associé
+        project = task.get("project", "")
+        if "farm" in project.lower() or "ferme" in project.lower():
+            score += 2
+        
+        scored_tasks.append({
+            "id": task["id"],
+            "title": task["title"],
+            "score": min(score, 40),
+            "due_date": task.get("due_date"),
+            "priority_reason": get_priority_reason_text(task, score)
+        })
+    
+    # Trier par score décroissant
+    scored_tasks.sort(key=lambda x: x["score"], reverse=True)
+    
+    # Ajouter des priorités non-tâches si nécessaire
+    priorities = scored_tasks[:limit]
+    
+    # Si moins de 3 tâches, compléter avec d'autres priorités
+    if len(priorities) < limit:
+        # Documents en retard
+        overdue_docs = supabase.table("documents").select("*").lt("due_date", datetime.now().date().isoformat()).neq("status", "approved").limit(limit - len(priorities)).execute()
+        for doc in overdue_docs.data:
+            priorities.append({
+                "id": doc["id"],
+                "title": f"📄 {doc['name']}",
+                "score": 35,
+                "due_date": doc.get("due_date"),
+                "priority_reason": "Document en retard"
+            })
+    
+    return {"priorities": priorities[:limit]}
+
+
+def get_priority_reason_text(task: Dict, score: int) -> str:
+    """Génère un texte explicatif pour la priorité"""
+    if task.get("due_date"):
+        due_date = datetime.fromisoformat(task["due_date"]).date()
+        days_left = (due_date - datetime.now().date()).days
+        
+        if days_left < 0:
+            return f"⚠️ En retard de {-days_left} jour(s)"
+        elif days_left == 0:
+            return "⚠️ À faire aujourd'hui"
+        elif days_left == 1:
+            return "⚠️ À faire demain"
+        elif days_left <= 3:
+            return f"⚠️ Échéance dans {days_left} jours"
+    
+    if task.get("status") == "today":
+        return "📍 Priorité du jour"
+    elif task.get("status") == "in_progress":
+        return "🔄 Déjà commencée"
+    
+    if task.get("priority") == "critical":
+        return "🔴 Tâche critique"
+    elif task.get("priority") == "high":
+        return "🔶 Haute importance"
+    
+    return "📋 À traiter"
