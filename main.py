@@ -2020,3 +2020,53 @@ async def generate_image(request: Dict[str, Any]):
     except Exception as e:
         logger.error(f"Erreur génération image: {e}")
         return {"error": str(e), "success": False}
+
+
+
+import httpx  # Ajoute dans les imports
+
+@app.post("/api/generate-image")
+async def generate_image(request: Dict[str, Any]):
+    """Génère une image avec DALL-E 3 et la stocke dans Supabase"""
+    prompt = request.get("prompt", "")
+    if not prompt:
+        return {"error": "Prompt requis", "success": False}, 400
+    
+    try:
+        # 1. Générer l'image avec DALL-E
+        response = client.images.generate(
+            model="dall-e-3",
+            prompt=prompt,
+            size="1024x1024",
+            quality="standard",
+            n=1
+        )
+        
+        image_url = response.data[0].url
+        revised_prompt = response.data[0].revised_prompt
+        
+        # 2. Télécharger l'image depuis l'URL temporaire
+        async with httpx.AsyncClient() as client_http:
+            image_response = await client_http.get(image_url)
+            image_data = image_response.content
+        
+        # 3. Stocker dans Supabase Storage
+        file_name = f"dalle-{datetime.now().strftime('%Y%m%d-%H%M%S')}.png"
+        file_path = f"generated-images/{file_name}"
+        
+        # Upload vers Supabase
+        supabase.storage.from_("chat-files").upload(file_path, image_data, {
+            "content-type": "image/png"
+        })
+        
+        # Obtenir l'URL publique permanente
+        permanent_url = supabase.storage.from_("chat-files").get_public_url(file_path)
+        
+        return {
+            "success": True,
+            "image_url": permanent_url,
+            "revised_prompt": revised_prompt
+        }
+    except Exception as e:
+        logger.error(f"Erreur génération image: {e}")
+        return {"error": str(e), "success": False}
