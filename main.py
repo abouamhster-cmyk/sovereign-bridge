@@ -3,8 +3,7 @@ import json
 import logging
 import re
 from datetime import datetime, timedelta
-from typing import List, Dict, Any
-
+from typing import Union, List, Dict, Any
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -91,7 +90,8 @@ ALLOWED_FIELDS = {
 # =====================================================
 
 class ChatRequest(BaseModel):
-    messages: List[Dict[str, str]]
+    messages: List[Dict[str, Any]]  # ←改成 Any pour accepter les images
+
 
 
 class WriteRequest(BaseModel):
@@ -1368,6 +1368,9 @@ def get_revenue_by_project():
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
     logger.info(f"📨 Reçu: {len(request.messages)} messages")
+
+    # Normaliser les messages (supporte les images)
+    normalized_messages = normalize_messages(request.messages)
     
     messages_payload = [{"role": "system", "content": SYSTEM_PROMPT}]
     messages_payload.extend(request.messages)
@@ -1515,7 +1518,75 @@ def delete_item(table: str, item_id: str):
 
 
 
+# =====================================================
+# TRANSCRIPTION AUDIO (notes vocales)
+# =====================================================
 
+@app.post("/api/transcribe")
+async def transcribe_audio(file: UploadFile = File(...)):
+    """Transcrit un fichier audio en texte"""
+    try:
+        # Lire le fichier audio
+        audio_data = await file.read()
+        
+        # Sauvegarder temporairement
+        temp_path = f"/tmp/{file.filename}"
+        with open(temp_path, "wb") as f:
+            f.write(audio_data)
+        
+        # Transcrire avec OpenAI Whisper
+        with open(temp_path, "rb") as audio_file:
+            transcript = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file,
+                language="fr"
+            )
+        
+        # Nettoyer
+        os.remove(temp_path)
+        
+        return {"success": True, "text": transcript.text}
+    except Exception as e:
+        logger.error(f"Erreur transcription: {e}")
+        return {"success": False, "error": str(e)}
+
+
+
+
+# =====================================================
+# EXTRACTION DE TEXTE DEPUIS DOCUMENTS
+# =====================================================
+
+@app.post("/api/extract-text")
+async def extract_text_from_document(file: UploadFile = File(...)):
+    """Extrait le texte d'un document (PDF, DOCX, TXT)"""
+    try:
+        content = await file.read()
+        text = ""
+        
+        if file.filename.endswith('.pdf'):
+            # PDF - utiliser PyPDF2 ou pypdf
+            from pypdf import PdfReader
+            import io
+            reader = PdfReader(io.BytesIO(content))
+            for page in reader.pages:
+                text += page.extract_text()
+        elif file.filename.endswith('.txt'):
+            text = content.decode('utf-8')
+        elif file.filename.endswith(('.docx', '.doc')):
+            # DOCX - utiliser python-docx
+            from docx import Document
+            import io
+            doc = Document(io.BytesIO(content))
+            for para in doc.paragraphs:
+                text += para.text + "\n"
+        else:
+            return {"success": False, "error": "Format non supporté"}
+        
+        return {"success": True, "text": text[:5000]}  # Limiter à 5000 caractères
+    except Exception as e:
+        logger.error(f"Erreur extraction: {e}")
+        return {"success": False, "error": str(e)}
 
 # =====================================================
 # IA PROACTIVE - ANALYSE ET SUGGESTIONS
@@ -1984,7 +2055,22 @@ def generate_daily_brief() -> Dict:
 
 
 
-
+def normalize_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Convertit les messages au format OpenAI (supporte texte + images)"""
+    normalized = []
+    
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content")
+        
+        # Si le contenu est déjà au format OpenAI (list avec type image_url)
+        if isinstance(content, list):
+            normalized.append({"role": role, "content": content})
+        else:
+            # Sinon, format texte simple
+            normalized.append({"role": role, "content": content})
+    
+    return normalized
 
 
 
