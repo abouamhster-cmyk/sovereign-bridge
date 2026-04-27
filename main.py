@@ -6,11 +6,29 @@ from datetime import datetime, timedelta
 from typing import Union, List, Dict, Any
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import UploadFile, File
 from pydantic import BaseModel
 from openai import OpenAI
 from supabase import create_client, Client
 from pywebpush import webpush, WebPushException
+import httpx
 
+
+# =====================================================
+# FONCTIONS UTILITAIRES
+# =====================================================
+
+def normalize_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Convertit les messages au format OpenAI (supporte texte + images)"""
+    normalized = []
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content")
+        if isinstance(content, list):
+            normalized.append({"role": role, "content": content})
+        else:
+            normalized.append({"role": role, "content": content})
+    return normalized
 
 # =====================================================
 # LOGGING CONFIGURATION
@@ -105,6 +123,58 @@ class UpdateRequest(BaseModel):
     data: Dict
 
 
+
+
+
+# =====================================================
+# GÉNÉRATION D'IMAGES (DALL-E)
+# =====================================================
+@app.post("/api/generate-image")
+async def generate_image(request: Dict[str, Any]):
+    """Génère une image avec DALL-E 3 et la stocke dans Supabase"""
+    prompt = request.get("prompt", "")
+    if not prompt:
+        return {"error": "Prompt requis", "success": False}, 400
+    
+    try:
+        # 1. Générer l'image avec DALL-E
+        response = client.images.generate(
+            model="dall-e-3",
+            prompt=prompt,
+            size="1024x1024",
+            quality="standard",
+            n=1
+        )
+        
+        image_url = response.data[0].url
+        revised_prompt = response.data[0].revised_prompt
+        
+        # 2. Télécharger l'image depuis l'URL temporaire
+        async with httpx.AsyncClient() as client_http:
+            image_response = await client_http.get(image_url)
+            image_data = image_response.content
+        
+        # 3. Stocker dans Supabase Storage
+        file_name = f"dalle-{datetime.now().strftime('%Y%m%d-%H%M%S')}.png"
+        file_path = f"generated-images/{file_name}"
+        
+        # Upload vers Supabase
+        supabase.storage.from_("chat-files").upload(file_path, image_data, {
+            "content-type": "image/png"
+        })
+        
+        # Obtenir l'URL publique permanente
+        permanent_url = supabase.storage.from_("chat-files").get_public_url(file_path)
+        
+        return {
+            "success": True,
+            "image_url": permanent_url,
+            "revised_prompt": revised_prompt
+        }
+    except Exception as e:
+        logger.error(f"Erreur génération image: {e}")
+        return {"error": str(e), "success": False}
+        
 # =====================================================
 # DATABASE OPERATIONS
 # =====================================================
@@ -1373,7 +1443,7 @@ async def chat_endpoint(request: ChatRequest):
     normalized_messages = normalize_messages(request.messages)
     
     messages_payload = [{"role": "system", "content": SYSTEM_PROMPT}]
-    messages_payload.extend(request.messages)
+    messages_payload.extend(normalized_messages)  
     
     try:
         response = client.chat.completions.create(
@@ -1525,17 +1595,21 @@ def delete_item(table: str, item_id: str):
 @app.post("/api/transcribe")
 async def transcribe_audio(file: UploadFile = File(...)):
     """Transcrit un fichier audio en texte"""
+    # Vérifier le type de fichier
+    if not file.filename.endswith(('.mp3', '.wav', '.m4a', '.ogg', '.webm')):
+        return {"success": False, "error": "Format audio non supporté"}
+    
     try:
-        # Lire le fichier audio
         audio_data = await file.read()
         
         # Sauvegarder temporairement
-        temp_path = f"/tmp/{file.filename}"
-        with open(temp_path, "wb") as f:
-            f.write(audio_data)
+        import tempfile
+        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1]) as tmp:
+            tmp.write(audio_data)
+            tmp_path = tmp.name
         
         # Transcrire avec OpenAI Whisper
-        with open(temp_path, "rb") as audio_file:
+        with open(tmp_path, "rb") as audio_file:
             transcript = client.audio.transcriptions.create(
                 model="whisper-1",
                 file=audio_file,
@@ -1543,13 +1617,12 @@ async def transcribe_audio(file: UploadFile = File(...)):
             )
         
         # Nettoyer
-        os.remove(temp_path)
+        os.unlink(tmp_path)
         
         return {"success": True, "text": transcript.text}
     except Exception as e:
         logger.error(f"Erreur transcription: {e}")
         return {"success": False, "error": str(e)}
-
 
 
 
@@ -2055,104 +2128,7 @@ def generate_daily_brief() -> Dict:
 
 
 
-def normalize_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Convertit les messages au format OpenAI (supporte texte + images)"""
-    normalized = []
-    
-    for msg in messages:
-        role = msg.get("role", "user")
-        content = msg.get("content")
-        
-        # Si le contenu est déjà au format OpenAI (list avec type image_url)
-        if isinstance(content, list):
-            normalized.append({"role": role, "content": content})
-        else:
-            # Sinon, format texte simple
-            normalized.append({"role": role, "content": content})
-    
-    return normalized
 
 
 
 
-# =====================================================
-# GÉNÉRATION D'IMAGES (DALL-E)
-# =====================================================
-
-@app.post("/api/generate-image")
-async def generate_image(request: Dict[str, Any]):
-    """Génère une image avec DALL-E 3"""
-    prompt = request.get("prompt", "")
-    if not prompt:
-        return {"error": "Prompt requis", "success": False}, 400
-    
-    try:
-        response = client.images.generate(
-            model="dall-e-3",
-            prompt=prompt,
-            size="1024x1024",
-            quality="standard",
-            n=1
-        )
-        
-        image_url = response.data[0].url
-        revised_prompt = response.data[0].revised_prompt
-        
-        return {
-            "success": True,
-            "image_url": image_url,
-            "revised_prompt": revised_prompt
-        }
-    except Exception as e:
-        logger.error(f"Erreur génération image: {e}")
-        return {"error": str(e), "success": False}
-
-
-
-import httpx  # Ajoute dans les imports
-
-@app.post("/api/generate-image")
-async def generate_image(request: Dict[str, Any]):
-    """Génère une image avec DALL-E 3 et la stocke dans Supabase"""
-    prompt = request.get("prompt", "")
-    if not prompt:
-        return {"error": "Prompt requis", "success": False}, 400
-    
-    try:
-        # 1. Générer l'image avec DALL-E
-        response = client.images.generate(
-            model="dall-e-3",
-            prompt=prompt,
-            size="1024x1024",
-            quality="standard",
-            n=1
-        )
-        
-        image_url = response.data[0].url
-        revised_prompt = response.data[0].revised_prompt
-        
-        # 2. Télécharger l'image depuis l'URL temporaire
-        async with httpx.AsyncClient() as client_http:
-            image_response = await client_http.get(image_url)
-            image_data = image_response.content
-        
-        # 3. Stocker dans Supabase Storage
-        file_name = f"dalle-{datetime.now().strftime('%Y%m%d-%H%M%S')}.png"
-        file_path = f"generated-images/{file_name}"
-        
-        # Upload vers Supabase
-        supabase.storage.from_("chat-files").upload(file_path, image_data, {
-            "content-type": "image/png"
-        })
-        
-        # Obtenir l'URL publique permanente
-        permanent_url = supabase.storage.from_("chat-files").get_public_url(file_path)
-        
-        return {
-            "success": True,
-            "image_url": permanent_url,
-            "revised_prompt": revised_prompt
-        }
-    except Exception as e:
-        logger.error(f"Erreur génération image: {e}")
-        return {"error": str(e), "success": False}
