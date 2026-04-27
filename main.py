@@ -172,6 +172,9 @@ def db_insert(table: str, data: Dict) -> Dict:
         return {"success": False, "error": str(e)}
 
 
+
+
+
 def db_update(table: str, id: str, data: Dict) -> Dict:
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
@@ -369,6 +372,33 @@ Exemple :
 "[LEARN:category:main d oeuvre:labor]"
 
 Ces tags sont invisibles pour l'utilisateur mais permettent d'apprendre.
+
+
+
+**CRÉATION DE MISSIONS/PROJETS :**
+Quand on te demande de créer un nouveau projet ou mission, tu DOIS remplir TOUS les champs avec des valeurs par défaut intelligentes :
+
+- name : le nom donné par l'utilisateur
+- category : "business" (par défaut) ou ce que l'utilisateur précise
+- status : "active" (toujours, sauf si l'utilisateur dit autre chose)
+- priority : "normal" (par défaut) ou "high" si c'est important
+- deadline : à définir si l'utilisateur donne une date
+- revenue_potential : 3 (sur 5) par défaut
+- strategic_value : 3 (sur 5) par défaut
+- energy_cost : 3 (sur 5) par défaut
+- owner : "Rebecca" par défaut
+
+**EXEMPLE POUR "Ajoute le projet Allowanou" :**
+{
+  "name": "Allowanou",
+  "category": "business",
+  "status": "active",
+  "priority": "normal",
+  "revenue_potential": 3,
+  "strategic_value": 3,
+  "energy_cost": 3,
+  "owner": "Rebecca"
+}
 
 Tu n'es pas un assistant. Tu es SOVEREIGN."""
 
