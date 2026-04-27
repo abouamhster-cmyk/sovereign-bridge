@@ -771,6 +771,24 @@ tools = [
             "description": "Retourne les tâches prioritaires",
             "parameters": {"type": "object", "properties": {"limit": {"type": "integer"}}, "required": []}
         }
+    },
+
+        {
+        "type": "function",
+        "function": {
+            "name": "generate_image",
+            "description": "Génère une image à partir d'une description. Utilise DALL-E 3.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "prompt": {
+                        "type": "string",
+                        "description": "Description détaillée de l'image à générer"
+                    }
+                },
+                "required": ["prompt"]
+            }
+        }
     }
 ]
 
@@ -1396,6 +1414,16 @@ async def chat_endpoint(request: ChatRequest):
                 result = get_priority_tasks(args.get("limit", 10))
                 content = json.dumps(result, ensure_ascii=False)
                 logger.info(f"📋 Tâches prioritaires: {len(result)}")
+
+            elif name == "generate_image":
+                result = await generate_image(args)
+                if result.get("success"):
+                    image_url = result.get("image_url")
+                    revised_prompt = result.get("revised_prompt", "")
+                    content = f"![Image générée]({image_url})\n\n*{revised_prompt}*"
+                    logger.info(f"🎨 Image générée: {args['prompt'][:50]}...")
+                else:
+                    content = f"❌ Erreur: {result.get('error', 'inconnue')}"
             
             messages_payload.append({
                 "role": "tool",
@@ -1953,3 +1981,42 @@ def generate_daily_brief() -> Dict:
             "wins_this_week": len(recent_wins.data)
         }
     }
+
+
+
+
+
+
+
+
+# =====================================================
+# GÉNÉRATION D'IMAGES (DALL-E)
+# =====================================================
+
+@app.post("/api/generate-image")
+async def generate_image(request: Dict[str, Any]):
+    """Génère une image avec DALL-E 3"""
+    prompt = request.get("prompt", "")
+    if not prompt:
+        return {"error": "Prompt requis", "success": False}, 400
+    
+    try:
+        response = client.images.generate(
+            model="dall-e-3",
+            prompt=prompt,
+            size="1024x1024",
+            quality="standard",
+            n=1
+        )
+        
+        image_url = response.data[0].url
+        revised_prompt = response.data[0].revised_prompt
+        
+        return {
+            "success": True,
+            "image_url": image_url,
+            "revised_prompt": revised_prompt
+        }
+    except Exception as e:
+        logger.error(f"Erreur génération image: {e}")
+        return {"error": str(e), "success": False}
