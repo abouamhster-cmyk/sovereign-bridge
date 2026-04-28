@@ -10,3 +10,4 @@ pywebpush>=1.14.0
 httpx
 pypdf
 python-docx
+python-multipart
