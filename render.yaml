@@ -1,5 +1,5 @@
-# render.yaml - Configuration complète pour SOVEREIGN
-# Frontend: Next.js sur Vercel/Netlify (déjà déployé)
+# render.yaml - Configuration corrigée pour SOVEREIGN
+# Frontend: Next.js sur Vercel (déjà déployé)
 # Backend: FastAPI sur Render
 # Worker: Scheduler pour les notifications périodiques
 
@@ -8,22 +8,20 @@ services:
   # BACKEND API - FastAPI
   # =====================================================
   - type: web
-    name: sovereign-backend
+    name: sovereign-bridge
     runtime: python
-    repo: https://github.com/abouamhster-cmyk/sovereign-bridge
-    plan: free  # ou starter si besoin de plus de ressources
-    region: frankfurt  # Europe pour meilleure latence
+    region: frankfurt
+    plan: free
     
     buildCommand: |
       pip install -r requirements.txt
-      pip install uvicorn
     
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     
     envVars:
       # OpenAI
       - key: OPENAI_API_KEY
-        sync: false  # À configurer manuellement dans le dashboard Render
+        sync: false
       
       # Supabase
       - key: SUPABASE_URL
@@ -40,33 +38,18 @@ services:
       # Configuration
       - key: PYTHON_VERSION
         value: 3.11.0
-      
-      # Health check
-      - key: PORT
-        value: 8000
-    
-    healthCheckPath: /
-    
-    # Auto-scaling (en option)
-    scaling:
-      minInstances: 1
-      maxInstances: 1
-    
-    # Headers CORS déjà configurés dans le code
 
   # =====================================================
-  # SCHEDULER - Notifications périodiques
+  # SCHEDULER - Notifications périodiques (toutes les 5 min)
   # =====================================================
   - type: cron
     name: sovereign-scheduler
     runtime: python
-    repo: https://github.com/abouamhster-cmyk/sovereign-bridge
     region: frankfurt
     
     buildCommand: |
       pip install -r requirements.txt
     
-    # Cron job toutes les 5 minutes
     schedule: "*/5 * * * *"
     
     startCommand: python scheduler.py
@@ -86,16 +69,3 @@ services:
         sync: false
       - key: VAPID_PUBLIC_KEY
         sync: false
-
-# =====================================================
-# VARIABLES GLOBALES (optionnel)
-# =====================================================
-# Ces variables seront disponibles pour tous les services
-# si tu mets sync: true
-envVarGroups:
-  - name: sovereign-common
-    envVars:
-      - key: APP_NAME
-        value: SOVEREIGN
-      - key: APP_ENV
-        value: production
