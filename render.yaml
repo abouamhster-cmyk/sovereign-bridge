@@ -1,12 +1,4 @@
-# render.yaml - Configuration corrigée pour SOVEREIGN
-# Frontend: Next.js sur Vercel (déjà déployé)
-# Backend: FastAPI sur Render
-# Worker: Scheduler pour les notifications périodiques
-
 services:
-  # =====================================================
-  # BACKEND API - FastAPI
-  # =====================================================
   - type: web
     name: sovereign-bridge
     runtime: python
@@ -19,46 +11,6 @@ services:
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     
     envVars:
-      # OpenAI
-      - key: OPENAI_API_KEY
-        sync: false
-      
-      # Supabase
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_SERVICE_KEY
-        sync: false
-      
-      # Notifications Push (VAPID)
-      - key: VAPID_PRIVATE_KEY
-        sync: false
-      - key: VAPID_PUBLIC_KEY
-        sync: false
-      
-      # Configuration
-      - key: PYTHON_VERSION
-        value: 3.11.0
-
-  # =====================================================
-  # SCHEDULER - Notifications périodiques (toutes les 5 min)
-  # =====================================================
-  - type: cron
-    name: sovereign-scheduler
-    runtime: python
-    region: frankfurt
-    
-    buildCommand: |
-      pip install -r requirements.txt
-    
-    schedule: "*/5 * * * *"
-    
-    startCommand: python scheduler.py
-    
-    envVars:
-      - key: BACKEND_URL
-        value: https://sovereign-bridge.onrender.com
-      - key: PYTHON_VERSION
-        value: 3.11.0
       - key: OPENAI_API_KEY
         sync: false
       - key: SUPABASE_URL
@@ -69,3 +21,5 @@ services:
         sync: false
       - key: VAPID_PUBLIC_KEY
         sync: false
+      - key: PYTHON_VERSION
+        value: 3.11.0
