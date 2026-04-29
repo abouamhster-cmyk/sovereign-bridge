@@ -406,24 +406,32 @@ async def weekly_report_reminder():
 
 
 @app.post("/api/run-all-reminders")
+@app.get("/api/run-all-reminders")  
 async def run_all_reminders():
-    """Exécute tous les rappels en une fois"""
+    """Exécute tous les rappels en une fois (GET et POST acceptés)"""
     results = {}
     
-    # Exécuter tous les rappels
+    # Rappels existants
     results["tasks"] = await check_task_reminders()
     results["missions"] = await mission_reminders()
     results["documents"] = await document_reminders()
     results["celebration"] = await celebration_reminder()
     results["morning_brief"] = await morning_brief_reminder()
     
+    # NOUVEAUX RAPPELS
+    results["missions_daily"] = await missions_daily_reminder()
+    results["opportunities"] = await opportunities_reminder()
+    results["financial_weekly"] = await financial_weekly_report()
+    results["family_events"] = await family_events_reminder()
+    
     # Compter le total
     total_count = 0
     for key, value in results.items():
-        if isinstance(value, dict) and value.get("count"):
-            total_count += value.get("count", 0)
-        elif isinstance(value, dict) and value.get("sent"):
-            total_count += 1
+        if isinstance(value, dict):
+            if value.get("count"):
+                total_count += value.get("count", 0)
+            elif value.get("sent"):
+                total_count += 1
     
     return {
         "success": True,
@@ -1587,3 +1595,282 @@ def get_smart_category(input_text: str) -> str:
             return value["corrected_to"]
     
     return None
+
+
+
+
+
+# =====================================================
+# NOUVEAUX RAPPELS - À AJOUTER DANS main.py
+# =====================================================
+
+@app.post("/api/missions-daily-reminder")
+async def missions_daily_reminder():
+    """Rappel quotidien des missions actives (tous les jours à 9h)"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        # Récupérer toutes les missions actives
+        active_missions = supabase.table("missions").select("*").eq("status", "active").execute()
+        
+        if not active_missions.data:
+            return {"success": True, "sent": False, "message": "Aucune mission active"}
+        
+        # Compter par catégorie
+        missions_by_category = {}
+        for mission in active_missions.data:
+            cat = mission.get("category", "other")
+            missions_by_category[cat] = missions_by_category.get(cat, 0) + 1
+        
+        # Compter les priorités élevées
+        high_priority = sum(1 for m in active_missions.data if m.get("priority") in ["critical", "high"])
+        
+        # Construire le message
+        total = len(active_missions.data)
+        message = f"{total} mission(s) active(s) en cours"
+        
+        if high_priority > 0:
+            message += f" dont {high_priority} prioritaire(s)"
+        
+        # Ajouter les catégories principales
+        cat_names = {
+            "business": "Business",
+            "farm": "Ferme", 
+            "family": "Famille",
+            "relocation": "Relocalisation",
+            "content": "Contenu",
+            "documents": "Documents"
+        }
+        
+        main_cats = [(cat, count) for cat, count in missions_by_category.items() if cat in cat_names]
+        if main_cats:
+            cat_str = ", ".join([f"{cat_names.get(cat, cat)}: {count}" for cat, count in main_cats[:3]])
+            message += f" • {cat_str}"
+        
+        send_notification_sync({
+            "title": "🎯 Missions actives du jour",
+            "body": message,
+            "url": "/missions",
+            "tag": "daily_missions",
+            "type": "mission",
+            "requireInteraction": False
+        })
+        
+        return {"success": True, "sent": True, "total_missions": total, "message": message}
+    
+    except Exception as e:
+        logger.error(f"Erreur missions_daily_reminder: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/opportunities-reminder")
+async def opportunities_reminder():
+    """Rappel des opportunités à haut potentiel"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        # Opportunités à haut potentiel (high probability ET non won/lost)
+        high_opps = supabase.table("opportunities").select("*").eq("probability", "high").not_.in_("stage", ["won", "lost"]).execute()
+        
+        if not high_opps.data:
+            # Vérifier aussi celles en préparation (preparing stage)
+            preparing_opps = supabase.table("opportunities").select("*").eq("stage", "preparing").not_.in_("stage", ["won", "lost"]).execute()
+            if preparing_opps.data:
+                total_value = sum(o.get("estimated_value", 0) for o in preparing_opps.data)
+                send_notification_sync({
+                    "title": "💼 Opportunités en préparation",
+                    "body": f"{len(preparing_opps.data)} opportunité(s) en cours • {total_value:,.0f} CFA de potentiel",
+                    "url": "/opportunities",
+                    "tag": "opportunities_preparing",
+                    "type": "opportunity",
+                    "requireInteraction": False
+                })
+                return {"success": True, "sent": True, "type": "preparing", "count": len(preparing_opps.data)}
+            else:
+                return {"success": True, "sent": False, "message": "Aucune opportunité à haut potentiel"}
+        
+        total_value = sum(o.get("estimated_value", 0) for o in high_opps.data)
+        
+        send_notification_sync({
+            "title": "💰 Opportunités à haut potentiel",
+            "body": f"{len(high_opps.data)} opportunité(s) à fort potentiel • {total_value:,.0f} CFA à saisir",
+            "url": "/opportunities",
+            "tag": "high_value_opportunities",
+            "type": "opportunity",
+            "requireInteraction": True  # Important, on veut qu'elle soit vue
+        })
+        
+        return {"success": True, "sent": True, "count": len(high_opps.data), "total_value": total_value}
+    
+    except Exception as e:
+        logger.error(f"Erreur opportunities_reminder: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/financial-weekly-report")
+async def financial_weekly_report():
+    """Bilan financier hebdomadaire (le dimanche)"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    # Ne s'exécute que le dimanche
+    if datetime.now().weekday() != 6:
+        return {"success": True, "sent": False, "message": "Pas le jour du bilan financier (dimanche)"}
+    
+    try:
+        start_of_week = (datetime.now().date() - timedelta(days=7)).isoformat()
+        end_of_week = datetime.now().date().isoformat()
+        
+        # Revenus de la semaine
+        revenue_data = supabase.table("revenue").select("*").gte("date", start_of_week).lte("date", end_of_week).execute()
+        total_revenue = sum(r.get("amount", 0) for r in revenue_data.data)
+        
+        # Dépenses de la semaine
+        spending_data = supabase.table("spending").select("*").gte("date", start_of_week).lte("date", end_of_week).execute()
+        total_spending = sum(s.get("amount", 0) for s in spending_data.data)
+        
+        # Solde
+        balance = total_revenue - total_spending
+        
+        # Top dépenses par catégorie
+        spending_by_cat = {}
+        for s in spending_data.data:
+            cat = s.get("category", "other")
+            spending_by_cat[cat] = spending_by_cat.get(cat, 0) + s.get("amount", 0)
+        
+        # Catégorie la plus dépensière
+        top_category = max(spending_by_cat.items(), key=lambda x: x[1]) if spending_by_cat else ("Aucune", 0)
+        
+        # Top projet
+        spending_by_project = {}
+        for s in spending_data.data:
+            project = s.get("project", "Non classé")
+            spending_by_project[project] = spending_by_project.get(project, 0) + s.get("amount", 0)
+        top_project = max(spending_by_project.items(), key=lambda x: x[1]) if spending_by_project else ("Aucun", 0)
+        
+        # Construire le message
+        if balance >= 0:
+            status = f"✅ Solde positif : +{balance:,.0f} CFA"
+        else:
+            status = f"⚠️ Solde négatif : {balance:,.0f} CFA"
+        
+        message = f"📊 Revenus: {total_revenue:,.0f} CFA | Dépenses: {total_spending:,.0f} CFA | {status}"
+        
+        send_notification_sync({
+            "title": "📈 Bilan financier hebdomadaire",
+            "body": message,
+            "url": "/money",
+            "tag": "weekly_financial",
+            "type": "financial",
+            "requireInteraction": False
+        })
+        
+        # Notification bonus si grosse dépense
+        if total_spending > 500000:
+            send_notification_sync({
+                "title": "💸 Alerte dépenses",
+                "body": f"Dépenses élevées cette semaine ({total_spending:,.0f} CFA). Le poste principal : {top_category[0]}",
+                "url": "/money",
+                "tag": "high_spending_alert",
+                "type": "financial",
+                "requireInteraction": True
+            })
+        
+        return {
+            "success": True, 
+            "sent": True, 
+            "total_revenue": total_revenue,
+            "total_spending": total_spending,
+            "balance": balance,
+            "top_category": top_category[0],
+            "top_project": top_project[0]
+        }
+    
+    except Exception as e:
+        logger.error(f"Erreur financial_weekly_report: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/family-events-reminder")
+async def family_events_reminder():
+    """Rappel des événements familiaux (tous les jours à 7h)"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    today = datetime.now().date().isoformat()
+    tomorrow = (datetime.now().date() + timedelta(days=1)).isoformat()
+    next_3_days = (datetime.now().date() + timedelta(days=3)).isoformat()
+    
+    notifications_sent = []
+    
+    try:
+        # Événements AUJOURD'HUI
+        today_events = supabase.table("family_events").select("*").eq("date", today).neq("status", "done").execute()
+        
+        for event in today_events.data:
+            child_info = f" - {event['child_name']}" if event.get("child_name") else ""
+            send_notification_sync({
+                "title": "👨‍👩‍👧‍👦 Événement familial AUJOURD'HUI",
+                "body": f"{event['title']}{child_info}",
+                "url": "/family",
+                "tag": f"family_today_{event['id']}",
+                "type": "family",
+                "requireInteraction": True
+            })
+            notifications_sent.append(f"today_{event['id']}")
+        
+        # Événements DEMAIN
+        tomorrow_events = supabase.table("family_events").select("*").eq("date", tomorrow).neq("status", "done").execute()
+        
+        for event in tomorrow_events.data:
+            child_info = f" - {event['child_name']}" if event.get("child_name") else ""
+            send_notification_sync({
+                "title": "📅 Rappel familial pour DEMAIN",
+                "body": f"{event['title']}{child_info}",
+                "url": "/family",
+                "tag": f"family_tomorrow_{event['id']}",
+                "type": "family",
+                "requireInteraction": False
+            })
+            notifications_sent.append(f"tomorrow_{event['id']}")
+        
+        # Événements dans les 3 prochains jours (préavis)
+        upcoming_events = supabase.table("family_events").select("*").gt("date", tomorrow).lte("date", next_3_days).neq("status", "done").execute()
+        
+        # Regrouper par jour pour éviter trop de notifications
+        events_by_day = {}
+        for event in upcoming_events.data:
+            events_by_day.setdefault(event["date"], []).append(event)
+        
+        for date, events in events_by_day.items():
+            date_obj = datetime.fromisoformat(date)
+            day_name = date_obj.strftime("%A %d %B")
+            events_summary = ", ".join([f"{e['title']}" + (f" ({e['child_name']})" if e.get('child_name') else "") for e in events[:3]])
+            if len(events) > 3:
+                events_summary += f" et {len(events)-3} autre(s)"
+            
+            send_notification_sync({
+                "title": "🗓️ Événements familiaux à venir",
+                "body": f"Le {day_name} : {events_summary}",
+                "url": "/family",
+                "tag": f"family_upcoming_{date}",
+                "type": "family",
+                "requireInteraction": False
+            })
+            notifications_sent.append(f"upcoming_{date}")
+        
+        return {
+            "success": True,
+            "sent": len(notifications_sent) > 0,
+            "notifications_sent": notifications_sent,
+            "count": len(notifications_sent),
+            "today_count": len(today_events.data),
+            "tomorrow_count": len(tomorrow_events.data),
+            "upcoming_count": len(upcoming_events.data)
+        }
+    
+    except Exception as e:
+        logger.error(f"Erreur family_events_reminder: {e}")
+        return {"success": False, "error": str(e)}
