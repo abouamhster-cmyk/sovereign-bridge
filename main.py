@@ -235,45 +235,64 @@ async def process_document(file_url: str) -> str:
         return None
     
     try:
-        # Extraire le chemin du fichier depuis l'URL publique
-        # Format typical: https://xxx.supabase.co/storage/v1/object/public/chat-files/...
         import re
+        
+        # Extraire le chemin après /chat-files/
+        # Format: https://xxx.supabase.co/storage/v1/object/public/chat-files/.../fichier.pdf
         match = re.search(r'/chat-files/(.+)$', file_url)
         if not match:
+            logger.error(f"Impossible d'extraire le chemin du fichier: {file_url}")
             return None
         
         file_path = match.group(1)
+        logger.info(f"📄 Tentative de téléchargement: {file_path}")
         
         # Télécharger depuis Supabase Storage
-        file_data = supabase.storage.from_("chat-files").download(file_path)
+        try:
+            file_data = supabase.storage.from_("chat-files").download(file_path)
+        except Exception as e:
+            logger.error(f"Erreur téléchargement Supabase: {e}")
+            # Essayer avec un chemin alternatif (sans le dossier chat/ si présent)
+            if file_path.startswith("chat/"):
+                alt_path = file_path[5:]  # Enlever "chat/"
+                logger.info(f"🔄 Essai chemin alternatif: {alt_path}")
+                file_data = supabase.storage.from_("chat-files").download(alt_path)
+            else:
+                return None
         
         # Détecter le type de fichier par extension
-        if file_path.endswith('.pdf'):
+        if file_path.lower().endswith('.pdf'):
             from pypdf import PdfReader
             import io
             reader = PdfReader(io.BytesIO(file_data))
             text = ""
             for page in reader.pages:
-                text += page.extract_text()
-            return text[:3000]  # Limiter à 3000 caractères
+                page_text = page.extract_text()
+                if page_text:
+                    text += page_text + "\n"
+            logger.info(f"📄 PDF extrait: {len(text)} caractères")
+            return text[:5000]  # Limiter à 5000 caractères
         
-        elif file_path.endswith('.txt'):
-            return file_data.decode('utf-8')[:3000]
+        elif file_path.lower().endswith('.txt'):
+            text = file_data.decode('utf-8')
+            logger.info(f"📄 TXT extrait: {len(text)} caractères")
+            return text[:5000]
         
-        elif file_path.endswith(('.docx', '.doc')):
+        elif file_path.lower().endswith(('.docx', '.doc')):
             from docx import Document
             import io
             doc = Document(io.BytesIO(file_data))
             text = "\n".join([para.text for para in doc.paragraphs])
-            return text[:3000]
+            logger.info(f"📄 DOCX extrait: {len(text)} caractères")
+            return text[:5000]
         
         else:
+            logger.warning(f"Format non supporté: {file_path}")
             return None
             
     except Exception as e:
         logger.error(f"Erreur extraction document: {e}")
         return None
-
 
 
 # =====================================================
@@ -1423,20 +1442,30 @@ async def chat_endpoint(request: ChatRequest):
     
     # Vérifier s'il y a des documents à traiter (dans le dernier message)
     last_message = request.messages[-1].get("content", "") if request.messages else ""
+    logger.info(f"📨 Dernier message: {last_message[:200]}...")
+    
     doc_match = re.search(r'📎.*?(?:https?://[^\s]+)', last_message)
     
     document_text = None
     if doc_match:
+        logger.info(f"🔍 Document détecté dans le message")
         # Chercher les URLs de documents
         doc_urls = re.findall(r'https?://[^\s]+\.(?:pdf|docx?|txt)', last_message, re.IGNORECASE)
+        logger.info(f"📎 URLs de documents trouvées: {doc_urls}")
+        
         for doc_url in doc_urls:
+            logger.info(f"📄 Tentative d'extraction: {doc_url[:100]}...")
             doc_text = await process_document(doc_url)
             if doc_text:
                 document_text = doc_text
+                logger.info(f"✅ Document extrait avec succès: {len(doc_text)} caractères")
                 break
+            else:
+                logger.warning(f"❌ Échec extraction document: {doc_url[:100]}...")
     
     # Si un document a été extrait, l'ajouter au contexte
     if document_text:
+        logger.info(f"📄 Ajout du document au contexte ({len(document_text)} caractères)")
         messages_payload.append({
             "role": "user",
             "content": f"[CONTENU DU DOCUMENT EXTRAIT]\n{document_text}\n\nQuestion ou demande associée : {last_message[:500]}"
