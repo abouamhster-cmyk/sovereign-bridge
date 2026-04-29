@@ -127,13 +127,31 @@ class UpdateRequest(BaseModel):
 # =====================================================
 
 def send_notification_sync(notification_data: Dict[str, Any]) -> List[Dict]:
-    """Envoie une notification à tous les abonnés (version synchrone)"""
+    """Envoie une notification à tous les abonnés avec style premium"""
     if not supabase:
-        logger.error("Supabase non configuré pour l'envoi de notification")
+        logger.error("Supabase non configuré")
         return []
     
     subscriptions = supabase.table("push_subscriptions").select("*").execute()
     results = []
+    
+    # Emojis et couleurs selon le type
+    type_styles = {
+        "task": {"emoji": "📋", "color": "#3B82F6"},
+        "mission": {"emoji": "🎯", "color": "#8B5CF6"},
+        "win": {"emoji": "🏆", "color": "#F59E0B"},
+        "money": {"emoji": "💰", "color": "#10B981"},
+        "family": {"emoji": "👨‍👩‍👧‍👦", "color": "#EC4899"},
+        "document": {"emoji": "📄", "color": "#EF4444"},
+        "brief": {"emoji": "🌅", "color": "#D4AF37"},
+        "default": {"emoji": "👑", "color": "#D4AF37"}
+    }
+    
+    notif_type = notification_data.get("type", "default")
+    style = type_styles.get(notif_type, type_styles["default"])
+    
+    # Titre enrichi avec emoji
+    title = f"{style['emoji']} {notification_data.get('title', 'SOVEREIGN')}"
     
     for sub in subscriptions.data:
         try:
@@ -143,27 +161,28 @@ def send_notification_sync(notification_data: Dict[str, Any]) -> List[Dict]:
                     "keys": sub["keys"]
                 },
                 data=json.dumps({
-                    "title": notification_data.get("title", "SOVEREIGN"),
+                    "title": title,
                     "body": notification_data.get("body", ""),
                     "url": notification_data.get("url", "/"),
-                    "icon": notification_data.get("icon", "/icons/icon-192x192.png"),
-                    "badge": notification_data.get("badge", "/icons/icon-96x96.png"),
-                    "tag": notification_data.get("tag"),
-                    "type": notification_data.get("type", "default"),
-                    "requireInteraction": notification_data.get("requireInteraction", True),
+                    "icon": "/icons/icon-192x192.png",
+                    "badge": "/icons/icon-96x96.png",
+                    "image": "/icons/icon-512x512.png",
+                    "type": notif_type,
+                    "sound": "/sounds/notification.mp3",
                     "vibrate": [200, 100, 200],
+                    "requireInteraction": True,
                     "timestamp": datetime.now().isoformat()
                 }),
                 vapid_private_key=VAPID_PRIVATE_KEY,
                 vapid_claims=VAPID_CLAIMS
             )
-            results.append({"status": "sent", "endpoint": sub["endpoint"][:50]})
-            logger.info(f"✅ Notification envoyée à {sub['endpoint'][:50]}...")
+            results.append({"status": "sent"})
+            logger.info(f"✅ Notification {style['emoji']} envoyée")
         except WebPushException as e:
             if e.response and e.response.status_code == 410:
                 supabase.table("push_subscriptions").delete().eq("endpoint", sub["endpoint"]).execute()
-                results.append({"status": "expired", "endpoint": sub["endpoint"][:50]})
-                logger.info(f"🗑️ Subscription expirée supprimée: {sub['endpoint'][:50]}...")
+                results.append({"status": "expired"})
+                logger.info(f"🗑️ Subscription expirée supprimée")
             else:
                 results.append({"status": "error", "error": str(e)})
                 logger.error(f"❌ Erreur webpush: {e}")
