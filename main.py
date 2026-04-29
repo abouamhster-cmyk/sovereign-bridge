@@ -207,26 +207,26 @@ def extract_text_from_message(content: str) -> tuple[str, List[str]]:
     import re
     text_parts = []
     image_urls = []
+    all_file_urls = []  # Nouveau : pour tous les fichiers
     
-    # Pattern pour les URLs d'images dans le message
+    # Pattern pour les URLs d'images
     image_pattern = r'(https?://[^\s]+\.(?:png|jpg|jpeg|gif|webp))'
-    urls = re.findall(image_pattern, content, re.IGNORECASE)
+    image_urls = re.findall(image_pattern, content, re.IGNORECASE)
     
-    for url in urls:
-        image_urls.append(url)
-        # Remplacer l'URL par un marqueur (gardé pour le contexte)
+    # Pattern pour les URLs de TOUS les fichiers (PDF, TXT, DOCX, etc.)
+    file_pattern = r'https?://[^\s]+\.(?:pdf|txt|docx?|jpg|png|jpeg|gif|webp)'
+    all_file_urls = re.findall(file_pattern, content, re.IGNORECASE)
+    
+    # Enlever les URLs des images pour ne pas les dupliquer
+    for url in image_urls:
+        if url in all_file_urls:
+            all_file_urls.remove(url)
+        # Remplacer l'URL par un marqueur
         content = content.replace(url, f"[IMAGE: {url}]")
     
     text_parts.append(content)
     
-    # Ajouter aussi les fichiers joints s'ils sont mentionnés
-    file_pattern = r'📎 Fichier joint : (https?://[^\s]+)'
-    file_urls = re.findall(file_pattern, content)
-    for file_url in file_urls:
-        if not any(img_url == file_url for img_url in image_urls):
-            image_urls.append(file_url)
-    
-    return " ".join(text_parts), image_urls
+    return " ".join(text_parts), image_urls, all_file_urls
 
 
 async def process_document(file_url: str) -> str:
@@ -1411,8 +1411,12 @@ async def chat_endpoint(request: ChatRequest):
         content = msg.get("content", "")
         
         # Extraire le texte et les images
-        text_content, image_urls = extract_text_from_message(content)
-        
+        # Extraire le texte et les images
+        extract_result = extract_text_from_message(content)
+        text_content = extract_result[0]
+        image_urls = extract_result[1] if len(extract_result) > 1 else []
+        file_urls = extract_result[2] if len(extract_result) > 2 else []   
+
         # Si c'est un message utilisateur avec des images → format vision
         if role == "user" and image_urls:
             # Structure pour GPT-4o avec vision
@@ -1440,28 +1444,24 @@ async def chat_endpoint(request: ChatRequest):
             # Message normal (texte seulement)
             messages_payload.append({"role": role, "content": text_content})
     
-    # Vérifier s'il y a des documents à traiter (dans le dernier message)
-    last_message = request.messages[-1].get("content", "") if request.messages else ""
-    logger.info(f"📨 Dernier message: {last_message[:200]}...")
-    
-    doc_match = re.search(r'📎.*?(?:https?://[^\s]+)', last_message)
-    
-    document_text = None
-    if doc_match:
-        logger.info(f"🔍 Document détecté dans le message")
-        # Chercher les URLs de documents
-        doc_urls = re.findall(r'https?://[^\s]+\.(?:pdf|docx?|txt)', last_message, re.IGNORECASE)
-        logger.info(f"📎 URLs de documents trouvées: {doc_urls}")
-        
-        for doc_url in doc_urls:
-            logger.info(f"📄 Tentative d'extraction: {doc_url[:100]}...")
-            doc_text = await process_document(doc_url)
-            if doc_text:
-                document_text = doc_text
-                logger.info(f"✅ Document extrait avec succès: {len(doc_text)} caractères")
-                break
-            else:
-                logger.warning(f"❌ Échec extraction document: {doc_url[:100]}...")
+             # Vérifier s'il y a des documents à traiter (utiliser les file_urls déjà extraits)
+            last_message = request.messages[-1].get("content", "") if request.messages else ""
+            logger.info(f"📨 Dernier message: {last_message[:200]}...")
+            
+            document_text = None
+            
+            # Utiliser les file_urls déjà extraits par extract_text_from_message
+            if file_urls:
+                logger.info(f"📎 Fichiers détectés: {file_urls}")
+                for doc_url in file_urls:
+                    logger.info(f"📄 Tentative d'extraction: {doc_url[:100]}...")
+                    doc_text = await process_document(doc_url)
+                    if doc_text:
+                        document_text = doc_text
+                        logger.info(f"✅ Document extrait avec succès: {len(doc_text)} caractères")
+                        break
+                    else:
+                        logger.warning(f"❌ Échec extraction document: {doc_url[:100]}...")
     
     # Si un document a été extrait, l'ajouter au contexte
     if document_text:
