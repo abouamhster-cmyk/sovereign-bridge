@@ -181,6 +181,101 @@ def get_days_late(date_str: str) -> int:
     return max(0, delta.days)
 
 
+
+
+# =====================================================
+# FONCTIONS POUR LA VISION ET LES DOCUMENTS
+# =====================================================
+
+async def download_image_from_url(url: str) -> str:
+    """Télécharge une image depuis une URL et la convertit en base64"""
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+            import base64
+            content_type = response.headers.get('content-type', 'image/png')
+            base64_image = base64.b64encode(response.content).decode('utf-8')
+            return f"data:{content_type};base64,{base64_image}"
+    except Exception as e:
+        logger.error(f"Erreur téléchargement image: {e}")
+        return None
+
+
+def extract_text_from_message(content: str) -> tuple[str, List[str]]:
+    """Extrait le texte et les URLs d'images d'un message"""
+    import re
+    text_parts = []
+    image_urls = []
+    
+    # Pattern pour les URLs d'images dans le message
+    image_pattern = r'(https?://[^\s]+\.(?:png|jpg|jpeg|gif|webp))'
+    urls = re.findall(image_pattern, content, re.IGNORECASE)
+    
+    for url in urls:
+        image_urls.append(url)
+        # Remplacer l'URL par un marqueur (gardé pour le contexte)
+        content = content.replace(url, f"[IMAGE: {url}]")
+    
+    text_parts.append(content)
+    
+    # Ajouter aussi les fichiers joints s'ils sont mentionnés
+    file_pattern = r'📎 Fichier joint : (https?://[^\s]+)'
+    file_urls = re.findall(file_pattern, content)
+    for file_url in file_urls:
+        if not any(img_url == file_url for img_url in image_urls):
+            image_urls.append(file_url)
+    
+    return " ".join(text_parts), image_urls
+
+
+async def process_document(file_url: str) -> str:
+    """Télécharge et extrait le texte d'un document"""
+    if not supabase:
+        return None
+    
+    try:
+        # Extraire le chemin du fichier depuis l'URL publique
+        # Format typical: https://xxx.supabase.co/storage/v1/object/public/chat-files/...
+        import re
+        match = re.search(r'/chat-files/(.+)$', file_url)
+        if not match:
+            return None
+        
+        file_path = match.group(1)
+        
+        # Télécharger depuis Supabase Storage
+        file_data = supabase.storage.from_("chat-files").download(file_path)
+        
+        # Détecter le type de fichier par extension
+        if file_path.endswith('.pdf'):
+            from pypdf import PdfReader
+            import io
+            reader = PdfReader(io.BytesIO(file_data))
+            text = ""
+            for page in reader.pages:
+                text += page.extract_text()
+            return text[:3000]  # Limiter à 3000 caractères
+        
+        elif file_path.endswith('.txt'):
+            return file_data.decode('utf-8')[:3000]
+        
+        elif file_path.endswith(('.docx', '.doc')):
+            from docx import Document
+            import io
+            doc = Document(io.BytesIO(file_data))
+            text = "\n".join([para.text for para in doc.paragraphs])
+            return text[:3000]
+        
+        else:
+            return None
+            
+    except Exception as e:
+        logger.error(f"Erreur extraction document: {e}")
+        return None
+
+
+
 # =====================================================
 # NOUVEAUX ENDPOINTS DE NOTIFICATIONS
 # =====================================================
@@ -1288,18 +1383,73 @@ def get_revenue_by_project():
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
     logger.info(f"📨 Reçu: {len(request.messages)} messages")
-
-    normalized_messages = normalize_messages(request.messages)
     
+    # Construire les messages avec support vision
     messages_payload = [{"role": "system", "content": SYSTEM_PROMPT}]
-    messages_payload.extend(normalized_messages)  
+    
+    for msg in request.messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        
+        # Extraire le texte et les images
+        text_content, image_urls = extract_text_from_message(content)
+        
+        # Si c'est un message utilisateur avec des images → format vision
+        if role == "user" and image_urls:
+            # Structure pour GPT-4o avec vision
+            vision_content = [{"type": "text", "text": text_content}]
+            
+            for img_url in image_urls:
+                # Télécharger et convertir l'image en base64
+                base64_image = await download_image_from_url(img_url)
+                if base64_image:
+                    vision_content.append({
+                        "type": "image_url",
+                        "image_url": {"url": base64_image, "detail": "high"}
+                    })
+                else:
+                    vision_content.append({
+                        "type": "text",
+                        "text": f"[Image non accessible: {img_url}]"
+                    })
+            
+            messages_payload.append({
+                "role": role,
+                "content": vision_content
+            })
+        else:
+            # Message normal (texte seulement)
+            messages_payload.append({"role": role, "content": text_content})
+    
+    # Vérifier s'il y a des documents à traiter (dans le dernier message)
+    last_message = request.messages[-1].get("content", "") if request.messages else ""
+    doc_match = re.search(r'📎.*?(?:https?://[^\s]+)', last_message)
+    
+    document_text = None
+    if doc_match:
+        # Chercher les URLs de documents
+        doc_urls = re.findall(r'https?://[^\s]+\.(?:pdf|docx?|txt)', last_message, re.IGNORECASE)
+        for doc_url in doc_urls:
+            doc_text = await process_document(doc_url)
+            if doc_text:
+                document_text = doc_text
+                break
+    
+    # Si un document a été extrait, l'ajouter au contexte
+    if document_text:
+        messages_payload.append({
+            "role": "user",
+            "content": f"[CONTENU DU DOCUMENT EXTRAIT]\n{document_text}\n\nQuestion ou demande associée : {last_message[:500]}"
+        })
+        logger.info(f"📄 Document extrait: {len(document_text)} caractères")
     
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4o",  # gpt-4o supporte la vision
             messages=messages_payload,
             tools=tools,
-            tool_choice="auto"
+            tool_choice="auto",
+            max_tokens=4096
         )
         
         msg = response.choices[0].message
@@ -1355,11 +1505,13 @@ async def chat_endpoint(request: ChatRequest):
         
         final_response = client.chat.completions.create(
             model="gpt-4o",
-            messages=messages_payload
+            messages=messages_payload,
+            max_tokens=4096
         )
         
         assistant_response = final_response.choices[0].message.content
         
+        # Nettoyer les tags d'apprentissage
         learn_pattern = r'\[LEARN:([^:]+):([^:]+):([^\]]+)\]'
         matches = re.findall(learn_pattern, assistant_response)
         
@@ -1385,8 +1537,7 @@ async def chat_endpoint(request: ChatRequest):
     except Exception as e:
         logger.error(f"❌ Erreur chat: {e}")
         return {"reply": "Désolée Rebecca, un souci technique survient. Je reviens vers toi dans un instant."}
-
-
+        
 # =====================================================
 # API ROUTES - SPECIALIZED (EXISTANT)
 # =====================================================
