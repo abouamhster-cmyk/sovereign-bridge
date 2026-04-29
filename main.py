@@ -88,7 +88,7 @@ AVAILABLE_TABLES = [
 
 ALLOWED_FIELDS = {
     "spending": ["title", "amount", "category", "date", "notes", "verified", "mission_id", "project", "beneficiary"],
-    "tasks": ["title", "status", "due_date", "estimated_time", "mission_id", "project"],
+    "tasks": ["title", "status", "due_date", "estimated_time", "mission_id", "project", "notes"],
     "wins": ["title", "category", "date", "notes", "celebration_emoji"],
     "family_events": ["title", "child_name", "category", "date", "notes"],
     "missions": ["name", "category", "status", "priority", "deadline", "owner", "revenue_potential", "strategic_value", "energy_cost"],
