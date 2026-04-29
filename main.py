@@ -1452,6 +1452,9 @@ async def chat_endpoint(request: ChatRequest):
     
              # Vérifier s'il y a des documents à traiter (utiliser les file_urls déjà extraits)
     # Vérifier s'il y a des documents à traiter
+   
+    
+    # Vérifier s'il y a des documents à traiter
     last_message = request.messages[-1].get("content", "") if request.messages else ""
     logger.info(f"📨 Dernier message: {last_message[:200]}...")
     
@@ -1471,80 +1474,80 @@ async def chat_endpoint(request: ChatRequest):
                 else:
                     logger.warning(f"❌ Échec extraction document: {doc_url[:100]}...")
     
-        # Si un document a été extrait, l'ajouter au contexte
-        if document_text:
-            logger.info(f"📄 Ajout du document au contexte ({len(document_text)} caractères)")
-            messages_payload.append({
-                "role": "user",
-                "content": f"[CONTENU DU DOCUMENT EXTRAIT]\n{document_text}\n\nQuestion ou demande associée : {last_message[:500]}"
-            })
-            logger.info(f"📄 Document extrait: {len(document_text)} caractères")
-        
-        try:
-            response = client.chat.completions.create(
-                model="gpt-4o",  # gpt-4o supporte la vision
-                messages=messages_payload,
-                tools=tools,
-                tool_choice="auto",
-                max_tokens=4096
-            )
-            
-            msg = response.choices[0].message
-            messages_payload.append(msg)
-            
-            if not msg.tool_calls:
-                return {"reply": msg.content}
-            
-            for tool_call in msg.tool_calls:
-                name = tool_call.function.name
-                args = json.loads(tool_call.function.arguments)
-                content = ""
-                
-                if name == "read_table":
-                    result = db_query(args["table"], args.get("filters"), args.get("limit", 50))
-                    content = json.dumps(result, ensure_ascii=False)
-                    logger.info(f"📖 Lecture {args['table']}: {result.get('count', 0)} lignes")
-                    
-                elif name == "write_to_table":
-                    target_table = args.pop("table")
-                    result = db_insert(target_table, args)
-                    if result["success"]:
-                        content = f"✅ Enregistrement réussi dans {target_table}"
-                    else:
-                        content = f"❌ Erreur: {result.get('error', 'inconnue')}"
-                    logger.info(f"✍️ Écriture dans {target_table}: {result['success']}")
-                    
-                elif name == "get_financial_summary":
-                    result = get_financial_summary()
-                    content = json.dumps(result, ensure_ascii=False)
-                    logger.info(f"💰 Résumé financier: {result['net_balance']} XOF")
-                    
-                elif name == "get_priority_tasks":
-                    result = get_priority_tasks(args.get("limit", 10))
-                    content = json.dumps(result, ensure_ascii=False)
-                    logger.info(f"📋 Tâches prioritaires: {len(result)}")
+    # Si un document a été extrait, l'ajouter au contexte
+    if document_text:
+        logger.info(f"📄 Ajout du document au contexte ({len(document_text)} caractères)")
+        messages_payload.append({
+            "role": "user",
+            "content": f"[CONTENU DU DOCUMENT EXTRAIT]\n{document_text}\n\nQuestion ou demande associée : {last_message[:500]}"
+        })
+        logger.info(f"📄 Document extrait: {len(document_text)} caractères")
     
-                elif name == "generate_image":
-                    result = await generate_image(args)
-                    if result.get("success"):
-                        image_url = result.get("image_url")
-                        revised_prompt = result.get("revised_prompt", "")
-                        content = f"![Image générée]({image_url})\n\n*{revised_prompt}*"
-                        logger.info(f"🎨 Image générée: {args['prompt'][:50]}...")
-                    else:
-                        content = f"❌ Erreur: {result.get('error', 'inconnue')}"
-                
-                messages_payload.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": content
-                })
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages_payload,
+            tools=tools,
+            tool_choice="auto",
+            max_tokens=4096
+        )
+        
+        msg = response.choices[0].message
+        messages_payload.append(msg)
+        
+        if not msg.tool_calls:
+            return {"reply": msg.content}
+        
+        for tool_call in msg.tool_calls:
+            name = tool_call.function.name
+            args = json.loads(tool_call.function.arguments)
+            content = ""
             
-            final_response = client.chat.completions.create(
-                model="gpt-4o",
-                messages=messages_payload,
-                max_tokens=4096
-            )
+            if name == "read_table":
+                result = db_query(args["table"], args.get("filters"), args.get("limit", 50))
+                content = json.dumps(result, ensure_ascii=False)
+                logger.info(f"📖 Lecture {args['table']}: {result.get('count', 0)} lignes")
+                
+            elif name == "write_to_table":
+                target_table = args.pop("table")
+                result = db_insert(target_table, args)
+                if result["success"]:
+                    content = f"✅ Enregistrement réussi dans {target_table}"
+                else:
+                    content = f"❌ Erreur: {result.get('error', 'inconnue')}"
+                logger.info(f"✍️ Écriture dans {target_table}: {result['success']}")
+                
+            elif name == "get_financial_summary":
+                result = get_financial_summary()
+                content = json.dumps(result, ensure_ascii=False)
+                logger.info(f"💰 Résumé financier: {result['net_balance']} XOF")
+                
+            elif name == "get_priority_tasks":
+                result = get_priority_tasks(args.get("limit", 10))
+                content = json.dumps(result, ensure_ascii=False)
+                logger.info(f"📋 Tâches prioritaires: {len(result)}")
+
+            elif name == "generate_image":
+                result = await generate_image(args)
+                if result.get("success"):
+                    image_url = result.get("image_url")
+                    revised_prompt = result.get("revised_prompt", "")
+                    content = f"![Image générée]({image_url})\n\n*{revised_prompt}*"
+                    logger.info(f"🎨 Image générée: {args['prompt'][:50]}...")
+                else:
+                    content = f"❌ Erreur: {result.get('error', 'inconnue')}"
+            
+            messages_payload.append({
+                "role": "tool",
+                "tool_call_id": tool_call.id,
+                "content": content
+            })
+        
+        final_response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages_payload,
+            max_tokens=4096
+        )
         
         assistant_response = final_response.choices[0].message.content
         
@@ -1574,6 +1577,7 @@ async def chat_endpoint(request: ChatRequest):
     except Exception as e:
         logger.error(f"❌ Erreur chat: {e}")
         return {"reply": "Désolée Rebecca, un souci technique survient. Je reviens vers toi dans un instant."}
+        
         
 # =====================================================
 # API ROUTES - SPECIALIZED (EXISTANT)
