@@ -3185,9 +3185,3 @@ async def send_email(request: EmailRequest):
     except Exception as e:
         logger.error(f"Erreur envoi email: {e}")
         return {"success": False, "error": str(e)}
-
-
-
-@app.get("/api/email/test")
-async def email_test():
-    return {"status": "email endpoint is working", "timestamp": datetime.now().isoformat()}
