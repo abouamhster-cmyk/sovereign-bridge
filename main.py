@@ -93,7 +93,7 @@ AVAILABLE_TABLES = [
 
 ALLOWED_FIELDS = {
     "spending": ["title", "amount", "category", "date", "notes", "verified", "mission_id", "project", "beneficiary"],
-    "tasks": ["title", "status", "due_date", "estimated_time", "mission_id", "project", "notes"],
+    "tasks": ["title", "status", "due_date", "estimated_time", "mission_id", "project", "notes", "sync_calendar", "calendar_event_id", "calendar_synced", "calendar_link"],
     "wins": ["title", "category", "date", "notes", "celebration_emoji"],
     "family_events": ["title", "child_name", "category", "date", "notes"],
     "missions": ["name", "category", "status", "priority", "deadline", "owner", "revenue_potential", "strategic_value", "energy_cost"],
@@ -940,6 +940,29 @@ def db_insert(table: str, data: Dict) -> Dict:
                     "timestamp": datetime.now().isoformat()
                 }))
         # ========================================
+
+                # Synchronisation Google Calendar pour les tâches
+        if table == "tasks" and result["success"] and result["data"]:
+            task = result["data"][0] if isinstance(result["data"], list) else result["data"]
+            # Vérifier si synchro calendrier activée ET date présente
+            if task.get("sync_calendar") and task.get("due_date"):
+                try:
+                    event = await create_calendar_event(CalendarEventRequest(
+                        summary=task.get("title"),
+                        description=f"Tâche Sovereign - Priority: {task.get('priority', 'normal')}",
+                        start_datetime=f"{task['due_date']}T09:00:00",
+                        end_datetime=f"{task['due_date']}T10:00:00"
+                    ))
+                    
+                    if event.get("success"):
+                        supabase.table("tasks").update({
+                            "calendar_event_id": event["event_id"],
+                            "calendar_synced": True,
+                            "calendar_link": event["link"]
+                        }).eq("id", task["id"]).execute()
+                        logger.info(f"📅 Tâche {task['id']} synchronisée avec Google Calendar")
+                except Exception as e:
+                    logger.error(f"❌ Erreur sync calendrier: {e}")
 
         
         return {"success": True, "data": result.data[0] if result.data else None}
