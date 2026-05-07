@@ -2566,3 +2566,90 @@ async def get_profile_context():
     except Exception as e:
         logger.error(f"Erreur get_profile_context: {e}")
         return {"context": ""}
+
+
+
+@app.post("/api/brain-dump/process")
+async def process_brain_dump(request: Dict[str, Any]):
+    """
+    Analyse un texte libre et retourne une structure organisée.
+    Le résumé doit être proportionnel à la richesse du contenu.
+    """
+    content = request.get("content", "")
+    if not content:
+        return {"success": False, "error": "Contenu requis"}
+    
+    # Estimer la longueur du contenu pour adapter l'analyse
+    content_length = len(content)
+    content_words = len(content.split())
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "system",
+                    "content": f"""Tu es Becks, l'assistante personnelle de Rebecca. Tu reçois un texte brut (un brain dump) où Rebecca a écrit tout ce qui lui passe par la tête.
+
+CONTEXTE : Le texte fait environ {content_words} mots.
+
+RÈGLE IMPORTANTE : Le résumé (summary) doit être PROPORTIONNEL à la richesse du contenu. 
+- Si elle a écrit 2-3 phrases simples → résumé court (1-2 phrases)
+- Si elle a écrit un paragraphe dense avec plusieurs sujets → résumé de 3-5 phrases
+- Si elle a fait un long brain dump (plusieurs paragraphes, multiples préoccupations) → résumé substantiel de 5-8 phrases qui couvre tous les points importants
+
+Tu dois analyser ce texte et retourner UNIQUEMENT du JSON valide avec cette structure :
+
+{
+  "summary": "un résumé COMPLET et substantiel qui capture TOUS les points importants, proportionnel à la longueur du texte original",
+  "emotions": ["émotion1", "émotion2"],
+  "main_topics": ["sujet1", "sujet2", "sujet3"],
+  "urgency_level": "high/medium/low",
+  "priorities": [
+    {"title": "priorité 1", "reason": "pourquoi c'est important"},
+    {"title": "priorité 2", "reason": "pourquoi c'est important"}
+  ],
+  "suggested_tasks": [
+    {"title": "tâche suggérée 1", "project": "projet associé", "priority": "high/medium/low"},
+    {"title": "tâche suggérée 2", "project": "projet associé", "priority": "high/medium/low"}
+  ],
+  "suggested_missions": [
+    {"name": "mission suggérée", "category": "business/farm/family", "priority": "high/medium/low"}
+  ],
+  "insights": "insight important ou chose à retenir (peut être une phrase ou deux)",
+  "calming_response": "une réponse réconfortante adaptée à son état (2-3 phrases)"
+}
+
+Projets possibles : Ifè Farm, Love & Fire Sport, Santé Plus, Bénin Relocation, Famille, Personnel
+Priorités : high, medium, low
+Émotions possibles : stress, fatigue, excitation, frustration, clarté, confusion, sérénité, anxiété, motivation, tristesse, colère, joie
+
+Ne retourne que le JSON, rien d'autre."""
+                },
+                {"role": "user", "content": content}
+            ],
+            temperature=0.3,
+            max_tokens=1500
+        )
+        
+        result = response.choices[0].message.content
+        json_match = re.search(r'\{[\s\S]*\}', result)
+        if json_match:
+            analysis = json.loads(json_match.group())
+        else:
+            raise ValueError("Pas de JSON trouvé")
+        
+        # Sauvegarder l'analyse
+        if supabase:
+            supabase.table("brain_dump_analyses").insert({
+                "content": content[:1000],
+                "analysis": analysis,
+                "user_id": "rebecca",
+                "created_at": datetime.now().isoformat()
+            }).execute()
+        
+        return {"success": True, "analysis": analysis}
+        
+    except Exception as e:
+        logger.error(f"Erreur process_brain_dump: {e}")
+        return {"success": False, "error": str(e)}
