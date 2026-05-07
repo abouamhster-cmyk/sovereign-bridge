@@ -2079,7 +2079,8 @@ def get_table(table: str, limit: int = 100):
 async def create_item(table: str, request: WriteRequest):
     if table not in AVAILABLE_TABLES:
         raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
-    return await db_insert(table, request.data)
+    result = await db_insert(table, request.data)
+    return result
 
 @app.put("/{table}/{item_id}")
 def update_item(table: str, item_id: str, request: UpdateRequest):
