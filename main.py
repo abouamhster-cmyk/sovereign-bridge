@@ -3248,16 +3248,26 @@ class WebhookSubscription(BaseModel):
 
 @app.post("/api/webhooks/subscribe")
 async def subscribe_webhook(subscription: WebhookSubscription):
-    """Enregistre un webhook"""
+    """Enregistre un webhook sans doublon"""
+    global webhooks_subscriptions
+    
+    # Vérifier si existe déjà
+    existing = [s for s in webhooks_subscriptions 
+                if s["url"] == subscription.url and s["event"] == subscription.event]
+    
+    if existing:
+        logger.info(f"🔗 Webhook déjà existant: {subscription.event} -> {subscription.url}")
+        return {"success": True, "message": "Déjà inscrit", "subscriptions": webhooks_subscriptions}
+    
     webhooks_subscriptions.append({
         "url": subscription.url,
         "event": subscription.event,
         "active": True,
         "created_at": datetime.now().isoformat()
     })
+    
     logger.info(f"🔗 Webhook inscrit: {subscription.event} -> {subscription.url}")
     return {"success": True, "subscriptions": webhooks_subscriptions}
-
 @app.get("/api/webhooks/subscriptions")
 async def get_webhooks():
     """Liste tous les webhooks"""
@@ -3267,10 +3277,17 @@ async def trigger_webhook(event: str, payload: dict):
     """Déclenche les webhooks pour un événement"""
     subscribers = [s for s in webhooks_subscriptions if s["event"] == event and s["active"]]
     
+    logger.info(f"🔍 {len(subscribers)} webhook(s) trouvé(s) pour l'événement: {event}")
+    
+    if not subscribers:
+        logger.info(f"📭 Aucun webhook inscrit pour {event}")
+        return
+    
     for sub in subscribers:
         try:
+            logger.info(f"📤 Envoi à {sub['url']}...")
             async with httpx.AsyncClient() as client:
-                await client.post(sub["url"], json=payload, timeout=10.0)
-            logger.info(f"✅ Webhook envoyé à {sub['url']}")
+                response = await client.post(sub["url"], json=payload, timeout=10.0)
+            logger.info(f"✅ Webhook envoyé à {sub['url']} - Status: {response.status_code}")
         except Exception as e:
-            logger.error(f"❌ Erreur webhook: {e}")
+            logger.error(f"❌ Erreur webhook {sub['url']}: {type(e).__name__} - {e}")
