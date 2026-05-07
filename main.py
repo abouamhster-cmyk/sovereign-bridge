@@ -3441,3 +3441,60 @@ async def sync_task_to_calendar(request: Dict[str, Any]):
     except Exception as e:
         logger.error(f"❌ Erreur sync tâche: {e}")
         return {"success": False, "error": str(e)}
+
+
+@app.post("/api/calendar/sync-existing-task")
+async def sync_existing_task_to_calendar(request: Dict[str, Any]):
+    """Synchronise une tâche existante vers Google Calendar (pour rattrapage)"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    task_id = request.get("task_id")
+    if not task_id:
+        return {"success": False, "error": "task_id requis"}
+    
+    try:
+        # Récupérer la tâche
+        task = supabase.table("tasks").select("*").eq("id", task_id).execute()
+        
+        if not task.data:
+            return {"success": False, "error": "Tâche non trouvée"}
+        
+        task = task.data[0]
+        
+        if not task.get("due_date"):
+            return {"success": False, "error": "La tâche n'a pas de date d'échéance"}
+        
+        # Vérifier si déjà synchronisée
+        if task.get("calendar_synced"):
+            return {"success": True, "message": "Déjà synchronisée", "calendar_link": task.get("calendar_link")}
+        
+        # Créer l'événement
+        event = await create_calendar_event(CalendarEventRequest(
+            summary=task["title"],
+            description=f"Tâche Sovereign - Priorité: {task.get('priority', 'normal')}",
+            start_datetime=f"{task['due_date']}T09:00:00",
+            end_datetime=f"{task['due_date']}T10:00:00"
+        ))
+        
+        if event.get("success"):
+            # Marquer comme synchronisée
+            supabase.table("tasks").update({
+                "calendar_synced": True,
+                "calendar_event_id": event["event_id"],
+                "calendar_link": event["link"]
+            }).eq("id", task_id).execute()
+            
+            logger.info(f"📅 Tâche existante {task_id} synchronisée avec Google Calendar")
+            return {
+                "success": True, 
+                "message": "Tâche synchronisée",
+                "calendar_link": event["link"],
+                "event_id": event["event_id"]
+            }
+        
+        return event
+        
+    except Exception as e:
+        logger.error(f"❌ Erreur sync tâche existante: {e}")
+        return {"success": False, "error": str(e)}
