@@ -1,4 +1,5 @@
 import os
+import uuid
 import json
 import logging
 import re
@@ -84,7 +85,9 @@ AVAILABLE_TABLES = [
     "missions", "tasks", "spending", "revenue", "documents",
     "content", "family_events", "wins", "relocation_tasks",
     "farm_infrastructure", "farm_production_units", "farm_spending", "farm_team",
-    "user_memory", "mood_entries", "user_profile"
+    "user_memory", "mood_entries", "user_profile",
+    "brain_dump_analyses", "checklists", "drafts",
+    "lf_grants", "lf_contracts", "lf_contacts", "lf_tasks"
 ]
 
 ALLOWED_FIELDS = {
@@ -103,7 +106,14 @@ ALLOWED_FIELDS = {
     "farm_team": ["name", "role", "area", "status", "phone", "notes"],
     "user_memory": ["category", "key", "value", "user_id"],
     "mood_entries": ["mood", "date", "user_id"],
-    "user_profile": ["user_id", "full_name", "preferred_name", "birthday", "children", "projects", "communication_preferences", "current_goals", "upcoming_milestones", "key_contacts"]
+    "user_profile": ["user_id", "full_name", "preferred_name", "birthday", "children", "projects", "communication_preferences", "current_goals", "upcoming_milestones", "key_contacts"],
+    "brain_dump_analyses": ["content", "analysis", "user_id"],
+    "checklists": ["title", "steps", "completed_steps", "progress", "user_id"],
+    "drafts": ["type", "content", "context", "user_id"],
+    "lf_grants": ["title", "agency", "amount", "deadline", "status", "probability", "notes", "user_id"],
+    "lf_contracts": ["title", "contract_type", "agency", "status", "deadline", "requirements", "notes", "user_id"],
+    "lf_contacts": ["name", "organization", "role", "email", "phone", "type", "last_contact", "notes", "user_id"],
+    "lf_tasks": ["title", "related_to", "related_id", "status", "deadline", "priority", "notes", "user_id"]
 }
 
 
@@ -2952,3 +2962,150 @@ async def update_checklist_step(request: Dict[str, Any]):
     except Exception as e:
         logger.error(f"Erreur update_checklist_step: {e}")
         return {"success": False, "error": str(e)}
+
+
+
+# =====================================================
+# LOVE & FIRE SPORT MODULE
+# =====================================================
+
+@app.get("/api/lf/stats")
+async def get_lf_stats():
+    """Récupère les statistiques du module Love & Fire Sport"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        # Grants
+        grants = supabase.table("lf_grants").select("*").execute()
+        active_grants = [g for g in grants.data if g.get("status") not in ["approved", "rejected"]]
+        submitted_grants = [g for g in grants.data if g.get("status") == "submitted"]
+        
+        # Contrats
+        contracts = supabase.table("lf_contracts").select("*").execute()
+        dda_contracts = [c for c in contracts.data if c.get("contract_type") == "DDA"]
+        
+        # Tâches
+        tasks = supabase.table("lf_tasks").select("*").neq("status", "done").execute()
+        urgent_tasks = [t for t in tasks.data if t.get("priority") == "high" and t.get("status") != "done"]
+        
+        # Prochaines deadlines
+        today = datetime.now().date().isoformat()
+        upcoming_grants = [g for g in grants.data if g.get("deadline") and g["deadline"] >= today]
+        upcoming_grants.sort(key=lambda x: x.get("deadline", "9999-12-31"))
+        
+        return {
+            "success": True,
+            "stats": {
+                "total_grants": len(grants.data),
+                "active_grants": len(active_grants),
+                "submitted_grants": len(submitted_grants),
+                "total_contracts": len(contracts.data),
+                "dda_contracts": len(dda_contracts),
+                "pending_tasks": len(tasks.data),
+                "urgent_tasks": len(urgent_tasks),
+                "next_deadline": upcoming_grants[0].get("deadline") if upcoming_grants else None,
+                "next_deadline_title": upcoming_grants[0].get("title") if upcoming_grants else None
+            }
+        }
+    except Exception as e:
+        logger.error(f"Erreur lf_stats: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/lf/grants")
+async def get_lf_grants(status: str = None):
+    """Récupère la liste des grants"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        query = supabase.table("lf_grants").select("*").order("deadline", nulls_last=True)
+        if status:
+            query = query.eq("status", status)
+        result = query.execute()
+        return {"success": True, "grants": result.data}
+    except Exception as e:
+        logger.error(f"Erreur lf_grants: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/lf/grant")
+async def create_lf_grant(request: Dict[str, Any]):
+    """Crée un nouveau grant"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        result = supabase.table("lf_grants").insert({
+            "title": request.get("title"),
+            "agency": request.get("agency"),
+            "amount": request.get("amount"),
+            "deadline": request.get("deadline"),
+            "status": request.get("status", "researching"),
+            "probability": request.get("probability", 50),
+            "notes": request.get("notes"),
+            "created_at": datetime.now().isoformat()
+        }).execute()
+        
+        # Créer une tâche associée
+        if result.data:
+            supabase.table("lf_tasks").insert({
+                "title": f"Préparer dossier pour {request.get('title')}",
+                "related_to": "grant",
+                "related_id": result.data[0]["id"],
+                "deadline": request.get("deadline"),
+                "priority": "high",
+                "created_at": datetime.now().isoformat()
+            }).execute()
+        
+        return {"success": True, "grant": result.data[0] if result.data else None}
+    except Exception as e:
+        logger.error(f"Erreur create_lf_grant: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/lf/contract")
+async def create_lf_contract(request: Dict[str, Any]):
+    """Crée un nouveau contrat"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        result = supabase.table("lf_contracts").insert({
+            "title": request.get("title"),
+            "contract_type": request.get("contract_type"),
+            "agency": request.get("agency"),
+            "status": request.get("status", "draft"),
+            "deadline": request.get("deadline"),
+            "requirements": request.get("requirements", []),
+            "notes": request.get("notes"),
+            "created_at": datetime.now().isoformat()
+        }).execute()
+        
+        return {"success": True, "contract": result.data[0] if result.data else None}
+    except Exception as e:
+        logger.error(f"Erreur create_lf_contract: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/lf/checklist")
+async def get_lf_checklist():
+    """Récupère la checklist DDA complète"""
+    checklist = [
+        {"id": "dda_1", "title": "Créer compte DDA", "status": "pending", "deadline": None},
+        {"id": "dda_2", "title": "Compléter formulaire d'identification", "status": "pending", "deadline": None},
+        {"id": "dda_3", "title": "Soumettre preuve de statut juridique", "status": "pending", "deadline": None},
+        {"id": "dda_4", "title": "Soumettre description des services", "status": "pending", "deadline": None},
+        {"id": "dda_5", "title": "Soumettre preuve d'assurance", "status": "pending", "deadline": None},
+        {"id": "dda_6", "title": "Attendre approbation", "status": "pending", "deadline": None},
+        {"id": "sam_1", "title": "Créer compte SAM.gov", "status": "pending", "deadline": None},
+        {"id": "sam_2", "title": "Compléter registration UEI", "status": "pending", "deadline": None},
+        {"id": "sam_3", "title": "Soumettre registration", "status": "pending", "deadline": None},
+        {"id": "emma_1", "title": "Créer compte eMMA", "status": "pending", "deadline": None},
+        {"id": "emma_2", "title": "Soumettre vendor registration Maryland", "status": "pending", "deadline": None},
+        {"id": "insurance_1", "title": "Obtenir attestation d'assurance", "status": "pending", "deadline": "2026-06-15"},
+        {"id": "budget_1", "title": "Préparer budget pilote", "status": "pending", "deadline": "2026-06-30"},
+        {"id": "business_plan_1", "title": "Finaliser business plan", "status": "pending", "deadline": "2026-07-15"},
+    ]
+    return {"success": True, "checklist": checklist}
