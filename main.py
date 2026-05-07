@@ -2766,3 +2766,189 @@ async def get_life_map():
     except Exception as e:
         logger.error(f"Erreur life_map: {e}")
         return {"success": False, "error": str(e)}
+
+
+
+# =====================================================
+# AGENT D'EXÉCUTION - EXECUTE MODE
+# =====================================================
+
+@app.post("/api/execute/analyze-request")
+async def analyze_execute_request(request: Dict[str, Any]):
+    """
+    Analyse une demande utilisateur et retourne un plan d'exécution
+    """
+    query = request.get("query", "")
+    if not query:
+        return {"success": False, "error": "Query requise"}
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "system",
+                    "content": """Tu es Becks, l'agent d'exécution de Rebecca. Ton rôle est de transformer une demande en plan d'action concret.
+
+Analyse la demande et retourne UNIQUEMENT du JSON valide avec cette structure :
+
+{
+  "type": "email|task|checklist|plan|document|meeting",
+  "title": "titre de l'action",
+  "steps": ["étape 1", "étape 2", "étape 3"],
+  "suggested_tasks": [
+    {"title": "tâche 1", "priority": "high/medium/low", "due_offset": "1d|2d|3d|1w"},
+    {"title": "tâche 2", "priority": "high/medium/low", "due_offset": "1d|2d|3d|1w"}
+  ],
+  "draft_content": "contenu si c'est un email/document (optionnel)",
+  "questions": ["question à poser si info manquante"],
+  "next_action": "prochaine action immédiate"
+}
+
+Types possibles : email, task, checklist, plan, document, meeting"""
+                },
+                {"role": "user", "content": query}
+            ],
+            temperature=0.3,
+            max_tokens=1000
+        )
+        
+        result = response.choices[0].message.content
+        json_match = re.search(r'\{[\s\S]*\}', result)
+        if json_match:
+            execution_plan = json.loads(json_match.group())
+        else:
+            raise ValueError("Pas de JSON trouvé")
+        
+        return {"success": True, "execution_plan": execution_plan}
+        
+    except Exception as e:
+        logger.error(f"Erreur analyze_execute_request: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/execute/create-checklist")
+async def create_checklist(request: Dict[str, Any]):
+    """Crée une checklist à partir d'un plan"""
+    title = request.get("title", "Checklist")
+    steps = request.get("steps", [])
+    
+    if not steps:
+        return {"success": False, "error": "Steps requis"}
+    
+    # Sauvegarder la checklist
+    checklist_id = str(uuid.uuid4())
+    if supabase:
+        supabase.table("checklists").insert({
+            "id": checklist_id,
+            "title": title,
+            "steps": steps,
+            "progress": 0,
+            "user_id": "rebecca",
+            "created_at": datetime.now().isoformat()
+        }).execute()
+    
+    return {
+        "success": True,
+        "checklist": {
+            "id": checklist_id,
+            "title": title,
+            "steps": steps,
+            "progress": 0
+        }
+    }
+
+
+@app.post("/api/execute/create-draft")
+async def create_draft(request: Dict[str, Any]):
+    """Génère un brouillon (email, document, etc.)"""
+    draft_type = request.get("type", "email")
+    context = request.get("context", "")
+    
+    if not context:
+        return {"success": False, "error": "Context requis"}
+    
+    # Définir le prompt selon le type
+    prompts = {
+        "email": f"Rédige un email professionnel à partir de ce contexte. Style: clair, direct, professionnel. Contexte: {context}",
+        "proposal": f"Rédige une proposition courte à partir de ce contexte. Contexte: {context}",
+        "letter": f"Rédige une lettre formelle à partir de ce contexte. Contexte: {context}",
+        "note": f"Rédige une note professionnelle à partir de ce contexte. Contexte: {context}"
+    }
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": prompts.get(draft_type, prompts["email"])},
+                {"role": "user", "content": "Génère le contenu final, prêt à être copié."}
+            ],
+            temperature=0.5,
+            max_tokens=1000
+        )
+        
+        draft_content = response.choices[0].message.content
+        
+        # Sauvegarder le draft
+        draft_id = str(uuid.uuid4())
+        if supabase:
+            supabase.table("drafts").insert({
+                "id": draft_id,
+                "type": draft_type,
+                "content": draft_content,
+                "context": context,
+                "user_id": "rebecca",
+                "created_at": datetime.now().isoformat()
+            }).execute()
+        
+        return {
+            "success": True,
+            "draft": {
+                "id": draft_id,
+                "type": draft_type,
+                "content": draft_content
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Erreur create_draft: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/execute/update-checklist-step")
+async def update_checklist_step(request: Dict[str, Any]):
+    """Marque une étape comme complétée"""
+    checklist_id = request.get("checklist_id")
+    step_index = request.get("step_index")
+    
+    if not checklist_id or step_index is None:
+        return {"success": False, "error": "checklist_id et step_index requis"}
+    
+    try:
+        # Récupérer la checklist
+        checklist = supabase.table("checklists").select("*").eq("id", checklist_id).execute()
+        if not checklist.data:
+            return {"success": False, "error": "Checklist non trouvée"}
+        
+        steps = checklist.data[0].get("steps", [])
+        if step_index < len(steps):
+            # Marquer comme complété (on pourrait stocker la progression)
+            completed = checklist.data[0].get("completed_steps", [])
+            if step_index not in completed:
+                completed.append(step_index)
+            
+            progress = int((len(completed) / len(steps)) * 100)
+            
+            supabase.table("checklists").update({
+                "completed_steps": completed,
+                "progress": progress,
+                "updated_at": datetime.now().isoformat()
+            }).eq("id", checklist_id).execute()
+            
+            return {"success": True, "progress": progress, "completed": len(completed), "total": len(steps)}
+        
+        return {"success": False, "error": "Step invalide"}
+        
+    except Exception as e:
+        logger.error(f"Erreur update_checklist_step: {e}")
+        return {"success": False, "error": str(e)}
