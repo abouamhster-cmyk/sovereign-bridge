@@ -3421,3 +3421,39 @@ async def sync_existing_task_to_calendar(request: Dict[str, Any]):
     except Exception as e:
         logger.error(f"❌ Erreur sync tâche existante: {e}")
         return {"success": False, "error": str(e)}
+
+@app.post("/api/clean-expired-subscriptions")
+async def clean_expired_subscriptions():
+    """Nettoie les subscriptions push expirées"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        # Récupérer toutes les subscriptions
+        subscriptions = supabase.table("push_subscriptions").select("*").execute()
+        
+        deleted_count = 0
+        for sub in subscriptions.data:
+            try:
+                # Tester la subscription
+                webpush(
+                    subscription_info={
+                        "endpoint": sub["endpoint"],
+                        "keys": sub["keys"]
+                    },
+                    data=json.dumps({"title": "Test", "body": "Test"}),
+                    vapid_private_key=VAPID_PRIVATE_KEY,
+                    vapid_claims=VAPID_CLAIMS
+                )
+            except WebPushException as e:
+                if e.response and e.response.status_code in [401, 403, 404, 410]:
+                    # Supprimer la subscription invalide
+                    supabase.table("push_subscriptions").delete().eq("id", sub["id"]).execute()
+                    deleted_count += 1
+                    logger.info(f"🗑️ Subscription supprimée: {sub['endpoint'][:50]}...")
+        
+        return {"success": True, "deleted": deleted_count, "total": len(subscriptions.data)}
+        
+    except Exception as e:
+        logger.error(f"Erreur nettoyage: {e}")
+        return {"success": False, "error": str(e)}
