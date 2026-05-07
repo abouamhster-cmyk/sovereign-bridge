@@ -454,6 +454,15 @@ async def create_task_from_conversation(request: ExecuteTaskRequest):
             "type": "task"
         })
         
+         # Déclencher le webhook
+        if result.data and len(result.data) > 0:
+            asyncio.create_task(trigger_webhook("task.created", {
+                "task": result.data[0],
+                "timestamp": datetime.now().isoformat()
+            }))
+            logger.info(f"🔗 Webhook déclenché pour task.created: {request.title}")
+        # ========================================
+        
         return {"success": True, "task": result.data[0] if result.data else None}
     except Exception as e:
         logger.error(f"Erreur create_task_from_conversation: {e}")
