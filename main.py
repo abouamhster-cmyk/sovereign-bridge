@@ -3291,3 +3291,130 @@ async def trigger_webhook(event: str, payload: dict):
             logger.info(f"✅ Webhook envoyé à {sub['url']} - Status: {response.status_code}")
         except Exception as e:
             logger.error(f"❌ Erreur webhook {sub['url']}: {type(e).__name__} - {e}")
+
+
+
+# =====================================================
+# GOOGLE CALENDAR
+# =====================================================
+
+import json
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from typing import Optional, List
+
+# Configuration Google Calendar
+GOOGLE_CALENDAR_ID = os.environ.get("GOOGLE_CALENDAR_ID", "primary")
+GOOGLE_SERVICE_ACCOUNT_INFO = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", None)
+
+class CalendarEventRequest(BaseModel):
+    summary: str
+    description: Optional[str] = None
+    start_datetime: str
+    end_datetime: str
+    attendees: Optional[List[str]] = None
+
+def get_calendar_service():
+    """Initialise le service Google Calendar avec le compte de service"""
+    if not GOOGLE_SERVICE_ACCOUNT_INFO:
+        logger.warning("⚠️ GOOGLE_SERVICE_ACCOUNT_JSON non configuré")
+        return None
+    
+    try:
+        # Charger les infos du compte de service
+        service_account_info = json.loads(GOOGLE_SERVICE_ACCOUNT_INFO)
+        
+        creds = service_account.Credentials.from_service_account_info(
+            service_account_info,
+            scopes=['https://www.googleapis.com/auth/calendar']
+        )
+        
+        service = build('calendar', 'v3', credentials=creds)
+        logger.info("✅ Google Calendar service initialisé")
+        return service
+    except Exception as e:
+        logger.error(f"❌ Erreur auth Google Calendar: {e}")
+        return None
+
+@app.post("/api/calendar/event")
+async def create_calendar_event(request: CalendarEventRequest):
+    """Crée un événement dans Google Calendar"""
+    service = get_calendar_service()
+    if not service:
+        return {"success": False, "error": "Google Calendar non configuré"}
+    
+    try:
+        event = {
+            'summary': request.summary,
+            'description': request.description or "",
+            'start': {
+                'dateTime': request.start_datetime,
+                'timeZone': 'Africa/Porto-Novo',
+            },
+            'end': {
+                'dateTime': request.end_datetime,
+                'timeZone': 'Africa/Porto-Novo',
+            },
+        }
+        
+        if request.attendees:
+            event['attendees'] = [{'email': email} for email in request.attendees]
+        
+        created_event = service.events().insert(
+            calendarId=GOOGLE_CALENDAR_ID,
+            body=event
+        ).execute()
+        
+        logger.info(f"📅 Événement créé: {created_event.get('htmlLink')}")
+        return {
+            "success": True,
+            "event_id": created_event.get('id'),
+            "link": created_event.get('htmlLink')
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Erreur création événement: {e}")
+        return {"success": False, "error": str(e)}
+
+@app.post("/api/calendar/sync-task")
+async def sync_task_to_calendar(request: Dict[str, Any]):
+    """Synchronise une tâche spécifique vers Google Calendar"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    task_id = request.get("task_id")
+    if not task_id:
+        return {"success": False, "error": "task_id requis"}
+    
+    try:
+        # Récupérer la tâche
+        task = supabase.table("tasks").select("*").eq("id", task_id).execute()
+        
+        if not task.data:
+            return {"success": False, "error": "Tâche non trouvée"}
+        
+        task = task.data[0]
+        
+        if not task.get("due_date"):
+            return {"success": False, "error": "La tâche n'a pas de date d'échéance"}
+        
+        # Créer l'événement
+        event = await create_calendar_event(CalendarEventRequest(
+            summary=task["title"],
+            description=f"Tâche Sovereign - Priorité: {task.get('priority', 'normal')}",
+            start_datetime=f"{task['due_date']}T09:00:00",
+            end_datetime=f"{task['due_date']}T10:00:00"
+        ))
+        
+        if event.get("success"):
+            # Marquer comme synchronisée
+            supabase.table("tasks").update({
+                "calendar_synced": True,
+                "calendar_event_id": event["event_id"]
+            }).eq("id", task_id).execute()
+        
+        return event
+        
+    except Exception as e:
+        logger.error(f"❌ Erreur sync tâche: {e}")
+        return {"success": False, "error": str(e)}
