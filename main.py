@@ -84,7 +84,7 @@ AVAILABLE_TABLES = [
     "missions", "tasks", "spending", "revenue", "documents",
     "content", "family_events", "wins", "relocation_tasks",
     "farm_infrastructure", "farm_production_units", "farm_spending", "farm_team",
-    "user_memory", "mood_entries"
+    "user_memory", "mood_entries", "user_profile"
 ]
 
 ALLOWED_FIELDS = {
@@ -102,7 +102,8 @@ ALLOWED_FIELDS = {
     "farm_spending": ["title", "amount", "category", "project_area", "verified", "notes"],
     "farm_team": ["name", "role", "area", "status", "phone", "notes"],
     "user_memory": ["category", "key", "value", "user_id"],
-    "mood_entries": ["mood", "date", "user_id"]
+    "mood_entries": ["mood", "date", "user_id"],
+    "user_profile": ["user_id", "full_name", "preferred_name", "birthday", "children", "projects", "communication_preferences", "current_goals", "upcoming_milestones", "key_contacts"]
 }
 
 
@@ -1047,7 +1048,7 @@ You must remember their names. When she talks about kids, ask which one or remem
 
 **4. Bénin Relocation**
 - Moving from US to Benin
-- Timeline: target August 2025
+- Timeline: target August 2026
 - Needs: visas, housing, shipping belongings, bank account, school for kids, administrative paperwork
 
 ## Her other active areas
@@ -1781,9 +1782,18 @@ async def chat_endpoint(request: ChatRequest):
     # Construire les messages avec support vision
     messages_payload = []
     
+    # Ajouter la date du jour
+    today_date = datetime.now().strftime("%B %d, %Y")
+    date_context = f"\n\nToday is {today_date}. Use this information to provide relevant context."
+    
     # Ajouter le système prompt avec mémoire
     memory_context = await get_user_memory_context()
-    enhanced_system_prompt = BASE_SYSTEM_PROMPT + memory_context
+    profile_context_result = await get_profile_context()
+    profile_context = profile_context_result.get("context", "")
+    
+    enhanced_system_prompt = BASE_SYSTEM_PROMPT + date_context + memory_context
+    if profile_context:
+        enhanced_system_prompt += f"\n\n# X. CURRENT PROFILE CONTEXT\n{profile_context}"
     
     messages_payload.append({"role": "system", "content": enhanced_system_prompt})
     
@@ -2430,3 +2440,129 @@ async def family_events_reminder():
     except Exception as e:
         logger.error(f"Erreur family_events_reminder: {e}")
         return {"success": False, "error": str(e)}
+
+
+
+# =====================================================
+# API ROUTES - USER PROFILE
+# =====================================================
+
+@app.get("/api/profile")
+async def get_user_profile():
+    """Récupère le profil utilisateur complet"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        result = supabase.table("user_profile").select("*").eq("user_id", "rebecca").execute()
+        
+        if not result.data:
+            # Créer un profil par défaut
+            supabase.table("user_profile").insert({"user_id": "rebecca"}).execute()
+            result = supabase.table("user_profile").select("*").eq("user_id", "rebecca").execute()
+        
+        return {"success": True, "profile": result.data[0] if result.data else None}
+    except Exception as e:
+        logger.error(f"Erreur get_user_profile: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@app.put("/api/profile")
+async def update_user_profile(request: Dict[str, Any]):
+    """Met à jour le profil utilisateur"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        # Ne pas permettre la modification de l'id
+        request.pop("id", None)
+        request.pop("user_id", None)
+        request["updated_at"] = datetime.now().isoformat()
+        
+        result = supabase.table("user_profile").update(request).eq("user_id", "rebecca").execute()
+        
+        return {"success": True, "profile": result.data[0] if result.data else None}
+    except Exception as e:
+        logger.error(f"Erreur update_user_profile: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/profile/children")
+async def add_child(request: Dict[str, Any]):
+    """Ajoute un enfant au profil"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        # Récupérer le profil actuel
+        profile = await get_user_profile()
+        if not profile.get("success"):
+            return {"success": False, "error": "Profil non trouvé"}
+        
+        children = profile["profile"].get("children", [])
+        children.append({
+            "name": request.get("name"),
+            "nickname": request.get("nickname", ""),
+            "birthday": request.get("birthday"),
+            "notes": request.get("notes", "")
+        })
+        
+        result = supabase.table("user_profile").update({
+            "children": children,
+            "updated_at": datetime.now().isoformat()
+        }).eq("user_id", "rebecca").execute()
+        
+        return {"success": True, "children": children}
+    except Exception as e:
+        logger.error(f"Erreur add_child: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/profile/context")
+async def get_profile_context():
+    """Récupère un résumé du profil pour injection dans le prompt"""
+    if not supabase:
+        return {"context": ""}
+    
+    try:
+        result = supabase.table("user_profile").select("*").eq("user_id", "rebecca").execute()
+        
+        if not result.data:
+            return {"context": ""}
+        
+        profile = result.data[0]
+        
+        # Construire un contexte texte pour le prompt
+        context_parts = []
+        
+        # Enfants
+        children = profile.get("children", [])
+        if children:
+            child_names = [f"{c.get('name', '')} ({c.get('nickname', '')})" for c in children]
+            context_parts.append(f"Rebecca's children: {', '.join(child_names)}")
+        
+        # Projets
+        projects = profile.get("projects", [])
+        if projects:
+            project_list = [f"{p.get('name', '')} ({p.get('status', 'active')})" for p in projects]
+            context_parts.append(f"Her main projects: {', '.join(project_list)}")
+        
+        # Objectifs actuels
+        goals = profile.get("current_goals", [])
+        if goals:
+            goal_list = [g.get("goal", "") for g in goals[:3]]
+            context_parts.append(f"Current priorities: {', '.join(goal_list)}")
+        
+        # Prochaines étapes
+        milestones = profile.get("upcoming_milestones", [])
+        if milestones:
+            today = datetime.now().date().isoformat()
+            upcoming = [m for m in milestones if m.get("date", "9999-12-31") >= today][:3]
+            if upcoming:
+                milestone_text = ", ".join([f"{m.get('title', '')} ({m.get('date', '')})" for m in upcoming])
+                context_parts.append(f"Upcoming: {milestone_text}")
+        
+        return {"context": " | ".join(context_parts)}
+    except Exception as e:
+        logger.error(f"Erreur get_profile_context: {e}")
+        return {"context": ""}
