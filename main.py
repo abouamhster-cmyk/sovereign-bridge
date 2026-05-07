@@ -3109,3 +3109,19 @@ async def get_lf_checklist():
         {"id": "business_plan_1", "title": "Finaliser business plan", "status": "pending", "deadline": "2026-07-15"},
     ]
     return {"success": True, "checklist": checklist}
+
+@app.get("/api/lf/contracts")
+async def get_lf_contracts(status: str = None):
+    """Récupère la liste des contrats"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        query = supabase.table("lf_contracts").select("*").order("deadline", nulls_last=True)
+        if status:
+            query = query.eq("status", status)
+        result = query.execute()
+        return {"success": True, "contracts": result.data}
+    except Exception as e:
+        logger.error(f"Erreur lf_contracts: {e}")
+        return {"success": False, "error": str(e)}
