@@ -3125,3 +3125,63 @@ async def get_lf_contracts(status: str = None):
     except Exception as e:
         logger.error(f"Erreur lf_contracts: {e}")
         return {"success": False, "error": str(e)}
+
+
+# =====================================================
+# EMAIL (BREVO)
+# =====================================================
+
+import httpx
+from pydantic import BaseModel, EmailStr
+from typing import Optional
+
+BREVO_API_KEY = os.environ.get("BREVO_API_KEY")
+BREVO_SENDER_EMAIL = os.environ.get("BREVO_SENDER_EMAIL", "sovereign@rebecca.com")
+BREVO_SENDER_NAME = os.environ.get("BREVO_SENDER_NAME", "SOVEREIGN - Becks")
+
+class EmailRequest(BaseModel):
+    to: EmailStr
+    subject: str
+    body: str
+    to_name: Optional[str] = None
+
+@app.post("/api/email/send")
+async def send_email(request: EmailRequest):
+    """Envoie un email via Brevo"""
+    if not BREVO_API_KEY:
+        return {"success": False, "error": "BREVO_API_KEY non configurée"}
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://api.brevo.com/v3/smtp/email",
+                headers={
+                    "api-key": BREVO_API_KEY,
+                    "Content-Type": "application/json",
+                    "Accept": "application/json"
+                },
+                json={
+                    "sender": {
+                        "name": BREVO_SENDER_NAME,
+                        "email": BREVO_SENDER_EMAIL
+                    },
+                    "to": [{
+                        "email": request.to,
+                        "name": request.to_name or request.to.split("@")[0]
+                    }],
+                    "subject": request.subject,
+                    "htmlContent": request.body,
+                },
+                timeout=30.0
+            )
+            
+            if response.status_code == 201:
+                logger.info(f"📧 Email envoyé à {request.to}")
+                return {"success": True, "message": "Email envoyé"}
+            else:
+                logger.error(f"Erreur Brevo: {response.text}")
+                return {"success": False, "error": response.text}
+                
+    except Exception as e:
+        logger.error(f"Erreur envoi email: {e}")
+        return {"success": False, "error": str(e)}
