@@ -882,7 +882,7 @@ def db_query(table: str, filters: Dict = None, limit: int = 100) -> Dict:
         return {"success": False, "data": [], "error": str(e)}
 
 
-def db_insert(table: str, data: Dict) -> Dict:
+async def db_insert(table: str, data: Dict) -> Dict:
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
@@ -1964,7 +1964,7 @@ async def chat_endpoint(request: ChatRequest):
                 
             elif name == "write_to_table":
                 target_table = args.pop("table")
-                result = db_insert(target_table, args)
+                result = await db_insert(target_table, args)
                 if result["success"]:
                     content = f"✅ Enregistrement réussi dans {target_table}"
                 else:
@@ -2076,11 +2076,10 @@ def get_table(table: str, limit: int = 100):
 
 
 @app.post("/{table}")
-def create_item(table: str, request: WriteRequest):
+async def create_item(table: str, request: WriteRequest):
     if table not in AVAILABLE_TABLES:
         raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
-    return db_insert(table, request.data)
-
+    return await db_insert(table, request.data)
 
 @app.put("/{table}/{item_id}")
 def update_item(table: str, item_id: str, request: UpdateRequest):
