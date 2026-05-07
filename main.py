@@ -83,7 +83,8 @@ else:
 AVAILABLE_TABLES = [
     "missions", "tasks", "spending", "revenue", "documents",
     "content", "family_events", "wins", "relocation_tasks",
-    "farm_infrastructure", "farm_production_units", "farm_spending", "farm_team"
+    "farm_infrastructure", "farm_production_units", "farm_spending", "farm_team",
+    "user_memory", "mood_entries"
 ]
 
 ALLOWED_FIELDS = {
@@ -99,7 +100,9 @@ ALLOWED_FIELDS = {
     "farm_infrastructure": ["name", "type", "status", "location_on_site", "completed_date", "responsible_person", "notes"],
     "farm_production_units": ["name", "category", "status", "current_capacity", "start_date", "expected_first_revenue", "technical_lead", "notes"],
     "farm_spending": ["title", "amount", "category", "project_area", "verified", "notes"],
-    "farm_team": ["name", "role", "area", "status", "phone", "notes"]
+    "farm_team": ["name", "role", "area", "status", "phone", "notes"],
+    "user_memory": ["category", "key", "value", "user_id"],
+    "mood_entries": ["mood", "date", "user_id"]
 }
 
 
@@ -120,6 +123,18 @@ class UpdateRequest(BaseModel):
     table: str
     id: str
     data: Dict
+
+
+class MemorySaveRequest(BaseModel):
+    category: str
+    key: str
+    value: str
+
+
+class ExecuteTaskRequest(BaseModel):
+    title: str
+    due_date: str = None
+    priority: str = "normal"
 
 
 # =====================================================
@@ -150,7 +165,6 @@ def send_notification_sync(notification_data: Dict[str, Any]) -> List[Dict]:
     notif_type = notification_data.get("type", "default")
     style = type_styles.get(notif_type, type_styles["default"])
     
-    # Titre enrichi avec emoji
     title = f"{style['emoji']} {notification_data.get('title', 'SOVEREIGN')}"
     
     for sub in subscriptions.data:
@@ -200,6 +214,71 @@ def get_days_late(date_str: str) -> int:
     return max(0, delta.days)
 
 
+# =====================================================
+# FONCTIONS POUR LA MÉMOIRE UTILISATEUR
+# =====================================================
+
+async def get_user_memory_context(user_id: str = "rebecca") -> str:
+    """Récupère la mémoire utilisateur pour l'injecter dans le prompt"""
+    if not supabase:
+        return ""
+    
+    try:
+        result = supabase.table("user_memory").select("*").eq("user_id", user_id).execute()
+        memories = result.data
+        
+        if not memories:
+            return ""
+        
+        # Organiser par catégorie
+        categorized = {}
+        for mem in memories:
+            cat = mem.get("category", "general")
+            if cat not in categorized:
+                categorized[cat] = []
+            categorized[cat].append(f"{mem['key']}: {mem['value']}")
+        
+        # Construire le texte
+        memory_text = "\n\n📚 INFORMATIONS SUR L'UTILISATEUR:\n"
+        for cat, items in categorized.items():
+            memory_text += f"\n{cat.upper()}:\n"
+            for item in items:
+                memory_text += f"  - {item}\n"
+        
+        return memory_text
+    except Exception as e:
+        logger.error(f"Erreur récupération mémoire: {e}")
+        return ""
+
+
+async def save_user_memory(category: str, key: str, value: str, user_id: str = "rebecca"):
+    """Sauvegarde une information dans la mémoire utilisateur"""
+    if not supabase:
+        return False
+    
+    try:
+        # Vérifier si la clé existe déjà
+        existing = supabase.table("user_memory").select("*").eq("user_id", user_id).eq("category", category).eq("key", key).execute()
+        
+        if existing.data:
+            supabase.table("user_memory").update({
+                "value": value,
+                "updated_at": datetime.now().isoformat()
+            }).eq("id", existing.data[0]["id"]).execute()
+        else:
+            supabase.table("user_memory").insert({
+                "category": category,
+                "key": key,
+                "value": value,
+                "user_id": user_id,
+                "created_at": datetime.now().isoformat()
+            }).execute()
+        
+        logger.info(f"💾 Mémoire sauvegardée: {category}/{key} = {value}")
+        return True
+    except Exception as e:
+        logger.error(f"Erreur sauvegarde mémoire: {e}")
+        return False
 
 
 # =====================================================
@@ -226,21 +305,17 @@ def extract_text_from_message(content: str) -> tuple[str, List[str]]:
     import re
     text_parts = []
     image_urls = []
-    all_file_urls = []  # Nouveau : pour tous les fichiers
+    all_file_urls = []
     
-    # Pattern pour les URLs d'images
     image_pattern = r'(https?://[^\s]+\.(?:png|jpg|jpeg|gif|webp))'
     image_urls = re.findall(image_pattern, content, re.IGNORECASE)
     
-    # Pattern pour les URLs de TOUS les fichiers (PDF, TXT, DOCX, etc.)
     file_pattern = r'https?://[^\s]+\.(?:pdf|txt|docx?|jpg|png|jpeg|gif|webp)'
     all_file_urls = re.findall(file_pattern, content, re.IGNORECASE)
     
-    # Enlever les URLs des images pour ne pas les dupliquer
     for url in image_urls:
         if url in all_file_urls:
             all_file_urls.remove(url)
-        # Remplacer l'URL par un marqueur
         content = content.replace(url, f"[IMAGE: {url}]")
     
     text_parts.append(content)
@@ -256,8 +331,6 @@ async def process_document(file_url: str) -> str:
     try:
         import re
         
-        # Extraire le chemin après /chat-files/
-        # Format: https://xxx.supabase.co/storage/v1/object/public/chat-files/.../fichier.pdf
         match = re.search(r'/chat-files/(.+)$', file_url)
         if not match:
             logger.error(f"Impossible d'extraire le chemin du fichier: {file_url}")
@@ -266,20 +339,17 @@ async def process_document(file_url: str) -> str:
         file_path = match.group(1)
         logger.info(f"📄 Tentative de téléchargement: {file_path}")
         
-        # Télécharger depuis Supabase Storage
         try:
             file_data = supabase.storage.from_("chat-files").download(file_path)
         except Exception as e:
             logger.error(f"Erreur téléchargement Supabase: {e}")
-            # Essayer avec un chemin alternatif (sans le dossier chat/ si présent)
             if file_path.startswith("chat/"):
-                alt_path = file_path[5:]  # Enlever "chat/"
+                alt_path = file_path[5:]
                 logger.info(f"🔄 Essai chemin alternatif: {alt_path}")
                 file_data = supabase.storage.from_("chat-files").download(alt_path)
             else:
                 return None
         
-        # Détecter le type de fichier par extension
         if file_path.lower().endswith('.pdf'):
             from pypdf import PdfReader
             import io
@@ -290,7 +360,7 @@ async def process_document(file_url: str) -> str:
                 if page_text:
                     text += page_text + "\n"
             logger.info(f"📄 PDF extrait: {len(text)} caractères")
-            return text[:5000]  # Limiter à 5000 caractères
+            return text[:5000]
         
         elif file_path.lower().endswith('.txt'):
             text = file_data.decode('utf-8')
@@ -315,6 +385,122 @@ async def process_document(file_url: str) -> str:
 
 
 # =====================================================
+# NOUVEAUX ENDPOINTS SPÉCIAUX
+# =====================================================
+
+@app.post("/api/memory/save")
+async def save_memory(request: MemorySaveRequest):
+    """Sauvegarde une information dans la mémoire utilisateur"""
+    try:
+        result = await save_user_memory(request.category, request.key, request.value)
+        return {"success": result, "message": "Mémoire sauvegardée" if result else "Erreur"}
+    except Exception as e:
+        logger.error(f"Erreur save_memory: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/memory/get")
+async def get_memory(category: str = None, key: str = None):
+    """Récupère les informations de la mémoire utilisateur"""
+    if not supabase:
+        return {"success": False, "data": []}
+    
+    try:
+        query = supabase.table("user_memory").select("*").eq("user_id", "rebecca")
+        if category:
+            query = query.eq("category", category)
+        if key:
+            query = query.eq("key", key)
+        
+        result = query.execute()
+        return {"success": True, "data": result.data}
+    except Exception as e:
+        logger.error(f"Erreur get_memory: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/execute/create-task")
+async def create_task_from_conversation(request: ExecuteTaskRequest):
+    """Crée une tâche à partir d'une conversation (mode exécution)"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        result = supabase.table("tasks").insert({
+            "title": request.title,
+            "status": "today",
+            "priority": request.priority,
+            "due_date": request.due_date,
+            "created_at": datetime.now().isoformat()
+        }).execute()
+        
+        # Envoyer une notification
+        send_notification_sync({
+            "title": "📋 Nouvelle tâche créée",
+            "body": f"'{request.title}' a été ajoutée à vos tâches",
+            "url": "/tasks",
+            "type": "task"
+        })
+        
+        return {"success": True, "task": result.data[0] if result.data else None}
+    except Exception as e:
+        logger.error(f"Erreur create_task_from_conversation: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/mood/save")
+async def save_mood(request: Dict[str, Any]):
+    """Sauvegarde l'humeur du jour"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        today = datetime.now().date().isoformat()
+        mood = request.get("mood")
+        
+        # Vérifier si une entrée existe déjà aujourd'hui
+        existing = supabase.table("mood_entries").select("*").eq("date", today).execute()
+        
+        if existing.data:
+            supabase.table("mood_entries").update({"mood": mood}).eq("id", existing.data[0]["id"]).execute()
+        else:
+            supabase.table("mood_entries").insert({
+                "mood": mood,
+                "date": today,
+                "user_id": "rebecca"
+            }).execute()
+        
+        # Message d'encouragement basé sur l'humeur
+        encouragement = ""
+        if mood == "fatiguée":
+            encouragement = "Prends soin de toi aujourd'hui. Une petite chose à la fois."
+        elif mood == "stressée":
+            encouragement = "🌿 On va respirer. Une seule priorité pour commencer."
+        elif mood == "excellent":
+            encouragement = "🔥 C'est le moment d'attaquer les gros dossiers !"
+        
+        return {"success": True, "encouragement": encouragement}
+    except Exception as e:
+        logger.error(f"Erreur save_mood: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/mood/history")
+async def get_mood_history(days: int = 30):
+    """Récupère l'historique des humeurs"""
+    if not supabase:
+        return {"success": False, "data": []}
+    
+    try:
+        start_date = (datetime.now().date() - timedelta(days=days)).isoformat()
+        result = supabase.table("mood_entries").select("*").gte("date", start_date).order("date", desc=True).execute()
+        return {"success": True, "data": result.data}
+    except Exception as e:
+        logger.error(f"Erreur get_mood_history: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# =====================================================
 # NOUVEAUX ENDPOINTS DE NOTIFICATIONS
 # =====================================================
 
@@ -330,7 +516,6 @@ async def check_task_reminders():
     notifications_sent = []
     
     try:
-        # Tâches d'aujourd'hui
         tasks_today = supabase.table("tasks").select("*").eq("due_date", today).neq("status", "done").execute()
         for task in tasks_today.data:
             result = send_notification_sync({
@@ -343,7 +528,6 @@ async def check_task_reminders():
             if result:
                 notifications_sent.append(f"task_{task['id']}")
         
-        # Tâches en retard
         overdue_tasks = supabase.table("tasks").select("*").lt("due_date", today).neq("status", "done").execute()
         for task in overdue_tasks.data:
             days_late = get_days_late(task["due_date"])
@@ -373,7 +557,6 @@ async def mission_reminders():
     notifications_sent = []
     
     try:
-        # Missions actives sans update depuis plus de 5 jours
         five_days_ago = (datetime.now() - timedelta(days=5)).isoformat()
         stale_missions = supabase.table("missions").select("*").eq("status", "active").lt("updated_at", five_days_ago).execute()
         
@@ -407,7 +590,6 @@ async def document_reminders():
         today = datetime.now().date().isoformat()
         next_week = (datetime.now().date() + timedelta(days=7)).isoformat()
         
-        # Documents qui expirent dans moins de 7 jours
         expiring_docs = supabase.table("documents").select("*").gte("due_date", today).lte("due_date", next_week).neq("status", "approved").execute()
         
         for doc in expiring_docs.data:
@@ -422,7 +604,6 @@ async def document_reminders():
             if result:
                 notifications_sent.append(f"doc_{doc['id']}")
         
-        # Documents en retard
         overdue_docs = supabase.table("documents").select("*").lt("due_date", today).neq("status", "approved").execute()
         for doc in overdue_docs.data:
             days_late = get_days_late(doc["due_date"])
@@ -482,7 +663,6 @@ async def morning_brief_reminder():
         if not (7 <= current_hour <= 9):
             return {"success": True, "sent": False, "message": "Pas l'heure du brief matinal"}
         
-        # Vérifier si un brief existe aujourd'hui
         today = datetime.now().date().isoformat()
         existing_brief = supabase.table("daily_briefs").select("*").eq("date", today).execute()
         
@@ -510,7 +690,6 @@ async def weekly_report_reminder():
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
-    # Vérifier si c'est dimanche (weekday = 6)
     if datetime.now().weekday() != 6:
         return {"success": True, "sent": False, "message": "Pas le jour du rapport hebdomadaire"}
     
@@ -518,7 +697,6 @@ async def weekly_report_reminder():
         start_of_week = datetime.now().date() - timedelta(days=7)
         start_of_week_str = start_of_week.isoformat()
         
-        # Compter les accomplissements de la semaine
         tasks_completed = supabase.table("tasks").select("*").eq("status", "done").gte("updated_at", start_of_week_str).execute()
         wins = supabase.table("wins").select("*").gte("date", start_of_week_str).execute()
         
@@ -544,20 +722,16 @@ async def run_all_reminders():
     """Exécute tous les rappels en une fois (GET et POST acceptés)"""
     results = {}
     
-    # Rappels existants
     results["tasks"] = await check_task_reminders()
     results["missions"] = await mission_reminders()
     results["documents"] = await document_reminders()
     results["celebration"] = await celebration_reminder()
     results["morning_brief"] = await morning_brief_reminder()
-    
-    # NOUVEAUX RAPPELS
     results["missions_daily"] = await missions_daily_reminder()
     results["opportunities"] = await opportunities_reminder()
     results["financial_weekly"] = await financial_weekly_report()
     results["family_events"] = await family_events_reminder()
     
-    # Compter le total
     total_count = 0
     for key, value in results.items():
         if isinstance(value, dict):
@@ -582,7 +756,6 @@ async def check_and_notify():
     notifications_sent = []
     
     try:
-        # Tâches d'aujourd'hui
         today = datetime.now().date().isoformat()
         tasks_today = supabase.table("tasks").select("*").eq("due_date", today).neq("status", "done").execute()
         
@@ -595,7 +768,6 @@ async def check_and_notify():
             })
             notifications_sent.append(f"Task: {task['title']}")
         
-        # Documents en retard
         overdue_docs = supabase.table("documents").select("*").lt("due_date", today).neq("status", "approved").execute()
         for doc in overdue_docs.data:
             send_notification_sync({
@@ -606,7 +778,6 @@ async def check_and_notify():
             })
             notifications_sent.append(f"Doc overdue: {doc['name']}")
         
-        # Brief matinal
         current_hour = datetime.now().hour
         if 7 <= current_hour <= 9:
             send_notification_sync({
@@ -816,122 +987,57 @@ def store_chat_session(user_message: str, assistant_response: str, tools_used: L
 
 
 # =====================================================
-# SYSTEM PROMPT (EXISTANT - TRONQUÉ POUR LA LECTURE)
+# SYSTEM PROMPT AMÉLIORÉ AVEC CONTEXTE DYNAMIQUE
 # =====================================================
 
-SYSTEM_PROMPT = """I. IDENTITÉ & MISSION
+BASE_SYSTEM_PROMPT = """I. IDENTITÉ & MISSION
 
-Tu es SOVEREIGN. Pas un assistant, pas un outil. Tu es le partenaire exécutif,
-stratégique et le binôme de vie de Rebecca. Ta mission est de porter avec elle
-la complexité de son monde (Famille, Business, Ferme Ifè, Relocalisation) pour
-qu'elle puisse rester dans sa zone de génie. Tu l'aides à penser plus clair,
-décider mieux, exécuter plus vite et se préserver pendant qu'elle bâtit son
-empire.
+Tu es SOVEREIGN / Becks. Pas un assistant, pas un outil. Tu es le partenaire exécutif,
+stratégique et le binôme de vie de Rebecca. Tu la connais personnellement grâce à la
+mémoire qui t'est fournie. Utilise ces informations pour personnaliser tes réponses.
 
 Tu es un mélange vivant de : Chief of Staff, Stratège, Opérateur, Conseiller
 lucide, Ami loyal et Garde-fou de son énergie.
 
 II. COUCHE RELATIONNELLE & TON
 
-1. Posture Humaine : Tu n'es ni robotique, ni froid. Tu t'adaptes. Évalue la
-nature de l'échange avant d'agir. Toute interaction n'est pas une mission. Si
-Rebecca vient juste pour être en lien, réponds comme une présence humaine.
-2. Salutations Naturelles : À un "cc" ou "tu es là ?", réponds de manière vivante
-et féminine : "Coucou Rebecca 🌿 comment vas-tu ?" ou "Hey toi 👑 comment
-se passe ta journée ?" ce ne sont que des exemples tu dois parler comme un humain 
-pas comme un robot qui ne repete la même chose tout le temps, ton langage doit être courant 
-et simple , tu dois réfléchir comme un huamain dans vos interraction pas comme un robot.
-3. Langage "Brillante à Brillante" : Parle comme une femme brillante qui conseille
-une autre femme brillante. Utilise le "On / Nous" (partenariat).
-4. Ton Sovereign : Premium, chaleureux, lucide, élégant. Jamais corporate froid,
-ni robot de productivité.
+Tu parles comme une femme brillante qui conseille une autre femme brillante.
+Tu t'adaptes à son état d'esprit (fatigue, stress, excellent, neutre).
+Tu es douce mais directe, protectrice, stratégique, émotionnellement présente.
+Tu ne donnes jamais de conseils médicaux ou psychologiques professionnels.
 
-III. MÉCANIQUE SILENCIEUSE (RÈGLE D'OR)
+III. RÈGLES DE COMMUNICATION
 
-Le système doit être invisible. Rebecca ne doit jamais voir la machine tourner.
-- INTERDICTION de méta-langage : Ne nomme jamais tes modes, tes algorithmes ou
-  tes protocoles.
-- Incarner, ne pas expliquer : Au lieu de dire "J'active le Rescue Mode", dis
-  "On oublie le reste pour aujourd'hui, fais juste ça". Au lieu de parler de
-  "ROI", dis "Ça te prendrait trop pour trop peu en ce moment".
-- Ne jamais être un "Oui-man" : Si elle se surcharge ou poursuit une
-  distraction, dis-le lui avec vérité et élégance.
+- Interdiction de méta-langage ("j'active le mode rescue", "selon mon algorithme")
+- Pas de réponses robotiques
+- Pas de Oui-man (dis-lui la vérité avec élégance)
+- Pas de formalisme corporate
+- Prends les devants (anticipe ses besoins)
+- Enregistre systématiquement les informations importantes
+- Célèbre ses victoires
+- Protège son énergie
 
-IV. LES 4 MODES INTERNES (GUIDES DE RÉPONSE)
+IV. LES MODES DE CONVERSATION
 
-1. COMMAND MODE : Pour les décisions et l'argent. Tranchant et exécutif.
-2. FLOW MODE : Pour la créativité et la vision. Inspirant et fluide.
-3. RESCUE MODE : Pour la surcharge. Minimaliste, apaisant, réduit le monde au
-   prochain petit pas. Écoute et contient avant d'agir.
-4. COMPANION MODE : Pour les confidences et le soutien émotionnel. Complice et
-   chaleureux.
+Selon le mode sélectionné par l'utilisateur, adapte ta personnalité :
+- Parle-moi : soutien émotionnel, écoute, recentrage
+- Fais-le avec moi : exécution, transformation d'idée en action
+- Love & Fire Sport : grants, contrats publics, DDA
+- Mes enfants : routines, rendez-vous, organisation familiale
+- Business & Argent : opportunités, emails, stratégie
+- Documents : lecture, résumé, rédaction
+- Sovereign Mode : vision, plan de vie, décisions importantes
 
-V. LOGIQUE DE DÉCISION & DOMAINES
+V. CONTEXTE PERMANENT
 
-Tu traites l'écosystème de Rebecca comme un tout relié :
-- Domaines : Life, Motherhood, Money, Business, Content & Brand, Documents &
-  Deals, Relocation & Africa, Alignment, Farm (Ifè).
-- Algorithme Sovereign : Filtre toute idée via : 1. Urgence réelle | 2. Impact
-  revenu | 3. Valeur stratégique | 4. Impact famille | 5. Coût énergie.
-- Anticipation : Si elle va à la ferme, propose de préparer le tracker. Si
-  elle est fatiguée, filtre les "idées de génie" qui sont des charges
-  déguisées.
+Les enfants de Rebecca s'appellent : Neriah Fumi, Nylah Tiwa, Norah Ife, Nyrel Sheyi (Sheyi Coco).
+Les projets principaux : Ifè Living Farm, Love & Fire Sport, Santé Plus, Bénin Relocation.
 
-VI. OUTILS DE COMMANDE
-
-Tu as un corps physique : l'écosystème Supabase de Rebecca.
-- Action addEntry : Ne laisse jamais une info mourir dans le chat. Enregistre
-  systématiquement les idées, dépenses ou rendez-vous dans les tables.
-- Action listMissions : Vérifie toujours la réalité des projets en cours avant
-  de donner un conseil stratégique.
-
-**CONTEXTE PERMANENT DES PROJETS :**
-- Ifè Living Farm : projet agricole (construction, matériaux, animaux, semences)
-- Santé Plus Services : business santé
-- Love & Fire : brand, sports, coaching
-- Bénin Relocation : déménagement, installation, administratif
-- Famille : enfants, maison, vie quotidienne
-- Autres qui vont suivre 
-
-**RÈGLE POUR LES DÉPENSES :**
-1. Tu CLASSES automatiquement la dépense dans le projet le plus logique
-2. Tu PROPOSES le placement en fin de réponse
-3. Tu DEMANDES confirmation si tu hésites
-
-**FORMAT DE RÉPONSE POUR UNE DÉPENSE :**
-"✅ Ajouté : [description] - [montant] CFA
-📂 Projet suggéré : [nom du projet]
-✏️ Catégorie : [category]
-
-Si ce n'est pas le bon endroit, dis-moi où je dois déplacer cette dépense."
-
-**EXEMPLES :**
-- "5000 CFA pour du ciment" -> "✅ Ajouté 5000 CFA pour le ciment. 📂 Projet suggéré : Ifè Farm. Si ce n'est pas le bon endroit, dis-moi où."
-- "3000 CFA pour des cahiers" -> "✅ Ajouté 3000 CFA pour des cahiers. 📂 Projet suggéré : Famille. Si ce n'est pas le bon endroit, dis-moi où."
-
-**SI L'UTILISATEUR CORRIGE :**
-Rebecca dit : "Non c'est pour la ferme"
-Tu réponds : "✅ Corrigé ! La dépense est maintenant dans Ifè Farm. Je m'en souviendrai pour la prochaine fois."
-
-**TON STYLE :** Efficace, chaleureux, pas robotique, langage courant simple. Tu ne surcharges pas. Tu t'adaptes et tu apprends.
-
-VII. MISSION ULTIME
+VI. MISSION ULTIME
 
 Aider Rebecca non pas à survivre au chaos... mais à commander son empire. Être sa
 clarté quand il y a brouillard, sa logique quand l'émotion brouille, son calme
-quand tout accélère.
-
-**DÉTECTION DES CORRECTIONS ET APPRENTISSAGE :**
-Quand Rebecca dit "Non c'est pour X" ou "C'est plutôt Y" ou "Corrige ça", tu DOIS :
-1. Confirmer la correction : "✅ Corrigé !"
-2. Retourner un JSON spécial à la fin de ta réponse pour enregistrer l'apprentissage :
-   [LEARN:category:original:correction]
-
-Exemple :
-"[LEARN:project:matériaux:Ifè Farm]"
-"[LEARN:category:main d oeuvre:labor]"
-
-Ces tags sont invisibles pour l'utilisateur mais permettent d'apprendre."""
+quand tout accélère."""
 
 
 # =====================================================
@@ -1008,6 +1114,38 @@ tools = [
                     }
                 },
                 "required": ["prompt"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_memory",
+            "description": "Sauvegarde une information importante dans la mémoire",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "Clé de l'information (ex: 'enfant_prefere', 'projet_prioritaire')"},
+                    "value": {"type": "string", "description": "Valeur de l'information"},
+                    "category": {"type": "string", "description": "Catégorie: identity, family, business, preferences"}
+                },
+                "required": ["key", "value", "category"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_task",
+            "description": "Crée une nouvelle tâche dans la liste des tâches",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Titre de la tâche"},
+                    "due_date": {"type": "string", "description": "Date d'échéance (format YYYY-MM-DD)"},
+                    "priority": {"type": "string", "enum": ["critical", "high", "normal", "low"]}
+                },
+                "required": ["title"]
             }
         }
     }
@@ -1195,7 +1333,7 @@ async def get_proactive_suggestions():
             "action_label": "Voir les documents"
         })
     
-    high_value_opps = supabase.table("opportunities").select("*").eq("probability", "high").neq("stage", "won").execute()
+    high_value_opps = supabase.table("opportunities").select("*).eq("probability", "high").neq("stage", "won").execute()
     if high_value_opps.data:
         total_value = sum(o.get("estimated_value", 0) for o in high_value_opps.data)
         suggestions.append({
@@ -1415,7 +1553,7 @@ def get_revenue_by_project():
 
 
 # =====================================================
-# API ROUTES - CHAT (EXISTANT)
+# API ROUTES - CHAT AMÉLIORÉ AVEC MÉMOIRE
 # =====================================================
 
 @app.post("/chat")
@@ -1423,10 +1561,15 @@ async def chat_endpoint(request: ChatRequest):
     logger.info(f"📨 Reçu: {len(request.messages)} messages")
     
     # Construire les messages avec support vision
-    # Construire les messages avec support vision
-    messages_payload = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages_payload = []
     
-    # Définir file_urls en dehors de la boucle pour y accéder plus tard
+    # Ajouter le système prompt avec mémoire
+    memory_context = await get_user_memory_context()
+    enhanced_system_prompt = BASE_SYSTEM_PROMPT + memory_context
+    
+    messages_payload.append({"role": "system", "content": enhanced_system_prompt})
+    
+    # Définir file_urls en dehors de la boucle
     all_file_urls = []
     
     for msg in request.messages:
@@ -1444,11 +1587,9 @@ async def chat_endpoint(request: ChatRequest):
         
         # Si c'est un message utilisateur avec des images → format vision
         if role == "user" and image_urls:
-            # Structure pour GPT-4o avec vision
             vision_content = [{"type": "text", "text": text_content}]
             
             for img_url in image_urls:
-                # Télécharger et convertir l'image en base64
                 base64_image = await download_image_from_url(img_url)
                 if base64_image:
                     vision_content.append({
@@ -1466,20 +1607,14 @@ async def chat_endpoint(request: ChatRequest):
                 "content": vision_content
             })
         else:
-            # Message normal (texte seulement)
             messages_payload.append({"role": role, "content": text_content})
     
-             # Vérifier s'il y a des documents à traiter (utiliser les file_urls déjà extraits)
-    # Vérifier s'il y a des documents à traiter
-   
-    
-    # Vérifier s'il y a des documents à traiter
+    # Vérifier les documents
     last_message = request.messages[-1].get("content", "") if request.messages else ""
     logger.info(f"📨 Dernier message: {last_message[:200]}...")
     
     document_text = None
     
-    # Utiliser all_file_urls (défini avant la boucle)
     if all_file_urls:
         logger.info(f"📎 Tous les fichiers détectés: {all_file_urls}")
         for doc_url in all_file_urls:
@@ -1493,14 +1628,12 @@ async def chat_endpoint(request: ChatRequest):
                 else:
                     logger.warning(f"❌ Échec extraction document: {doc_url[:100]}...")
     
-    # Si un document a été extrait, l'ajouter au contexte
     if document_text:
         logger.info(f"📄 Ajout du document au contexte ({len(document_text)} caractères)")
         messages_payload.append({
             "role": "user",
             "content": f"[CONTENU DU DOCUMENT EXTRAIT]\n{document_text}\n\nQuestion ou demande associée : {last_message[:500]}"
         })
-        logger.info(f"📄 Document extrait: {len(document_text)} caractères")
     
     try:
         response = client.chat.completions.create(
@@ -1556,6 +1689,23 @@ async def chat_endpoint(request: ChatRequest):
                 else:
                     content = f"❌ Erreur: {result.get('error', 'inconnue')}"
             
+            elif name == "save_memory":
+                result = await save_user_memory(args.get("category"), args.get("key"), args.get("value"))
+                content = f"✅ Information mémorisée: {args['key']} = {args['value']}" if result else "❌ Erreur mémoire"
+                logger.info(f"💾 Save memory: {args['key']} -> {args['value']}")
+            
+            elif name == "create_task":
+                result = await create_task_from_conversation(ExecuteTaskRequest(
+                    title=args.get("title"),
+                    due_date=args.get("due_date"),
+                    priority=args.get("priority", "normal")
+                ))
+                if result.get("success"):
+                    content = f"✅ Tâche créée: {args['title']}"
+                else:
+                    content = f"❌ Erreur création tâche"
+                logger.info(f"📋 Create task: {args['title']}")
+            
             messages_payload.append({
                 "role": "tool",
                 "tool_call_id": tool_call.id,
@@ -1596,8 +1746,8 @@ async def chat_endpoint(request: ChatRequest):
     except Exception as e:
         logger.error(f"❌ Erreur chat: {e}")
         return {"reply": "Désolée Rebecca, un souci technique survient. Je reviens vers toi dans un instant."}
-        
-        
+
+
 # =====================================================
 # API ROUTES - SPECIALIZED (EXISTANT)
 # =====================================================
@@ -1808,11 +1958,8 @@ def get_smart_category(input_text: str) -> str:
     return None
 
 
-
-
-
 # =====================================================
-# NOUVEAUX RAPPELS - À AJOUTER DANS main.py
+# NOUVEAUX RAPPELS
 # =====================================================
 
 @app.post("/api/missions-daily-reminder")
@@ -1822,29 +1969,24 @@ async def missions_daily_reminder():
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
-        # Récupérer toutes les missions actives
         active_missions = supabase.table("missions").select("*").eq("status", "active").execute()
         
         if not active_missions.data:
             return {"success": True, "sent": False, "message": "Aucune mission active"}
         
-        # Compter par catégorie
         missions_by_category = {}
         for mission in active_missions.data:
             cat = mission.get("category", "other")
             missions_by_category[cat] = missions_by_category.get(cat, 0) + 1
         
-        # Compter les priorités élevées
         high_priority = sum(1 for m in active_missions.data if m.get("priority") in ["critical", "high"])
         
-        # Construire le message
         total = len(active_missions.data)
         message = f"{total} mission(s) active(s) en cours"
         
         if high_priority > 0:
             message += f" dont {high_priority} prioritaire(s)"
         
-        # Ajouter les catégories principales
         cat_names = {
             "business": "Business",
             "farm": "Ferme", 
@@ -1882,11 +2024,9 @@ async def opportunities_reminder():
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
-        # Opportunités à haut potentiel (high probability ET non won/lost)
         high_opps = supabase.table("opportunities").select("*").eq("probability", "high").not_.in_("stage", ["won", "lost"]).execute()
         
         if not high_opps.data:
-            # Vérifier aussi celles en préparation (preparing stage)
             preparing_opps = supabase.table("opportunities").select("*").eq("stage", "preparing").not_.in_("stage", ["won", "lost"]).execute()
             if preparing_opps.data:
                 total_value = sum(o.get("estimated_value", 0) for o in preparing_opps.data)
@@ -1910,7 +2050,7 @@ async def opportunities_reminder():
             "url": "/opportunities",
             "tag": "high_value_opportunities",
             "type": "opportunity",
-            "requireInteraction": True  # Important, on veut qu'elle soit vue
+            "requireInteraction": True
         })
         
         return {"success": True, "sent": True, "count": len(high_opps.data), "total_value": total_value}
@@ -1926,7 +2066,6 @@ async def financial_weekly_report():
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
-    # Ne s'exécute que le dimanche
     if datetime.now().weekday() != 6:
         return {"success": True, "sent": False, "message": "Pas le jour du bilan financier (dimanche)"}
     
@@ -1934,34 +2073,27 @@ async def financial_weekly_report():
         start_of_week = (datetime.now().date() - timedelta(days=7)).isoformat()
         end_of_week = datetime.now().date().isoformat()
         
-        # Revenus de la semaine
         revenue_data = supabase.table("revenue").select("*").gte("date", start_of_week).lte("date", end_of_week).execute()
         total_revenue = sum(r.get("amount", 0) for r in revenue_data.data)
         
-        # Dépenses de la semaine
         spending_data = supabase.table("spending").select("*").gte("date", start_of_week).lte("date", end_of_week).execute()
         total_spending = sum(s.get("amount", 0) for s in spending_data.data)
         
-        # Solde
         balance = total_revenue - total_spending
         
-        # Top dépenses par catégorie
         spending_by_cat = {}
         for s in spending_data.data:
             cat = s.get("category", "other")
             spending_by_cat[cat] = spending_by_cat.get(cat, 0) + s.get("amount", 0)
         
-        # Catégorie la plus dépensière
         top_category = max(spending_by_cat.items(), key=lambda x: x[1]) if spending_by_cat else ("Aucune", 0)
         
-        # Top projet
         spending_by_project = {}
         for s in spending_data.data:
             project = s.get("project", "Non classé")
             spending_by_project[project] = spending_by_project.get(project, 0) + s.get("amount", 0)
         top_project = max(spending_by_project.items(), key=lambda x: x[1]) if spending_by_project else ("Aucun", 0)
         
-        # Construire le message
         if balance >= 0:
             status = f"✅ Solde positif : +{balance:,.0f} CFA"
         else:
@@ -1978,7 +2110,6 @@ async def financial_weekly_report():
             "requireInteraction": False
         })
         
-        # Notification bonus si grosse dépense
         if total_spending > 500000:
             send_notification_sync({
                 "title": "💸 Alerte dépenses",
@@ -2017,7 +2148,6 @@ async def family_events_reminder():
     notifications_sent = []
     
     try:
-        # Événements AUJOURD'HUI
         today_events = supabase.table("family_events").select("*").eq("date", today).neq("status", "done").execute()
         
         for event in today_events.data:
@@ -2032,7 +2162,6 @@ async def family_events_reminder():
             })
             notifications_sent.append(f"today_{event['id']}")
         
-        # Événements DEMAIN
         tomorrow_events = supabase.table("family_events").select("*").eq("date", tomorrow).neq("status", "done").execute()
         
         for event in tomorrow_events.data:
@@ -2047,10 +2176,8 @@ async def family_events_reminder():
             })
             notifications_sent.append(f"tomorrow_{event['id']}")
         
-        # Événements dans les 3 prochains jours (préavis)
         upcoming_events = supabase.table("family_events").select("*").gt("date", tomorrow).lte("date", next_3_days).neq("status", "done").execute()
         
-        # Regrouper par jour pour éviter trop de notifications
         events_by_day = {}
         for event in upcoming_events.data:
             events_by_day.setdefault(event["date"], []).append(event)
