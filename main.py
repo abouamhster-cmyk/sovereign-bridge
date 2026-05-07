@@ -1562,7 +1562,7 @@ async def get_proactive_suggestions():
             "action_label": "Voir les documents"
         })
     
-    high_value_opps = supabase.table("opportunities").select("*).eq("probability", "high").neq("stage", "won").execute()
+    high_value_opps = supabase.table("opportunities").select("*").eq("probability", "high").neq("stage", "won").execute()
     if high_value_opps.data:
         total_value = sum(o.get("estimated_value", 0) for o in high_value_opps.data)
         suggestions.append({
