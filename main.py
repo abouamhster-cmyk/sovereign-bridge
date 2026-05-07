@@ -3,6 +3,7 @@ import uuid
 import json
 import logging
 import re
+import asyncio  
 from datetime import datetime, timedelta
 from typing import Union, List, Dict, Any
 from fastapi import FastAPI, HTTPException
@@ -911,6 +912,27 @@ def db_insert(table: str, data: Dict) -> Dict:
         
         logger.info(f"📝 Insert dans {table}: {clean_data}")
         result = supabase.table(table).insert(clean_data).execute()
+
+         # Déclencher webhook pour les événements importants
+        if result["success"] and result["data"]:
+            if table == "tasks":
+                asyncio.create_task(trigger_webhook("task.created", {
+                    "task": result["data"],
+                    "timestamp": datetime.now().isoformat()
+                }))
+            elif table == "wins":
+                asyncio.create_task(trigger_webhook("win.added", {
+                    "win": result["data"],
+                    "timestamp": datetime.now().isoformat()
+                }))
+            elif table == "missions":
+                asyncio.create_task(trigger_webhook("mission.created", {
+                    "mission": result["data"],
+                    "timestamp": datetime.now().isoformat()
+                }))
+        # ========================================
+
+        
         return {"success": True, "data": result.data[0] if result.data else None}
     except Exception as e:
         logger.error(f"Erreur insert {table}: {e}")
@@ -925,6 +947,16 @@ def db_update(table: str, id: str, data: Dict) -> Dict:
         allowed = ALLOWED_FIELDS.get(table, [])
         clean_data = {k: v for k, v in data.items() if k in allowed}
         result = supabase.table(table).update(clean_data).eq("id", id).execute()
+
+       # Webhook pour mission complétée
+        if result["success"] and result["data"] and table == "missions":
+            if clean_data.get("status") == "complete":
+                asyncio.create_task(trigger_webhook("mission.completed", {
+                    "mission": result["data"],
+                    "timestamp": datetime.now().isoformat()
+                }))
+
+        
         return {"success": True, "data": result.data[0] if result.data else None}
     except Exception as e:
         logger.error(f"Erreur update {table}: {e}")
@@ -3185,3 +3217,51 @@ async def send_email(request: EmailRequest):
     except Exception as e:
         logger.error(f"Erreur envoi email: {e}")
         return {"success": False, "error": str(e)}
+
+
+# =====================================================
+# WEBHOOKS
+# =====================================================
+
+import hmac
+import hashlib
+from pydantic import BaseModel
+
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "sovereign-secret-key-2024")
+
+# Stockage simple des webhooks (en mémoire pour commencer)
+webhooks_subscriptions = []
+
+class WebhookSubscription(BaseModel):
+    url: str
+    event: str
+    active: bool = True
+
+@app.post("/api/webhooks/subscribe")
+async def subscribe_webhook(subscription: WebhookSubscription):
+    """Enregistre un webhook"""
+    webhooks_subscriptions.append({
+        "url": subscription.url,
+        "event": subscription.event,
+        "active": True,
+        "created_at": datetime.now().isoformat()
+    })
+    logger.info(f"🔗 Webhook inscrit: {subscription.event} -> {subscription.url}")
+    return {"success": True, "subscriptions": webhooks_subscriptions}
+
+@app.get("/api/webhooks/subscriptions")
+async def get_webhooks():
+    """Liste tous les webhooks"""
+    return {"success": True, "subscriptions": webhooks_subscriptions}
+
+async def trigger_webhook(event: str, payload: dict):
+    """Déclenche les webhooks pour un événement"""
+    subscribers = [s for s in webhooks_subscriptions if s["event"] == event and s["active"]]
+    
+    for sub in subscribers:
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.post(sub["url"], json=payload, timeout=10.0)
+            logger.info(f"✅ Webhook envoyé à {sub['url']}")
+        except Exception as e:
+            logger.error(f"❌ Erreur webhook: {e}")
