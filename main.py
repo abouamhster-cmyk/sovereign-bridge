@@ -2653,3 +2653,116 @@ Ne retourne que le JSON, rien d'autre."""
     except Exception as e:
         logger.error(f"Erreur process_brain_dump: {e}")
         return {"success": False, "error": str(e)}
+
+
+# =====================================================
+# LIFE MAP - VUE D'ENSEMBLE DES DOMAINES
+# =====================================================
+
+@app.get("/api/life-map")
+async def get_life_map():
+    """Récupère les données pour la carte de vie"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    today = datetime.now().date().isoformat()
+    
+    try:
+        # 1. Famille - événements à venir
+        family_events = supabase.table("family_events").select("*").gte("date", today).neq("status", "done").execute()
+        family_pending = len(family_events.data)
+        family_next = family_events.data[0] if family_events.data else None
+        
+        # 2. Argent - finances
+        revenue = supabase.table("revenue").select("amount").execute()
+        spending = supabase.table("spending").select("amount").execute()
+        total_revenue = sum(r.get("amount", 0) for r in revenue.data)
+        total_spending = sum(s.get("amount", 0) for s in spending.data)
+        balance = total_revenue - total_spending
+        
+        # 3. Business - missions actives
+        active_missions = supabase.table("missions").select("*").eq("status", "active").execute()
+        high_priority_missions = [m for m in active_missions.data if m.get("priority") in ["critical", "high"]]
+        
+        # 4. Ferme - dépenses et unités actives
+        farm_spending = supabase.table("farm_spending").select("amount").execute()
+        total_farm_spent = sum(s.get("amount", 0) for s in farm_spending.data)
+        active_units = supabase.table("farm_production_units").select("*").eq("status", "active").execute()
+        
+        # 5. Documents en attente
+        pending_docs = supabase.table("documents").select("*").neq("status", "approved").execute()
+        urgent_docs = [d for d in pending_docs.data if d.get("due_date") and d["due_date"] < today]
+        
+        # 6. Victoires récentes (7 jours)
+        seven_days_ago = (datetime.now().date() - timedelta(days=7)).isoformat()
+        recent_wins = supabase.table("wins").select("*").gte("date", seven_days_ago).execute()
+        
+        # 7. Relocation - tâches en cours
+        relocation_tasks = supabase.table("relocation_tasks").select("*").neq("status", "completed").execute()
+        critical_relocation = [t for t in relocation_tasks.data if t.get("priority") == "urgent"]
+        
+        # 8. Alignement - score basé sur victoires + humeur récente
+        recent_mood = supabase.table("mood_entries").select("mood").order("date", desc=True).limit(5).execute()
+        positive_moods = sum(1 for m in recent_mood.data if m.get("mood") in ["excellent", "bien"])
+        alignment_score = min(100, (len(recent_wins.data) * 10) + (positive_moods * 5))
+        
+        return {
+            "success": True,
+            "data": {
+                "family": {
+                    "status": "🟢" if family_pending == 0 else "🟡",
+                    "pending_count": family_pending,
+                    "next_action": family_next.get("title", "Aucun événement") if family_next else "Aucun événement",
+                    "next_date": family_next.get("date") if family_next else None,
+                    "urgency": "low" if family_pending == 0 else "medium"
+                },
+                "money": {
+                    "status": "🔴" if balance < 0 else "🟢",
+                    "balance": balance,
+                    "pending_invoices": 0,
+                    "urgency": "high" if balance < 0 else "low"
+                },
+                "business": {
+                    "status": "🟢" if len(high_priority_missions) == 0 else "🟡",
+                    "active_missions": len(active_missions.data),
+                    "high_priority_count": len(high_priority_missions),
+                    "urgency": "high" if len(high_priority_missions) > 2 else "medium"
+                },
+                "farm": {
+                    "status": "🟢",
+                    "total_investment": total_farm_spent,
+                    "active_units": len(active_units.data),
+                    "next_action": "Vérifier les stocks",
+                    "urgency": "medium"
+                },
+                "documents": {
+                    "status": "🔴" if len(urgent_docs) > 0 else "🟡" if len(pending_docs.data) > 0 else "🟢",
+                    "pending_count": len(pending_docs.data),
+                    "urgent_count": len(urgent_docs),
+                    "urgency": "high" if len(urgent_docs) > 0 else "medium"
+                },
+                "wins": {
+                    "status": "🟢",
+                    "recent_count": len(recent_wins.data),
+                    "streak": len(recent_wins.data),
+                    "urgency": "low"
+                },
+                "relocation": {
+                    "status": "🟡",
+                    "pending_tasks": len(relocation_tasks.data),
+                    "critical_count": len(critical_relocation),
+                    "next_deadline": "2026-08-31",
+                    "urgency": "high" if len(critical_relocation) > 0 else "medium"
+                },
+                "alignment": {
+                    "status": "🟢" if alignment_score > 70 else "🟡",
+                    "score": alignment_score,
+                    "recommendation": "Prends un moment pour toi" if alignment_score < 50 else "Continue sur cette lancée",
+                    "urgency": "low"
+                }
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Erreur life_map: {e}")
+        return {"success": False, "error": str(e)}
