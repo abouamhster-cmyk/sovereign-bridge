@@ -882,6 +882,9 @@ def db_query(table: str, filters: Dict = None, limit: int = 100) -> Dict:
         return {"success": False, "data": [], "error": str(e)}
 
 
+
+
+
 async def db_insert(table: str, data: Dict) -> Dict:
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
@@ -920,147 +923,67 @@ async def db_insert(table: str, data: Dict) -> Dict:
                 clean_data[key] = value[:500]
         
         logger.info(f"📝 Insert dans {table}: {clean_data}")
+        
+        # Exécuter l'insertion
         result = supabase.table(table).insert(clean_data).execute()
-
-         # Déclencher webhook pour les événements importants
-        if result["success"] and result["data"]:
+        
+        # Extraire les données correctement (Supabase retourne un objet avec attribut 'data')
+        if hasattr(result, 'data'):
+            result_data = result.data
+        else:
+            result_data = result
+        
+        # Vérifier que result_data est une liste non vide
+        if result_data and isinstance(result_data, list) and len(result_data) > 0:
+            inserted_item = result_data[0]
+            
+            # Déclencher webhook pour les événements importants
             if table == "tasks":
                 asyncio.create_task(trigger_webhook("task.created", {
-                    "task": result["data"],
+                    "task": inserted_item,
                     "timestamp": datetime.now().isoformat()
                 }))
+                
+                # Synchronisation Google Calendar pour les tâches
+                logger.info(f"🔍 DEBUG - sync_calendar = {inserted_item.get('sync_calendar')}")
+                logger.info(f"🔍 DEBUG - due_date = {inserted_item.get('due_date')}")
+                
+                if inserted_item.get("sync_calendar") and inserted_item.get("due_date"):
+                    logger.info(f"📅 Tentative de sync pour tâche {inserted_item['id']}")
+                    try:
+                        event = await create_calendar_event(CalendarEventRequest(
+                            summary=inserted_item.get("title"),
+                            description=f"Tâche Sovereign - Priority: {inserted_item.get('priority', 'normal')}",
+                            start_datetime=f"{inserted_item['due_date']}T09:00:00",
+                            end_datetime=f"{inserted_item['due_date']}T10:00:00"
+                        ))
+                        
+                        if event.get("success"):
+                            supabase.table("tasks").update({
+                                "calendar_event_id": event["event_id"],
+                                "calendar_synced": True,
+                                "calendar_link": event["link"]
+                            }).eq("id", inserted_item["id"]).execute()
+                            logger.info(f"📅 Tâche {inserted_item['id']} synchronisée avec Google Calendar")
+                    except Exception as e:
+                        logger.error(f"❌ Erreur sync calendrier: {e}")
+            
             elif table == "wins":
                 asyncio.create_task(trigger_webhook("win.added", {
-                    "win": result["data"],
+                    "win": inserted_item,
                     "timestamp": datetime.now().isoformat()
                 }))
             elif table == "missions":
                 asyncio.create_task(trigger_webhook("mission.created", {
-                    "mission": result["data"],
+                    "mission": inserted_item,
                     "timestamp": datetime.now().isoformat()
                 }))
-        # ========================================
-
-                # Synchronisation Google Calendar pour les tâches
-        if table == "tasks" and result["success"] and result["data"]:
-            task = result["data"][0] if isinstance(result["data"], list) else result["data"]
-            # Vérifier si synchro calendrier activée ET date présente
-            if task.get("sync_calendar") and task.get("due_date"):
-                try:
-                    event = await create_calendar_event(CalendarEventRequest(
-                        summary=task.get("title"),
-                        description=f"Tâche Sovereign - Priority: {task.get('priority', 'normal')}",
-                        start_datetime=f"{task['due_date']}T09:00:00",
-                        end_datetime=f"{task['due_date']}T10:00:00"
-                    ))
-                    
-                    if event.get("success"):
-                        supabase.table("tasks").update({
-                            "calendar_event_id": event["event_id"],
-                            "calendar_synced": True,
-                            "calendar_link": event["link"]
-                        }).eq("id", task["id"]).execute()
-                        logger.info(f"📅 Tâche {task['id']} synchronisée avec Google Calendar")
-                except Exception as e:
-                    logger.error(f"❌ Erreur sync calendrier: {e}")
-
         
-        return {"success": True, "data": result.data[0] if result.data else None}
+        return {"success": True, "data": result_data[0] if result_data and len(result_data) > 0 else None}
+        
     except Exception as e:
         logger.error(f"Erreur insert {table}: {e}")
         return {"success": False, "error": str(e)}
-
-
-def db_update(table: str, id: str, data: Dict) -> Dict:
-    if not supabase:
-        return {"success": False, "error": "Supabase non configuré"}
-    
-    try:
-        allowed = ALLOWED_FIELDS.get(table, [])
-        clean_data = {k: v for k, v in data.items() if k in allowed}
-        result = supabase.table(table).update(clean_data).eq("id", id).execute()
-
-       # Webhook pour mission complétée
-        if result["success"] and result["data"] and table == "missions":
-            if clean_data.get("status") == "complete":
-                asyncio.create_task(trigger_webhook("mission.completed", {
-                    "mission": result["data"],
-                    "timestamp": datetime.now().isoformat()
-                }))
-
-        
-        return {"success": True, "data": result.data[0] if result.data else None}
-    except Exception as e:
-        logger.error(f"Erreur update {table}: {e}")
-        return {"success": False, "error": str(e)}
-
-
-def db_delete(table: str, id: str) -> Dict:
-    if not supabase:
-        return {"success": False, "error": "Supabase non configuré"}
-    
-    try:
-        supabase.table(table).delete().eq("id", id).execute()
-        return {"success": True}
-    except Exception as e:
-        logger.error(f"Erreur delete {table}: {e}")
-        return {"success": False, "error": str(e)}
-
-
-# =====================================================
-# BUSINESS LOGIC FUNCTIONS (EXISTANT)
-# =====================================================
-
-def get_financial_summary() -> Dict:
-    if not supabase:
-        return {"total_revenue": 0, "total_spending": 0, "net_balance": 0}
-    
-    try:
-        rev_result = supabase.table("revenue").select("amount").execute()
-        total_revenue = sum(r.get("amount", 0) for r in rev_result.data)
-        
-        spend_result = supabase.table("spending").select("amount").execute()
-        total_spending = sum(s.get("amount", 0) for s in spend_result.data)
-        
-        return {
-            "total_revenue": total_revenue,
-            "total_spending": total_spending,
-            "net_balance": total_revenue - total_spending,
-            "currency": "XOF"
-        }
-    except Exception as e:
-        logger.error(f"Erreur financial_summary: {e}")
-        return {"total_revenue": 0, "total_spending": 0, "net_balance": 0}
-
-
-def get_priority_tasks(limit: int = 10) -> List[Dict]:
-    if not supabase:
-        return []
-    
-    try:
-        result = supabase.table("tasks").select("*").eq("status", "in_progress").limit(limit).execute()
-        return result.data if result.data else []
-    except Exception as e:
-        logger.error(f"Erreur priority_tasks: {e}")
-        return []
-
-
-def store_chat_session(user_message: str, assistant_response: str, tools_used: List[str] = None):
-    if not supabase:
-        return
-    
-    try:
-        supabase.table("chat_sessions").insert({
-            "user_message": user_message[:500],
-            "assistant_response": assistant_response[:1000],
-            "tools_used": tools_used or [],
-            "user_id": "rebecca"
-        }).execute()
-        logger.info("💾 Conversation stockée")
-    except Exception as e:
-        logger.error(f"Erreur store_chat: {e}")
-
-
 # =====================================================
 # SYSTEM PROMPT AMÉLIORÉ AVEC CONTEXTE DYNAMIQUE
 # =====================================================
