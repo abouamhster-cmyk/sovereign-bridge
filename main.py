@@ -3716,3 +3716,40 @@ async def speak_text(request: Dict[str, Any]):
     except Exception as e:
         logger.error(f"Erreur ElevenLabs: {e}")
         return {"success": False, "error": str(e)}
+
+
+# =====================================================
+# MICROSOFT EDGE TTS (gratuit, sans carte bancaire)
+# =====================================================
+
+EDGE_TTS_TOKEN = "6A5AA1D4EAFF4E9FB37E23D68491D6F4"
+
+@app.post("/api/voice/edge-speak")
+async def edge_speak_text(request: Dict[str, Any]):
+    """Convertit un texte en audio avec Microsoft Edge TTS"""
+    text = request.get("text", "")
+    if not text:
+        return {"success": False, "error": "Texte requis"}
+    
+    voice = request.get("voice", "fr-FR-DeniseNeural")
+    
+    try:
+        import urllib.parse
+        encoded_text = urllib.parse.quote(text)
+        
+        url = f"https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken={EDGE_TTS_TOKEN}&Voice={voice}&Text={encoded_text}"
+        
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            response = await client.get(url, timeout=30.0)
+            
+            if response.status_code == 200:
+                import base64
+                audio_base64 = base64.b64encode(response.content).decode('utf-8')
+                return {"success": True, "audio": audio_base64, "format": "mp3", "voice": voice}
+            else:
+                logger.error(f"Erreur Edge TTS: {response.status_code}")
+                return {"success": False, "error": f"Erreur {response.status_code}"}
+                
+    except Exception as e:
+        logger.error(f"Erreur Edge TTS: {e}")
+        return {"success": False, "error": str(e)}
