@@ -3865,3 +3865,9 @@ async def send_morning_brief():
     except Exception as e:
         logger.error(f"Erreur résumé matinal: {e}")
         return {"success": False, "error": str(e)}
+
+
+@app.post("/api/proactive/test-morning-brief")
+async def test_morning_brief():
+    """Endpoint de test pour le résumé matinal (sans cron)"""
+    return await send_morning_brief()
