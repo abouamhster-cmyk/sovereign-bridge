@@ -4612,3 +4612,124 @@ def _get_evening_advice(completed: int, pending: int, overdue: int) -> str:
         return f"Tu as accompli {completed} tâche(s). Chaque pas compte. Demain, continue sur cette lancée."
     else:
         return "Parfois, se reposer est la meilleure action. Demain sera plus clair."
+
+
+
+
+
+# =====================================================
+# PROACTIF - RAPPELS INTELLIGENTS
+# =====================================================
+
+@app.post("/api/proactive/smart-reminders")
+async def smart_reminders():
+    """
+    Analyse l'historique et propose des actions intelligentes.
+    À appeler par cron-job.org tous les matins à 8h30.
+    """
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        today = datetime.now().date().isoformat()
+        week_ago = (datetime.now().date() - timedelta(days=7)).isoformat()
+        
+        # 1. Analyser les tâches récurrentes oubliées
+        # Tâches qui apparaissent souvent mais rarement terminées
+        task_titles = supabase.table("tasks").select("title, status").execute()
+        task_count = {}
+        for task in task_titles.data:
+            title = task["title"]
+            if title not in task_count:
+                task_count[title] = {"total": 0, "done": 0}
+            task_count[title]["total"] += 1
+            if task.get("status") == "done":
+                task_count[title]["done"] += 1
+        
+        forgotten_tasks = []
+        for title, stats in task_count.items():
+            if stats["total"] >= 3 and stats["done"] == 0:
+                forgotten_tasks.append(title)
+        
+        # 2. Vérifier les missions sans activité
+        stale_missions = supabase.table("missions").select("*").eq("status", "active").execute()
+        stale_list = []
+        for mission in stale_missions.data:
+            updated_at = mission.get("updated_at")
+            if updated_at and updated_at < week_ago:
+                stale_list.append(mission["name"])
+        
+        # 3. Vérifier les documents qui traînent
+        pending_docs = supabase.table("documents").select("*").eq("status", "draft").execute()
+        
+        # 4. Vérifier les opportunités non suivies
+        pending_opps = supabase.table("opportunities").select("*").neq("stage", "won").neq("stage", "lost").execute()
+        high_value_opps = [o for o in pending_opps.data if o.get("estimated_value", 0) > 1000000]
+        
+        # Construire les suggestions
+        suggestions = []
+        
+        if forgotten_tasks:
+            suggestions.append(f"📋 **Tâches récurrentes à faire** : {', '.join(forgotten_tasks[:3])}")
+        
+        if stale_list:
+            suggestions.append(f"🎯 **Missions sans activité récente** : {', '.join(stale_list[:3])}")
+        
+        if pending_docs.data:
+            suggestions.append(f"📄 **Documents en brouillon** : {len(pending_docs.data)} document(s) à finaliser")
+        
+        if high_value_opps:
+            total_value = sum(o.get("estimated_value", 0) for o in high_value_opps)
+            suggestions.append(f"💰 **Opportunités à suivre** : {len(high_value_opps)} opportunité(s) - {total_value:,.0f} CFA potentiel")
+        
+        if not suggestions:
+            suggestions = ["✅ Rien d'urgent à signaler. Bonne journée !"]
+        
+        # Construire le message
+        message = f"""🔔 **Rappels intelligents - {datetime.now().strftime('%A %d %B %Y')}**
+
+{chr(10).join(suggestions)}
+
+---
+
+💡 **Une action aujourd'hui ?** 
+Réponds-moi directement ou clique sur une suggestion pour que je t'aide.
+"""
+        
+        # Envoyer notification push
+        push_sent = False
+        try:
+            send_notification_sync({
+                "title": "🔔 Rappels intelligents",
+                "body": suggestions[0][:50],
+                "url": "/chat",
+                "type": "task",
+                "requireInteraction": False
+            })
+            push_sent = True
+            logger.info("🔔 Notification push rappels intelligents envoyée")
+        except Exception as e:
+            logger.error(f"Erreur envoi push rappels: {e}")
+        
+        return {
+            "success": True,
+            "message": "Rappels intelligents envoyés",
+            "suggestions": suggestions,
+            "stats": {
+                "forgotten_tasks": len(forgotten_tasks),
+                "stale_missions": len(stale_list),
+                "pending_docs": len(pending_docs.data),
+                "high_value_opps": len(high_value_opps)
+            },
+            "push_sent": push_sent
+        }
+        
+    except Exception as e:
+        logger.error(f"Erreur rappels intelligents: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/proactive/test-smart-reminders")
+async def test_smart_reminders():
+    """Endpoint de test pour les rappels intelligents"""
+    return await smart_reminders()
