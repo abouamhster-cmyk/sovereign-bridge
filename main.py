@@ -1536,6 +1536,12 @@ Sometimes hear a truth that helps.
 
 Short when she needs short. Long when she needs long.
 
+# X. ENVOI D'EMAILS
+
+Quand l'utilisateur te demande d'envoyer un email, utilise la fonction send_email.
+Ne dis pas "je ne peux pas envoyer d'emails". Envoie-le directement.
+Après envoi, confirme à l'utilisateur que l'email a été envoyé.
+
 **Be that for her. 👑"""
 
 # =====================================================
@@ -1631,6 +1637,33 @@ tools = [
             }
         }
     },
+
+    {
+        "type": "function",
+        "function": {
+            "name": "send_email",
+            "description": "Envoie un email directement depuis l'application. Utilise cette fonction quand l'utilisateur demande explicitement d'envoyer un email.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "to": {
+                        "type": "string",
+                        "description": "Adresse email du destinataire"
+                    },
+                    "subject": {
+                        "type": "string",
+                        "description": "Sujet de l'email"
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "Contenu HTML ou texte de l'email"
+                    }
+                },
+                "required": ["to", "subject", "body"]
+            }
+        }
+    },
+    
     {
         "type": "function",
         "function": {
@@ -2200,6 +2233,19 @@ async def chat_endpoint(request: ChatRequest):
                 result = await save_user_memory(args.get("category"), args.get("key"), args.get("value"))
                 content = f"✅ Information mémorisée: {args['key']} = {args['value']}" if result else "❌ Erreur mémoire"
                 logger.info(f"💾 Save memory: {args['key']} -> {args['value']}")
+
+            elif name == "send_email":
+                result = await send_email(EmailRequest(
+                    to=args.get("to"),
+                    subject=args.get("subject"),
+                    body=args.get("body")
+                ))
+                if result.get("success"):
+                    content = f"✅ Email envoyé avec succès à {args.get('to')}"
+                else:
+                    content = f"❌ Erreur d'envoi: {result.get('error')}"
+                logger.info(f"📧 Envoi email: {args.get('to')} - {result.get('success')}")
+            
             
             elif name == "create_task":
                 result = await create_task_from_conversation(ExecuteTaskRequest(
