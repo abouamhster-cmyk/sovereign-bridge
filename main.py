@@ -4475,28 +4475,119 @@ async def execute_batch_actions(actions: List[ExecutorAction], auto_confirm: boo
     
     return {"success": True, "results": results}
 
-@app.post("/api/proactive/test-planning")
-async def test_planning():
-    """Endpoint de test pour le planning automatique"""
-    return await daily_planning()
+
+
+
+# =====================================================
+# PROACTIF - RÉSUMÉ DE LA JOURNÉE (SOIR)
+# =====================================================
+
+@app.post("/api/proactive/evening-summary")
+async def send_evening_summary():
+    """
+    Envoie un résumé de la journée le soir (vers 19h).
+    Inclut : tâches complétées, tâches restantes, victoires, conseil.
+    """
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
     
+    try:
+        today = datetime.now().date().isoformat()
+        
+        # Tâches complétées aujourd'hui
+        completed_tasks = supabase.table("tasks").select("*").eq("status", "done").gte("updated_at", today).execute()
+        
+        # Tâches créées aujourd'hui non terminées
+        pending_tasks = supabase.table("tasks").select("*").gte("created_at", today).neq("status", "done").execute()
+        
+        # Tâches en retard
+        overdue_tasks = supabase.table("tasks").select("*").lt("due_date", today).neq("status", "done").execute()
+        
+        # Victoires d'aujourd'hui
+        wins_today = supabase.table("wins").select("*").gte("date", today).execute()
+        
+        # Humeur du jour
+        mood_today = supabase.table("mood_entries").select("*").eq("date", today).execute()
+        
+        # Construire le message
+        mood_text = ""
+        if mood_today.data and mood_today.data[0].get("mood"):
+            mood_map = {
+                "excellent": "🌟 Excellente",
+                "bien": "😊 Bonne",
+                "neutre": "😐 Neutre",
+                "fatiguée": "😴 Fatiguée",
+                "stressée": "😰 Stressée"
+            }
+            mood_text = f"\n😊 **Humeur du jour** : {mood_map.get(mood_today.data[0]['mood'], mood_today.data[0]['mood'])}"
+        
+        message = f"""🌙 **Bonsoir Rebecca ! Voici ton résumé de la journée**
 
-@app.post("/api/proactive/test-opportunities")
-async def test_opportunities():
-    """Endpoint de test pour les opportunités"""
-    return await check_opportunities_alert()
+📅 **{datetime.now().strftime('%A %d %B %Y')}**
+{mood_text}
 
+---
 
-@app.post("/api/proactive/test-stale-missions")
-async def test_stale_missions():
-    """Endpoint de test pour les missions inactives"""
-    return await check_stale_missions()
-    
+✅ **Ce que tu as accompli aujourd'hui** : {len(completed_tasks.data)}
+{chr(10).join([f'• {t["title"]}' for t in completed_tasks.data[:5]]) if completed_tasks.data else '• Rien de terminé aujourd'hui'}
 
-@app.post("/api/proactive/test-morning-brief")
-async def test_morning_brief():
-    """Endpoint de test pour le résumé matinal (sans cron)"""
-    return await send_morning_brief()
+📋 **Tâches restantes** : {len(pending_tasks.data)}
+{chr(10).join([f'• {t["title"]}' for t in pending_tasks.data[:3]]) if pending_tasks.data else '• Tout est fait !'}
 
+⚠️ **Tâches en retard** : {len(overdue_tasks.data)}
+{chr(10).join([f'• {t["title"]}' for t in overdue_tasks.data[:3]]) if overdue_tasks.data else '• Aucune tâche en retard'}
 
+🏆 **Victoires du jour** : {len(wins_today.data)}
+{chr(10).join([f'• {w["title"]} {w.get("celebration_emoji", "🎉")}' for w in wins_today.data[:3]]) if wins_today.data else '• Aucune victoire enregistrée'}
 
+---
+
+💡 **Conseil de Becks** : 
+{_get_evening_advice(len(completed_tasks.data), len(pending_tasks.data), len(overdue_tasks.data))}
+
+Passe une bonne soirée, repose-toi bien. Demain est un nouveau jour. 👑
+"""
+
+        # Envoyer notification push
+        push_sent = False
+        try:
+            send_notification_sync({
+                "title": "🌙 Résumé de ta journée",
+                "body": f"{len(completed_tasks.data)} tâches accomplies, {len(wins_today.data)} victoires",
+                "url": "/tasks",
+                "type": "brief",
+                "requireInteraction": False
+            })
+            push_sent = True
+            logger.info("🔔 Notification push résumé soir envoyée")
+        except Exception as e:
+            logger.error(f"Erreur envoi push résumé soir: {e}")
+        
+        return {
+            "success": True,
+            "message": "Résumé de la journée envoyé",
+            "stats": {
+                "completed_tasks": len(completed_tasks.data),
+                "pending_tasks": len(pending_tasks.data),
+                "overdue_tasks": len(overdue_tasks.data),
+                "wins_today": len(wins_today.data)
+            },
+            "push_sent": push_sent
+        }
+        
+    except Exception as e:
+        logger.error(f"Erreur résumé soir: {e}")
+        return {"success": False, "error": str(e)}
+
+def _get_evening_advice(completed: int, pending: int, overdue: int) -> str:
+    """Génère un conseil personnalisé pour le soir"""
+    if overdue > 0:
+        return "Des tâches sont en retard. Demain matin, attaque la plus urgente en premier. Je te rappellerai."
+    elif pending > 0 and completed == 0:
+        return "Tu n'as rien terminé aujourd'hui. Ce n'est pas grave. Demain, concentre-toi sur UNE seule petite tâche."
+    elif completed >= 3:
+        return "Belle journée ! Tu as bien avancé. Repose-toi, tu as mérité cette soirée."
+    elif completed > 0:
+        return f"Tu as accompli {completed} tâche(s). Chaque pas compte. Demain, continue sur cette lancée."
+    else:
+        return "Parfois, se reposer est la meilleure action. Demain sera plus clair."
