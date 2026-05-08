@@ -3977,6 +3977,150 @@ Becks reste à ta disposition pour t'aider. 👑
         return {"success": False, "error": str(e)}
 
 
+
+
+# =====================================================
+# PROACTIF - DÉTECTION D'OPPORTUNITÉS
+# =====================================================
+
+@app.post("/api/proactive/opportunities-alert")
+async def check_opportunities_alert():
+    """
+    Vérifie les grants et contrats proches de l'échéance (≤ 7 jours)
+    et envoie des alertes.
+    À appeler par cron-job.org toutes les 12h.
+    """
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        today = datetime.now().date()
+        next_week = today + timedelta(days=7)
+        today_iso = today.isoformat()
+        next_week_iso = next_week.isoformat()
+        
+        # Récupérer les grants proches de l'échéance
+        grants = supabase.table("lf_grants").select("*").gte("deadline", today_iso).lte("deadline", next_week_iso).execute()
+        
+        # Récupérer les contrats proches de l'échéance
+        contracts = supabase.table("lf_contracts").select("*").gte("deadline", today_iso).lte("deadline", next_week_iso).execute()
+        
+        # Récupérer les opportunités générales
+        opportunities = supabase.table("opportunities").select("*").gte("deadline", today_iso).lte("deadline", next_week_iso).neq("stage", "won").execute()
+        
+        all_items = []
+        
+        for grant in grants.data:
+            all_items.append({
+                "type": "grant",
+                "title": grant.get("title"),
+                "deadline": grant.get("deadline"),
+                "agency": grant.get("agency"),
+                "amount": grant.get("amount")
+            })
+        
+        for contract in contracts.data:
+            all_items.append({
+                "type": "contract",
+                "title": contract.get("title"),
+                "deadline": contract.get("deadline"),
+                "agency": contract.get("agency")
+            })
+        
+        for opp in opportunities.data:
+            all_items.append({
+                "type": "opportunity",
+                "title": opp.get("title"),
+                "deadline": opp.get("deadline"),
+                "estimated_value": opp.get("estimated_value")
+            })
+        
+        if not all_items:
+            return {"success": True, "message": "Aucune opportunité proche", "opportunities": []}
+        
+        # Construire le message
+        items_by_day = {}
+        for item in all_items:
+            day = item["deadline"]
+            if day not in items_by_day:
+                items_by_day[day] = []
+            items_by_day[day].append(item)
+        
+        message = f"""💰 **Alerte - Opportunités à saisir**
+
+{len(all_items)} opportunité(s) approchent de leur échéance dans les 7 jours :
+
+"""
+        for day, items in sorted(items_by_day.items()):
+            message += f"\n📅 **{day}** :\n"
+            for item in items:
+                if item["type"] == "grant":
+                    message += f"   • 🎯 Grant: {item['title']} ({item.get('agency', 'N/A')}) - {item.get('amount', 0):,} CFA\n"
+                elif item["type"] == "contract":
+                    message += f"   • 📑 Contrat: {item['title']} ({item.get('agency', 'N/A')})\n"
+                else:
+                    message += f"   • 💼 Opportunité: {item['title']} - {item.get('estimated_value', 0):,} CFA\n"
+        
+        message += """
+
+⚡ **Action recommandée** :
+- Prépare les dossiers rapidement
+- Programme des rappels pour ne rien oublier
+- Contacte les parties prenantes dès aujourd'hui
+
+Becks peut t'aider à préparer les documents. 👑
+"""
+        
+        # Envoyer un email
+        email_sent = False
+        if BREVO_API_KEY:
+            try:
+                user_email = "rebecca@sovereign.com"  # À remplacer
+                email_body = message.replace("\n", "<br>")
+                await send_email(EmailRequest(
+                    to=user_email,
+                    subject=f"💰 {len(all_items)} opportunité(s) à saisir - Sovereign",
+                    body=email_body
+                ))
+                email_sent = True
+                logger.info(f"📧 Email opportunités envoyé ({len(all_items)} opportunités)")
+            except Exception as e:
+                logger.error(f"Erreur envoi email opportunités: {e}")
+        
+        # Envoyer une notification push
+        push_sent = False
+        try:
+            send_notification_sync({
+                "title": "💰 Opportunités à saisir",
+                "body": f"{len(all_items)} opportunité(s) approchent de leur échéance",
+                "url": "/love-fire-sport",
+                "type": "money",
+                "requireInteraction": True
+            })
+            push_sent = True
+            logger.info("🔔 Notification push opportunités envoyée")
+        except Exception as e:
+            logger.error(f"Erreur envoi push opportunités: {e}")
+        
+        return {
+            "success": True,
+            "message": f"{len(all_items)} opportunité(s) détectée(s)",
+            "opportunities": all_items,
+            "email_sent": email_sent,
+            "push_sent": push_sent
+        }
+        
+    except Exception as e:
+        logger.error(f"Erreur check opportunities: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/proactive/test-opportunities")
+async def test_opportunities():
+    """Endpoint de test pour les opportunités"""
+    return await check_opportunities_alert()
+
+
 @app.post("/api/proactive/test-stale-missions")
 async def test_stale_missions():
     """Endpoint de test pour les missions inactives"""
