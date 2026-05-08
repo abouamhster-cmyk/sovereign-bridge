@@ -3664,3 +3664,55 @@ async def clean_expired_subscriptions():
     except Exception as e:
         logger.error(f"Erreur nettoyage: {e}")
         return {"success": False, "error": str(e)}
+
+
+
+# =====================================================
+# VOIX LIVE AVEC ELEVENLABS
+# =====================================================
+
+ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
+ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")
+
+@app.post("/api/voice/speak")
+async def speak_text(request: Dict[str, Any]):
+    """Convertit un texte en audio avec ElevenLabs"""
+    text = request.get("text", "")
+    if not text:
+        return {"success": False, "error": "Texte requis"}
+    
+    if not ELEVENLABS_API_KEY:
+        logger.warning("⚠️ ElevenLabs non configuré")
+        return {"success": False, "error": "ElevenLabs non configuré"}
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}",
+                headers={
+                    "xi-api-key": ELEVENLABS_API_KEY,
+                    "Content-Type": "application/json",
+                    "Accept": "audio/mpeg"
+                },
+                json={
+                    "text": text,
+                    "model_id": "eleven_monolingual_v1",
+                    "voice_settings": {
+                        "stability": 0.5,
+                        "similarity_boost": 0.75
+                    }
+                },
+                timeout=30.0
+            )
+            
+            if response.status_code == 200:
+                import base64
+                audio_base64 = base64.b64encode(response.content).decode('utf-8')
+                return {"success": True, "audio": audio_base64, "format": "mp3"}
+            else:
+                logger.error(f"Erreur ElevenLabs: {response.text}")
+                return {"success": False, "error": response.text}
+                
+    except Exception as e:
+        logger.error(f"Erreur ElevenLabs: {e}")
+        return {"success": False, "error": str(e)}
