@@ -3867,6 +3867,122 @@ async def send_morning_brief():
         return {"success": False, "error": str(e)}
 
 
+
+# =====================================================
+# PROACTIF - VEILLE SUR PROJETS INACTIFS
+# =====================================================
+
+@app.post("/api/proactive/stale-missions")
+async def check_stale_missions():
+    """
+    Vérifie les missions inactives (pas de mise à jour depuis 5 jours)
+    et envoie des alertes par email et notification push.
+    À appeler par cron-job.org toutes les 6h.
+    """
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        # Récupérer les missions actives
+        active_missions = supabase.table("missions").select("*").eq("status", "active").execute()
+        
+        if not active_missions.data:
+            return {"success": True, "message": "Aucune mission active", "stale_missions": []}
+        
+        # Calculer la date limite (5 jours)
+        five_days_ago = (datetime.now() - timedelta(days=5)).isoformat()
+        
+        # Filtrer les missions inactives
+        stale_missions = []
+        for mission in active_missions.data:
+            updated_at = mission.get("updated_at")
+            if updated_at and updated_at < five_days_ago:
+                stale_missions.append(mission)
+            elif not updated_at:
+                # Si jamais mise à jour, vérifier created_at
+                created_at = mission.get("created_at")
+                if created_at and created_at < five_days_ago:
+                    stale_missions.append(mission)
+        
+        if not stale_missions:
+            return {"success": True, "message": "Aucune mission inactive", "stale_missions": []}
+        
+        # Construire le message
+        mission_list = "\n".join([f"• {m['name']} (dernière activité: {m.get('updated_at', m.get('created_at', 'inconnue'))[:10]})" for m in stale_missions])
+        
+        message = f"""⚠️ **Alerte - Missions inactives**
+
+{len(stale_missions)} mission(s) n'ont pas eu d'activité depuis plus de 5 jours :
+
+{mission_list}
+
+---
+
+🎯 **Action recommandée** :
+- Fais le point sur l'avancement de ces missions
+- Mets à jour leur statut ou priorité
+- Si terminées, passe-les en "complete"
+
+Becks reste à ta disposition pour t'aider. 👑
+"""
+        
+        # Envoyer un email
+        email_sent = False
+        if BREVO_API_KEY:
+            try:
+                user_email = "jbillcataria@gmail.com"   
+                email_body = message.replace("\n", "<br>")
+                await send_email(EmailRequest(
+                    to=user_email,
+                    subject=f"⚠️ {len(stale_missions)} mission(s) inactive(s) - Sovereign",
+                    body=email_body
+                ))
+                email_sent = True
+                logger.info(f"📧 Email missions inactives envoyé ({len(stale_missions)} missions)")
+            except Exception as e:
+                logger.error(f"Erreur envoi email missions inactives: {e}")
+        
+        # Envoyer une notification push
+        push_sent = False
+        try:
+            send_notification_sync({
+                "title": "⚠️ Missions inactives",
+                "body": f"{len(stale_missions)} mission(s) sans activité depuis 5 jours",
+                "url": "/missions",
+                "type": "mission",
+                "requireInteraction": True
+            })
+            push_sent = True
+            logger.info("🔔 Notification push missions inactives envoyée")
+        except Exception as e:
+            logger.error(f"Erreur envoi push missions inactives: {e}")
+        
+        return {
+            "success": True,
+            "message": f"{len(stale_missions)} mission(s) inactive(s) signalée(s)",
+            "stale_missions": [
+                {
+                    "id": m["id"],
+                    "name": m["name"],
+                    "last_activity": m.get("updated_at", m.get("created_at"))
+                }
+                for m in stale_missions
+            ],
+            "email_sent": email_sent,
+            "push_sent": push_sent
+        }
+        
+    except Exception as e:
+        logger.error(f"Erreur check stale missions: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/proactive/test-stale-missions")
+async def test_stale_missions():
+    """Endpoint de test pour les missions inactives"""
+    return await check_stale_missions()
+    
+
 @app.post("/api/proactive/test-morning-brief")
 async def test_morning_brief():
     """Endpoint de test pour le résumé matinal (sans cron)"""
