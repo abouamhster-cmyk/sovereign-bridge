@@ -4478,10 +4478,6 @@ async def execute_batch_actions(actions: List[ExecutorAction], auto_confirm: boo
 
 
 
-# =====================================================
-# PROACTIF - RÉSUMÉ DE LA JOURNÉE (SOIR)
-# =====================================================
-
 @app.post("/api/proactive/evening-summary")
 async def send_evening_summary():
     """
@@ -4510,6 +4506,35 @@ async def send_evening_summary():
         mood_today = supabase.table("mood_entries").select("*").eq("date", today).execute()
         
         # Construire le message
+        completed_list = ""
+        if completed_tasks.data:
+            for t in completed_tasks.data[:5]:
+                completed_list += f"\n• {t['title']}"
+        else:
+            completed_list = "\n• Rien de terminé aujourd'hui"
+        
+        pending_list = ""
+        if pending_tasks.data:
+            for t in pending_tasks.data[:3]:
+                pending_list += f"\n• {t['title']}"
+        else:
+            pending_list = "\n• Tout est fait !"
+        
+        overdue_list = ""
+        if overdue_tasks.data:
+            for t in overdue_tasks.data[:3]:
+                overdue_list += f"\n• {t['title']}"
+        else:
+            overdue_list = "\n• Aucune tâche en retard"
+        
+        wins_list = ""
+        if wins_today.data:
+            for w in wins_today.data[:3]:
+                wins_list += f"\n• {w['title']} {w.get('celebration_emoji', '🎉')}"
+        else:
+            wins_list = "\n• Aucune victoire enregistrée"
+        
+        # Message d'humeur
         mood_text = ""
         if mood_today.data and mood_today.data[0].get("mood"):
             mood_map = {
@@ -4519,26 +4544,22 @@ async def send_evening_summary():
                 "fatiguée": "😴 Fatiguée",
                 "stressée": "😰 Stressée"
             }
-            mood_text = f"\n😊 **Humeur du jour** : {mood_map.get(mood_today.data[0]['mood'], mood_today.data[0]['mood'])}"
+            mood_text = f"\n\n😊 **Humeur du jour** : {mood_map.get(mood_today.data[0]['mood'], mood_today.data[0]['mood'])}"
         
+        # Construire le message final
         message = f"""🌙 **Bonsoir Rebecca ! Voici ton résumé de la journée**
 
-📅 **{datetime.now().strftime('%A %d %B %Y')}**
-{mood_text}
+📅 **{datetime.now().strftime('%A %d %B %Y')}**{mood_text}
 
 ---
 
-✅ **Ce que tu as accompli aujourd'hui** : {len(completed_tasks.data)}
-{chr(10).join([f'• {t["title"]}' for t in completed_tasks.data[:5]]) if completed_tasks.data else '• Rien de terminé aujourd'hui'}
+✅ **Ce que tu as accompli aujourd'hui** : {len(completed_tasks.data)}{completed_list}
 
-📋 **Tâches restantes** : {len(pending_tasks.data)}
-{chr(10).join([f'• {t["title"]}' for t in pending_tasks.data[:3]]) if pending_tasks.data else '• Tout est fait !'}
+📋 **Tâches restantes** : {len(pending_tasks.data)}{pending_list}
 
-⚠️ **Tâches en retard** : {len(overdue_tasks.data)}
-{chr(10).join([f'• {t["title"]}' for t in overdue_tasks.data[:3]]) if overdue_tasks.data else '• Aucune tâche en retard'}
+⚠️ **Tâches en retard** : {len(overdue_tasks.data)}{overdue_list}
 
-🏆 **Victoires du jour** : {len(wins_today.data)}
-{chr(10).join([f'• {w["title"]} {w.get("celebration_emoji", "🎉")}' for w in wins_today.data[:3]]) if wins_today.data else '• Aucune victoire enregistrée'}
+🏆 **Victoires du jour** : {len(wins_today.data)}{wins_list}
 
 ---
 
