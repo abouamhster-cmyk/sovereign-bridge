@@ -226,16 +226,34 @@ def get_days_late(date_str: str) -> int:
     return max(0, delta.days)
 
 
+
+def store_chat_session(user_message: str, assistant_response: str, tools_used: List[str] = None):
+    """Stocke la session de chat dans Supabase"""
+    if not supabase:
+        return
+    
+    try:
+        supabase.table("chat_sessions").insert({
+            "user_message": user_message[:500],
+            "assistant_response": assistant_response[:1000],
+            "tools_used": tools_used or [],
+            "user_id": "rebecca",
+            "created_at": datetime.now().isoformat()
+        }).execute()
+        logger.info("💾 Conversation stockée")
+    except Exception as e:
+        logger.error(f"Erreur store_chat: {e}")
 # =====================================================
 # FONCTIONS POUR LA MÉMOIRE UTILISATEUR
 # =====================================================
 
 async def get_user_memory_context(user_id: str = "rebecca") -> str:
-    """Récupère la mémoire utilisateur pour l'injecter dans le prompt"""
+    """Récupère la mémoire utilisateur"""
     if not supabase:
         return ""
     
     try:
+        # Utiliser une requête différente si l'ID n'est pas un UUID
         result = supabase.table("user_memory").select("*").eq("user_id", user_id).execute()
         memories = result.data
         
@@ -896,17 +914,89 @@ async def db_insert(table: str, data: Dict) -> Dict:
         allowed = ALLOWED_FIELDS.get(table, ["title"])
         clean_data = {k: v for k, v in data.items() if k in allowed and v is not None and v != ""}
         
-        if table == "spending" and "title" in data:
-            smart_cat = get_smart_category(data.get("title", ""))
-            if smart_cat and "category" not in clean_data:
-                clean_data["category"] = smart_cat
-                logger.info(f"🧠 Mémoire utilisée: '{data['title']}' -> catégorie '{smart_cat}'")
+        # Mapping des catégories valides pour spending
+        valid_categories = ["materials", "construction", "labor", "livestock", "crops", "transport", "equipment", "other"]
         
-        if table == "spending" and "project" not in clean_data and "title" in data:
-            smart_project = get_smart_category(data.get("title", ""))
-            if smart_project and "project" not in clean_data:
-                clean_data["project"] = smart_project
-                logger.info(f"🧠 Mémoire utilisée: '{data['title']}' -> projet '{smart_project}'")
+        # Mapping automatique des catégories françaises vers les catégories valides
+        category_mapping = {
+            # Vers equipment
+            "matériel": "equipment",
+            "materiel": "equipment", 
+            "équipement": "equipment",
+            "outil": "equipment",
+            "outils": "equipment",
+            "machine": "equipment",
+            "machines": "equipment",
+            # Vers materials
+            "matériau": "materials",
+            "materiau": "materials",
+            "fourniture": "materials",
+            "fournitures": "materials",
+            "matière": "materials",
+            # Vers crops
+            "semence": "crops",
+            "semences": "crops",
+            "engrais": "crops",
+            "engrais": "crops",
+            "plantation": "crops",
+            # Vers livestock
+            "animal": "livestock",
+            "animaux": "livestock",
+            "aliment": "livestock",
+            "vaccin": "livestock",
+            # Vers construction
+            "construction": "construction",
+            "bâtiment": "construction",
+            "mur": "construction",
+            "clôture": "construction",
+            # Vers labor
+            "main d'oeuvre": "labor",
+            "main-d'oeuvre": "labor",
+            "salaire": "labor",
+            "salaires": "labor",
+            "main": "labor",
+            # Vers transport
+            "transport": "transport",
+            "livraison": "transport",
+            "essence": "transport",
+            "carburant": "transport"
+        }
+        
+        # ========== GESTION INTELLIGENTE DES CATÉGORIES POUR SPENDING ==========
+        if table == "spending":
+            # Utiliser la mémoire intelligente existante
+            if "title" in data:
+                smart_cat = get_smart_category(data.get("title", ""))
+                if smart_cat and "category" not in clean_data:
+                    clean_data["category"] = smart_cat
+                    logger.info(f"🧠 Mémoire utilisée: '{data['title']}' -> catégorie '{smart_cat}'")
+            
+            # Si une catégorie a été fournie, la valider/mapper
+            if "category" in clean_data:
+                category_value = clean_data["category"].lower()
+                
+                # Si la catégorie n'est pas valide, essayer de la mapper
+                if category_value not in valid_categories:
+                    mapped = None
+                    for key, value in category_mapping.items():
+                        if key in category_value:
+                            mapped = value
+                            break
+                    
+                    if mapped:
+                        clean_data["category"] = mapped
+                        logger.info(f"🔄 Catégorie mappée: '{category_value}' -> '{mapped}'")
+                    else:
+                        clean_data["category"] = "other"
+                        logger.info(f"⚠️ Catégorie inconnue '{category_value}' -> 'other'")
+            
+            # Gestion du projet
+            if "project" not in clean_data and "title" in data:
+                smart_project = get_smart_category(data.get("title", ""))
+                if smart_project and "project" not in clean_data:
+                    clean_data["project"] = smart_project
+                    logger.info(f"🧠 Mémoire utilisée: '{data['title']}' -> projet '{smart_project}'")
+        # =========================================================================
         
         if table == "missions" and "title" in data and "name" not in clean_data:
             clean_data["name"] = data["title"]
