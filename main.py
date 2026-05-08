@@ -597,6 +597,81 @@ async def process_document(file_url: str) -> str:
         return None
 
 
+
+
+def db_update(table: str, id: str, data: Dict) -> Dict:
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        allowed = ALLOWED_FIELDS.get(table, [])
+        clean_data = {k: v for k, v in data.items() if k in allowed}
+        result = supabase.table(table).update(clean_data).eq("id", id).execute()
+        
+        if hasattr(result, 'data'):
+            result_data = result.data
+        else:
+            result_data = result
+        
+        # Webhook pour mission complétée
+        if result_data and len(result_data) > 0 and table == "missions":
+            if clean_data.get("status") == "complete":
+                asyncio.create_task(trigger_webhook("mission.completed", {
+                    "mission": result_data[0] if isinstance(result_data, list) else result_data,
+                    "timestamp": datetime.now().isoformat()
+                }))
+        
+        return {"success": True, "data": result_data[0] if result_data and len(result_data) > 0 else None}
+    except Exception as e:
+        logger.error(f"Erreur update {table}: {e}")
+        return {"success": False, "error": str(e)}
+
+
+
+def db_delete(table: str, id: str) -> Dict:
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        supabase.table(table).delete().eq("id", id).execute()
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"Erreur delete {table}: {e}")
+        return {"success": False, "error": str(e)}
+
+
+def get_financial_summary() -> Dict:
+    if not supabase:
+        return {"total_revenue": 0, "total_spending": 0, "net_balance": 0}
+    
+    try:
+        rev_result = supabase.table("revenue").select("amount").execute()
+        total_revenue = sum(r.get("amount", 0) for r in rev_result.data)
+        
+        spend_result = supabase.table("spending").select("amount").execute()
+        total_spending = sum(s.get("amount", 0) for s in spend_result.data)
+        
+        return {
+            "total_revenue": total_revenue,
+            "total_spending": total_spending,
+            "net_balance": total_revenue - total_spending,
+            "currency": "XOF"
+        }
+    except Exception as e:
+        logger.error(f"Erreur financial_summary: {e}")
+        return {"total_revenue": 0, "total_spending": 0, "net_balance": 0}
+
+
+def get_priority_tasks(limit: int = 10) -> List[Dict]:
+    if not supabase:
+        return []
+    
+    try:
+        result = supabase.table("tasks").select("*").eq("status", "in_progress").limit(limit).execute()
+        return result.data if result.data else []
+    except Exception as e:
+        logger.error(f"Erreur priority_tasks: {e}")
+        return []
 # =====================================================
 # NOUVEAUX ENDPOINTS SPÉCIAUX
 # =====================================================
@@ -4260,35 +4335,52 @@ async def execute_batch_actions(actions: List[ExecutorAction], auto_confirm: boo
                     due_date=action.params.get("due_date"),
                     priority=action.params.get("priority", "normal")
                 ))
-                results.append({"action": "create_task", "success": result.get("success"), "data": result.get("task")})
+                results.append({
+                    "action": "create_task", 
+                    "success": result.get("success"), 
+                    "data": result.get("task")
+                })
             
             elif action.action_type == "send_email":
                 if auto_confirm or action.requires_confirmation == False:
+                    # Récupérer l'email de l'utilisateur depuis la config
+                    user_email = os.environ.get("USER_EMAIL", "rebecca@sovereign.com")
                     result = await send_email(EmailRequest(
-                        to=action.params.get("to"),
-                        subject=action.params.get("subject"),
-                        body=action.params.get("body")
+                        to=action.params.get("to", user_email),
+                        subject=action.params.get("subject", "Action Sovereign"),
+                        body=action.params.get("body", "")
                     ))
                     results.append({"action": "send_email", "success": result.get("success")})
                 else:
-                    results.append({"action": "send_email", "status": "pending_confirmation", "params": action.params})
+                    results.append({
+                        "action": "send_email", 
+                        "status": "pending_confirmation", 
+                        "params": action.params
+                    })
             
             elif action.action_type == "create_draft":
                 result = await create_draft({
                     "type": action.params.get("type", "email"),
-                    "context": action.params.get("context")
+                    "context": action.params.get("context", "")
                 })
-                results.append({"action": "create_draft", "success": result.get("success"), "data": result.get("draft")})
+                results.append({
+                    "action": "create_draft", 
+                    "success": result.get("success"), 
+                    "data": result.get("draft")
+                })
             
             elif action.action_type == "update_mission":
-                result = supabase.table("missions").update({
-                    "status": action.params.get("status"),
-                    "priority": action.params.get("priority")
-                }).eq("id", action.params.get("mission_id")).execute()
-                results.append({"action": "update_mission", "success": True})
+                mission_id = action.params.get("mission_id")
+                if mission_id:
+                    supabase.table("missions").update({
+                        "status": action.params.get("status"),
+                        "priority": action.params.get("priority")
+                    }).eq("id", mission_id).execute()
+                    results.append({"action": "update_mission", "success": True})
+                else:
+                    results.append({"action": "update_mission", "success": False, "error": "mission_id requis"})
             
             elif action.action_type == "create_subtasks":
-                parent_id = action.params.get("parent_task_id")
                 subtasks = action.params.get("subtasks", [])
                 created = []
                 for subtask in subtasks:
@@ -4297,15 +4389,35 @@ async def execute_batch_actions(actions: List[ExecutorAction], auto_confirm: boo
                         due_date=subtask.get("due_date"),
                         priority=subtask.get("priority", "normal")
                     ))
-                    created.append(task)
-                results.append({"action": "create_subtasks", "success": True, "created": len(created)})
+                    if task.get("success"):
+                        created.append(task.get("task"))
+                results.append({
+                    "action": "create_subtasks", 
+                    "success": len(created) > 0, 
+                    "created": len(created),
+                    "tasks": created
+                })
+            
+            elif action.action_type == "create_reminder":
+                result = await create_task_from_conversation(ExecuteTaskRequest(
+                    title=action.params.get("title", "Rappel"),
+                    due_date=action.params.get("due_date"),
+                    priority="normal"
+                ))
+                results.append({"action": "create_reminder", "success": result.get("success"), "task": result.get("task")})
+            
+            else:
+                results.append({
+                    "action": action.action_type, 
+                    "success": False, 
+                    "error": f"Type d'action inconnu: {action.action_type}"
+                })
         
         except Exception as e:
+            logger.error(f"Erreur executor action {action.action_type}: {e}")
             results.append({"action": action.action_type, "success": False, "error": str(e)})
     
     return {"success": True, "results": results}
-
-
 
 @app.post("/api/proactive/test-planning")
 async def test_planning():
