@@ -3753,3 +3753,115 @@ async def edge_speak_text(request: Dict[str, Any]):
     except Exception as e:
         logger.error(f"Erreur Edge TTS: {e}")
         return {"success": False, "error": str(e)}
+
+
+
+# =====================================================
+# PROACTIF - RÉSUMÉ MATINAL
+# =====================================================
+
+@app.post("/api/proactive/morning-brief")
+async def send_morning_brief():
+    """
+    Envoie un résumé matinal par email et notification push.
+    À appeler par cron-job.org tous les jours à 7h.
+    """
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        today = datetime.now().date().isoformat()
+        
+        # Récupérer les tâches du jour
+        tasks_today = supabase.table("tasks").select("*").eq("due_date", today).neq("status", "done").execute()
+        
+        # Récupérer les tâches en retard
+        overdue_tasks = supabase.table("tasks").select("*").lt("due_date", today).neq("status", "done").execute()
+        
+        # Récupérer les documents proches de l'échéance
+        next_week = (datetime.now().date() + timedelta(days=7)).isoformat()
+        expiring_docs = supabase.table("documents").select("*").gte("due_date", today).lte("due_date", next_week).neq("status", "approved").execute()
+        
+        # Récupérer les victoires récentes (7 derniers jours)
+        week_ago = (datetime.now().date() - timedelta(days=7)).isoformat()
+        recent_wins = supabase.table("wins").select("*").gte("date", week_ago).execute()
+        
+        # Récupérer les missions actives
+        active_missions = supabase.table("missions").select("*").eq("status", "active").execute()
+        
+        # Construire le message
+        message = f"""🌅 **Bonjour Rebecca ! Voici ton résumé matinal**
+
+📅 **{datetime.now().strftime('%A %d %B %Y')}**
+
+---
+
+📋 **Tâches du jour** : {len(tasks_today.data)}
+{chr(10).join([f'• {t["title"]}' for t in tasks_today.data[:5]]) if tasks_today.data else '• Aucune tâche planifiée'}
+
+⚠️ **Tâches en retard** : {len(overdue_tasks.data)}
+{chr(10).join([f'• {t["title"]}' for t in overdue_tasks.data[:3]]) if overdue_tasks.data else '• Aucune tâche en retard'}
+
+📄 **Documents à venir** : {len(expiring_docs.data)}
+{chr(10).join([f'• {d["name"]} ({d["due_date"]})' for d in expiring_docs.data[:3]]) if expiring_docs.data else '• Aucun document imminent'}
+
+🎯 **Missions actives** : {len(active_missions.data)}
+{chr(10).join([f'• {m["name"]}' for m in active_missions.data[:3]]) if active_missions.data else '• Aucune mission active'}
+
+🏆 **Victoires récentes** : {len(recent_wins.data)} cette semaine
+
+---
+
+💡 **Becks te conseille** : Concentre-toi sur les tâches prioritaires du jour. Une chose à la fois. Tu gères ! 👑
+"""
+        
+        # Envoyer un email (si Brevo configuré)
+        email_sent = False
+        if BREVO_API_KEY:
+            try:
+                # Récupérer l'email de l'utilisateur (à adapter)
+                user_email = "jbillcataria@gmail.com" 
+                
+                email_body = message.replace("\n", "<br>")
+                await send_email(EmailRequest(
+                    to=user_email,
+                    subject=f"🌅 Sovereign - Résumé matinal du {datetime.now().strftime('%d/%m/%Y')}",
+                    body=email_body
+                ))
+                email_sent = True
+                logger.info("📧 Résumé matinal envoyé par email")
+            except Exception as e:
+                logger.error(f"Erreur envoi email résumé: {e}")
+        
+        # Envoyer une notification push
+        push_sent = False
+        try:
+            send_notification_sync({
+                "title": "🌅 Bonjour Rebecca",
+                "body": f"{len(tasks_today.data)} tâches aujourd'hui, {len(overdue_tasks.data)} en retard",
+                "url": "/tasks",
+                "type": "brief",
+                "requireInteraction": False
+            })
+            push_sent = True
+            logger.info("🔔 Notification push résumé envoyée")
+        except Exception as e:
+            logger.error(f"Erreur envoi push résumé: {e}")
+        
+        return {
+            "success": True,
+            "message": "Résumé matinal envoyé",
+            "stats": {
+                "tasks_today": len(tasks_today.data),
+                "overdue_tasks": len(overdue_tasks.data),
+                "expiring_docs": len(expiring_docs.data),
+                "active_missions": len(active_missions.data),
+                "recent_wins": len(recent_wins.data)
+            },
+            "email_sent": email_sent,
+            "push_sent": push_sent
+        }
+        
+    except Exception as e:
+        logger.error(f"Erreur résumé matinal: {e}")
+        return {"success": False, "error": str(e)}
