@@ -4231,6 +4231,82 @@ Becks te soutient ! 👑
         return {"success": False, "error": str(e)}
 
 
+
+
+
+
+# =====================================================
+# BECKS EXECUTOR - ACTIONS CONCRÈTES
+# =====================================================
+
+class ExecutorAction(BaseModel):
+    action_type: str  # "create_task", "send_email", "create_draft", "update_mission", "create_subtasks"
+    params: Dict[str, Any]
+    requires_confirmation: bool = True
+
+@app.post("/api/executor/batch")
+async def execute_batch_actions(actions: List[ExecutorAction], auto_confirm: bool = False):
+    """
+    Exécute une série d'actions proposées par Becks.
+    Si auto_confirm=False, demande confirmation avant exécution.
+    """
+    results = []
+    
+    for action in actions:
+        try:
+            if action.action_type == "create_task":
+                result = await create_task_from_conversation(ExecuteTaskRequest(
+                    title=action.params.get("title"),
+                    due_date=action.params.get("due_date"),
+                    priority=action.params.get("priority", "normal")
+                ))
+                results.append({"action": "create_task", "success": result.get("success"), "data": result.get("task")})
+            
+            elif action.action_type == "send_email":
+                if auto_confirm or action.requires_confirmation == False:
+                    result = await send_email(EmailRequest(
+                        to=action.params.get("to"),
+                        subject=action.params.get("subject"),
+                        body=action.params.get("body")
+                    ))
+                    results.append({"action": "send_email", "success": result.get("success")})
+                else:
+                    results.append({"action": "send_email", "status": "pending_confirmation", "params": action.params})
+            
+            elif action.action_type == "create_draft":
+                result = await create_draft({
+                    "type": action.params.get("type", "email"),
+                    "context": action.params.get("context")
+                })
+                results.append({"action": "create_draft", "success": result.get("success"), "data": result.get("draft")})
+            
+            elif action.action_type == "update_mission":
+                result = supabase.table("missions").update({
+                    "status": action.params.get("status"),
+                    "priority": action.params.get("priority")
+                }).eq("id", action.params.get("mission_id")).execute()
+                results.append({"action": "update_mission", "success": True})
+            
+            elif action.action_type == "create_subtasks":
+                parent_id = action.params.get("parent_task_id")
+                subtasks = action.params.get("subtasks", [])
+                created = []
+                for subtask in subtasks:
+                    task = await create_task_from_conversation(ExecuteTaskRequest(
+                        title=subtask.get("title"),
+                        due_date=subtask.get("due_date"),
+                        priority=subtask.get("priority", "normal")
+                    ))
+                    created.append(task)
+                results.append({"action": "create_subtasks", "success": True, "created": len(created)})
+        
+        except Exception as e:
+            results.append({"action": action.action_type, "success": False, "error": str(e)})
+    
+    return {"success": True, "results": results}
+
+
+
 @app.post("/api/proactive/test-planning")
 async def test_planning():
     """Endpoint de test pour le planning automatique"""
@@ -4253,3 +4329,6 @@ async def test_stale_missions():
 async def test_morning_brief():
     """Endpoint de test pour le résumé matinal (sans cron)"""
     return await send_morning_brief()
+
+
+
