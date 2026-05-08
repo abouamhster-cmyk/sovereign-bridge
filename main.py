@@ -118,6 +118,189 @@ ALLOWED_FIELDS = {
 }
 
 
+
+# =====================================================
+# MAPPING INTELLIGENT DES CATÉGORIES (Générique)
+# =====================================================
+
+# Définition des contraintes par table
+TABLE_CONSTRAINTS = {
+    "spending": {
+        "field": "category",
+        "valid_values": ["materials", "construction", "labor", "livestock", "crops", "transport", "equipment", "other"],
+        "mapping": {
+            # Français → Anglais valide
+            "matériel": "equipment", "materiel": "equipment", "équipement": "equipment",
+            "outil": "equipment", "outils": "equipment", "machine": "equipment",
+            "fourniture": "materials", "fournitures": "materials", "matériau": "materials",
+            "semence": "crops", "semences": "crops", "engrais": "crops",
+            "animal": "livestock", "animaux": "livestock", "aliment": "livestock",
+            "construction": "construction", "bâtiment": "construction", "mur": "construction",
+            "salaire": "labor", "salaires": "labor", "main d'oeuvre": "labor",
+            "transport": "transport", "livraison": "transport", "essence": "transport",
+            # Anglais déjà valide → garder tel quel
+            "materials": "materials", "construction": "construction", "labor": "labor",
+            "livestock": "livestock", "crops": "crops", "transport": "transport",
+            "equipment": "equipment", "other": "other"
+        },
+        "default": "other"
+    },
+    
+    "tasks": {
+        "field": "status",
+        "valid_values": ["not_started", "today", "in_progress", "waiting", "done"],
+        "mapping": {
+            "à faire": "not_started", "a faire": "not_started", "pas commencé": "not_started",
+            "aujourd'hui": "today", "aujourdhui": "today",
+            "en cours": "in_progress", "commencé": "in_progress",
+            "en attente": "waiting", "attente": "waiting",
+            "terminé": "done", "termine": "done", "fini": "done", "fait": "done"
+        },
+        "default": "not_started"
+    },
+    
+    "tasks_priority": {
+        "field": "priority",
+        "valid_values": ["critical", "high", "normal", "low"],
+        "mapping": {
+            "critique": "critical", "urgent": "critical",
+            "haute": "high", "important": "high",
+            "normale": "normal", "moyenne": "normal",
+            "basse": "low", "faible": "low"
+        },
+        "default": "normal"
+    },
+    
+    "missions": {
+        "field": "status",
+        "valid_values": ["idea", "planning", "active", "waiting", "paused", "complete"],
+        "mapping": {
+            "idée": "idea", "idee": "idea",
+            "planification": "planning", "planifié": "planning",
+            "active": "active", "activé": "active", "en cours": "active",
+            "en attente": "waiting",
+            "pause": "paused", "en pause": "paused",
+            "terminée": "complete", "terminee": "complete", "fait": "complete"
+        },
+        "default": "idea"
+    },
+    
+    "missions_priority": {
+        "field": "priority",
+        "valid_values": ["critical", "high", "normal", "low"],
+        "mapping": {
+            "critique": "critical", "urgent": "critical",
+            "haute": "high", "important": "high",
+            "normale": "normal", "moyenne": "normal",
+            "basse": "low", "faible": "low"
+        },
+        "default": "normal"
+    },
+    
+    "family_events": {
+        "field": "category",
+        "valid_values": ["school", "health", "activity", "travel", "document", "routine", "supplies"],
+        "mapping": {
+            "école": "school", "ecole": "school", "cours": "school",
+            "santé": "health", "sante": "health", "médecin": "health", "docteur": "health",
+            "activité": "activity", "activite": "activity", "sport": "activity",
+            "voyage": "travel", "déplacement": "travel",
+            "papiers": "document", "administratif": "document",
+            "routine": "routine", "quotidien": "routine",
+            "fournitures": "supplies", "achats": "supplies"
+        },
+        "default": "routine"
+    },
+    
+    "wins": {
+        "field": "category",
+        "valid_values": ["business", "family", "personal", "money", "health", "farm", "other"],
+        "mapping": {
+            "business": "business", "projet": "business", "travail": "business",
+            "famille": "family", "enfant": "family",
+            "personnel": "personal", "perso": "personal",
+            "argent": "money", "finance": "money",
+            "santé": "health", "sante": "health",
+            "ferme": "farm", "agriculture": "farm"
+        },
+        "default": "other"
+    },
+    
+    "documents": {
+        "field": "type",
+        "valid_values": ["proposal", "contract", "grant", "invoice", "legal", "admin", "other"],
+        "mapping": {
+            "proposition": "proposal", "offre": "proposal",
+            "contrat": "contract",
+            "subvention": "grant",
+            "facture": "invoice",
+            "légal": "legal", "juridique": "legal",
+            "administratif": "admin"
+        },
+        "default": "other"
+    },
+    
+    "documents_status": {
+        "field": "status",
+        "valid_values": ["draft", "review", "ready", "submitted", "approved", "rejected"],
+        "mapping": {
+            "brouillon": "draft",
+            "relecture": "review", "vérification": "review",
+            "prêt": "ready", "pret": "ready",
+            "soumis": "submitted", "envoyé": "submitted",
+            "approuvé": "approved", "approuve": "approved", "validé": "approved",
+            "rejeté": "rejected", "refusé": "rejected"
+        },
+        "default": "draft"
+    }
+}
+
+def normalize_field_value(table: str, field: str, value: str) -> str:
+    """
+    Normalise une valeur de champ selon les contraintes de la table.
+    Retourne la valeur normalisée ou la valeur par défaut.
+    """
+    if not value or not isinstance(value, str):
+        return value
+    
+    value_lower = value.lower().strip()
+    
+    # Chercher la configuration pour ce champ
+    config_key = f"{table}_{field}"
+    if config_key in TABLE_CONSTRAINTS:
+        config = TABLE_CONSTRAINTS[config_key]
+    elif table in TABLE_CONSTRAINTS and TABLE_CONSTRAINTS[table].get("field") == field:
+        config = TABLE_CONSTRAINTS[table]
+    else:
+        # Pas de contrainte connue pour ce champ
+        return value
+    
+    valid_values = config.get("valid_values", [])
+    mapping = config.get("mapping", {})
+    default_value = config.get("default")
+    
+    # Vérifier si la valeur est déjà valide
+    if value_lower in valid_values:
+        return value_lower
+    
+    # Essayer de mapper
+    if value_lower in mapping:
+        mapped = mapping[value_lower]
+        logger.info(f"🔄 Mappage {table}.{field}: '{value}' -> '{mapped}'")
+        return mapped
+    
+    # Chercher par correspondance partielle
+    for key, mapped_value in mapping.items():
+        if key in value_lower or value_lower in key:
+            logger.info(f"🔄 Mappage partiel {table}.{field}: '{value}' -> '{mapped_value}'")
+            return mapped_value
+    
+    # Valeur par défaut si disponible
+    if default_value:
+        logger.warning(f"⚠️ Valeur inconnue {table}.{field}: '{value}' -> défaut '{default_value}'")
+        return default_value
+    
+    return value
 # =====================================================
 # PYDANTIC MODELS
 # =====================================================
@@ -901,8 +1084,6 @@ def db_query(table: str, filters: Dict = None, limit: int = 100) -> Dict:
 
 
 
-
-
 async def db_insert(table: str, data: Dict) -> Dict:
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
@@ -914,89 +1095,28 @@ async def db_insert(table: str, data: Dict) -> Dict:
         allowed = ALLOWED_FIELDS.get(table, ["title"])
         clean_data = {k: v for k, v in data.items() if k in allowed and v is not None and v != ""}
         
-        # Mapping des catégories valides pour spending
-        valid_categories = ["materials", "construction", "labor", "livestock", "crops", "transport", "equipment", "other"]
+        # ========== NORMALISATION INTELLIGENTE DES CHAMPS ==========
+        # Appliquer la normalisation pour chaque champ de chaque table
+        for key, value in clean_data.items():
+            if isinstance(value, str):
+                normalized = normalize_field_value(table, key, value)
+                if normalized != value:
+                    clean_data[key] = normalized
+                    logger.info(f"🧠 Normalisation {table}.{key}: '{value}' -> '{normalized}'")
         
-        # Mapping automatique des catégories françaises vers les catégories valides
-        category_mapping = {
-            # Vers equipment
-            "matériel": "equipment",
-            "materiel": "equipment", 
-            "équipement": "equipment",
-            "outil": "equipment",
-            "outils": "equipment",
-            "machine": "equipment",
-            "machines": "equipment",
-            # Vers materials
-            "matériau": "materials",
-            "materiau": "materials",
-            "fourniture": "materials",
-            "fournitures": "materials",
-            "matière": "materials",
-            # Vers crops
-            "semence": "crops",
-            "semences": "crops",
-            "engrais": "crops",
-            "engrais": "crops",
-            "plantation": "crops",
-            # Vers livestock
-            "animal": "livestock",
-            "animaux": "livestock",
-            "aliment": "livestock",
-            "vaccin": "livestock",
-            # Vers construction
-            "construction": "construction",
-            "bâtiment": "construction",
-            "mur": "construction",
-            "clôture": "construction",
-            # Vers labor
-            "main d'oeuvre": "labor",
-            "main-d'oeuvre": "labor",
-            "salaire": "labor",
-            "salaires": "labor",
-            "main": "labor",
-            # Vers transport
-            "transport": "transport",
-            "livraison": "transport",
-            "essence": "transport",
-            "carburant": "transport"
-        }
+        # Cas spécial: spending avec mémoire intelligente
+        if table == "spending" and "title" in data:
+            smart_cat = get_smart_category(data.get("title", ""))
+            if smart_cat and "category" not in clean_data:
+                clean_data["category"] = smart_cat
+                logger.info(f"🧠 Mémoire utilisée: '{data['title']}' -> catégorie '{smart_cat}'")
         
-        # ========== GESTION INTELLIGENTE DES CATÉGORIES POUR SPENDING ==========
-        if table == "spending":
-            # Utiliser la mémoire intelligente existante
-            if "title" in data:
-                smart_cat = get_smart_category(data.get("title", ""))
-                if smart_cat and "category" not in clean_data:
-                    clean_data["category"] = smart_cat
-                    logger.info(f"🧠 Mémoire utilisée: '{data['title']}' -> catégorie '{smart_cat}'")
-            
-            # Si une catégorie a été fournie, la valider/mapper
-            if "category" in clean_data:
-                category_value = clean_data["category"].lower()
-                
-                # Si la catégorie n'est pas valide, essayer de la mapper
-                if category_value not in valid_categories:
-                    mapped = None
-                    for key, value in category_mapping.items():
-                        if key in category_value:
-                            mapped = value
-                            break
-                    
-                    if mapped:
-                        clean_data["category"] = mapped
-                        logger.info(f"🔄 Catégorie mappée: '{category_value}' -> '{mapped}'")
-                    else:
-                        clean_data["category"] = "other"
-                        logger.info(f"⚠️ Catégorie inconnue '{category_value}' -> 'other'")
-            
-            # Gestion du projet
-            if "project" not in clean_data and "title" in data:
-                smart_project = get_smart_category(data.get("title", ""))
-                if smart_project and "project" not in clean_data:
-                    clean_data["project"] = smart_project
-                    logger.info(f"🧠 Mémoire utilisée: '{data['title']}' -> projet '{smart_project}'")
-        # =========================================================================
+        if table == "spending" and "project" not in clean_data and "title" in data:
+            smart_project = get_smart_category(data.get("title", ""))
+            if smart_project and "project" not in clean_data:
+                clean_data["project"] = smart_project
+                logger.info(f"🧠 Mémoire utilisée: '{data['title']}' -> projet '{smart_project}'")
+        # ===========================================================
         
         if table == "missions" and "title" in data and "name" not in clean_data:
             clean_data["name"] = data["title"]
@@ -1017,7 +1137,7 @@ async def db_insert(table: str, data: Dict) -> Dict:
         # Exécuter l'insertion
         result = supabase.table(table).insert(clean_data).execute()
         
-        # Extraire les données correctement (Supabase retourne un objet avec attribut 'data')
+        # Extraire les données correctement
         if hasattr(result, 'data'):
             result_data = result.data
         else:
@@ -1035,11 +1155,7 @@ async def db_insert(table: str, data: Dict) -> Dict:
                 }))
                 
                 # Synchronisation Google Calendar pour les tâches
-                logger.info(f"🔍 DEBUG - sync_calendar = {inserted_item.get('sync_calendar')}")
-                logger.info(f"🔍 DEBUG - due_date = {inserted_item.get('due_date')}")
-                
                 if inserted_item.get("sync_calendar") and inserted_item.get("due_date"):
-                    logger.info(f"📅 Tentative de sync pour tâche {inserted_item['id']}")
                     try:
                         event = await create_calendar_event(CalendarEventRequest(
                             summary=inserted_item.get("title"),
@@ -1054,7 +1170,7 @@ async def db_insert(table: str, data: Dict) -> Dict:
                                 "calendar_synced": True,
                                 "calendar_link": event["link"]
                             }).eq("id", inserted_item["id"]).execute()
-                            logger.info(f"📅 Tâche {inserted_item['id']} synchronisée avec Google Calendar")
+                            logger.info(f"📅 Tâche {inserted_item['id']} synchronisée")
                     except Exception as e:
                         logger.error(f"❌ Erreur sync calendrier: {e}")
             
@@ -1074,6 +1190,7 @@ async def db_insert(table: str, data: Dict) -> Dict:
     except Exception as e:
         logger.error(f"Erreur insert {table}: {e}")
         return {"success": False, "error": str(e)}
+        
 # =====================================================
 # SYSTEM PROMPT AMÉLIORÉ AVEC CONTEXTE DYNAMIQUE
 # =====================================================
