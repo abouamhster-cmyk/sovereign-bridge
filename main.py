@@ -4115,6 +4115,128 @@ Becks peut t'aider à préparer les documents. 👑
         return {"success": False, "error": str(e)}
 
 
+# =====================================================
+# PROACTIF - PLANNING AUTOMATIQUE
+# =====================================================
+
+@app.post("/api/proactive/daily-planning")
+async def daily_planning():
+    """
+    Analyse les tâches et suggère un ordre de priorité pour la journée.
+    À appeler par cron-job.org tous les matins à 8h (après le résumé).
+    """
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        today = datetime.now().date().isoformat()
+        
+        # Récupérer les tâches du jour
+        tasks_today = supabase.table("tasks").select("*").eq("due_date", today).neq("status", "done").execute()
+        
+        # Récupérer les tâches en retard
+        overdue_tasks = supabase.table("tasks").select("*").lt("due_date", today).neq("status", "done").execute()
+        
+        # Récupérer les tâches prioritaires (high/critical)
+        high_priority_tasks = supabase.table("tasks").select("*").in_("priority", ["critical", "high"]).neq("status", "done").execute()
+        
+        # Construire la suggestion d'ordre
+        planning = []
+        
+        # 1. D'abord les tâches en retard
+        for task in overdue_tasks.data[:3]:
+            planning.append({
+                "position": len(planning) + 1,
+                "title": task["title"],
+                "reason": "⚠️ En retard",
+                "priority": "critical"
+            })
+        
+        # 2. Ensuite les tâches critiques
+        for task in [t for t in high_priority_tasks.data if t.get("priority") == "critical" and t not in overdue_tasks.data][:3]:
+            planning.append({
+                "position": len(planning) + 1,
+                "title": task["title"],
+                "reason": "🔴 Priorité critique",
+                "priority": "critical"
+            })
+        
+        # 3. Puis les tâches du jour
+        for task in tasks_today.data[:3]:
+            if task not in overdue_tasks.data:
+                planning.append({
+                    "position": len(planning) + 1,
+                    "title": task["title"],
+                    "reason": "📅 À faire aujourd'hui",
+                    "priority": "high"
+                })
+        
+        # 4. Enfin les tâches haute priorité restantes
+        for task in [t for t in high_priority_tasks.data if t.get("priority") == "high" and t not in tasks_today.data and t not in overdue_tasks.data][:2]:
+            planning.append({
+                "position": len(planning) + 1,
+                "title": task["title"],
+                "reason": "🔸 Haute priorité",
+                "priority": "high"
+            })
+        
+        if not planning:
+            planning = [{"position": 1, "title": "Prendre un moment pour planifier", "reason": "Aucune tâche urgente", "priority": "normal"}]
+        
+        # Construire le message
+        order_list = "\n".join([f"{p['position']}. **{p['title']}** - {p['reason']}" for p in planning])
+        
+        message = f"""📋 **Planning automatique du jour**
+
+Voici l'ordre de priorité suggéré pour aujourd'hui :
+
+{order_list}
+
+---
+
+💡 **Conseil** : Commence par la tâche n°1, elle débloquera la suite. N'hésite pas à ajuster selon ton énergie.
+
+Becks te soutient ! 👑
+"""
+        
+        # Envoyer une notification push
+        push_sent = False
+        try:
+            send_notification_sync({
+                "title": "📋 Planning du jour",
+                "body": f"Priorité 1 : {planning[0]['title']}",
+                "url": "/tasks",
+                "type": "task",
+                "requireInteraction": False
+            })
+            push_sent = True
+            logger.info("🔔 Notification push planning envoyée")
+        except Exception as e:
+            logger.error(f"Erreur envoi push planning: {e}")
+        
+        return {
+            "success": True,
+            "message": "Planning généré",
+            "planning": planning,
+            "stats": {
+                "overdue_tasks": len(overdue_tasks.data),
+                "tasks_today": len(tasks_today.data),
+                "high_priority": len(high_priority_tasks.data)
+            },
+            "push_sent": push_sent
+        }
+        
+    except Exception as e:
+        logger.error(f"Erreur daily planning: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/proactive/test-planning")
+async def test_planning():
+    """Endpoint de test pour le planning automatique"""
+    return await daily_planning()
+    
+
 @app.post("/api/proactive/test-opportunities")
 async def test_opportunities():
     """Endpoint de test pour les opportunités"""
