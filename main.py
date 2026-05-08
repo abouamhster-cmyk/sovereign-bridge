@@ -4733,3 +4733,140 @@ Réponds-moi directement ou clique sur une suggestion pour que je t'aide.
 async def test_smart_reminders():
     """Endpoint de test pour les rappels intelligents"""
     return await smart_reminders()
+
+
+
+# =====================================================
+# GOOGLE DRIVE - SAUVEGARDE AUTOMATIQUE
+# =====================================================
+
+import json
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload, MediaIoBaseUpload
+import io
+
+GOOGLE_DRIVE_SERVICE_ACCOUNT_INFO = os.environ.get("GOOGLE_DRIVE_SERVICE_ACCOUNT", None)
+GOOGLE_DRIVE_FOLDER_ID = os.environ.get("GOOGLE_DRIVE_FOLDER_ID", "root")
+
+def get_drive_service():
+    """Initialise le service Google Drive"""
+    if not GOOGLE_DRIVE_SERVICE_ACCOUNT_INFO:
+        logger.warning("⚠️ GOOGLE_DRIVE_SERVICE_ACCOUNT non configuré")
+        return None
+    
+    try:
+        service_account_info = json.loads(GOOGLE_DRIVE_SERVICE_ACCOUNT_INFO)
+        creds = service_account.Credentials.from_service_account_info(
+            service_account_info,
+            scopes=['https://www.googleapis.com/auth/drive']
+        )
+        service = build('drive', 'v3', credentials=creds)
+        logger.info("✅ Google Drive service initialisé")
+        return service
+    except Exception as e:
+        logger.error(f"❌ Erreur auth Google Drive: {e}")
+        return None
+
+@app.post("/api/drive/backup-document")
+async def backup_document_to_drive(request: Dict[str, Any]):
+    """Sauvegarde un document dans Google Drive"""
+    service = get_drive_service()
+    if not service:
+        return {"success": False, "error": "Google Drive non configuré"}
+    
+    document_id = request.get("document_id")
+    if not document_id:
+        return {"success": False, "error": "document_id requis"}
+    
+    try:
+        # Récupérer le document depuis Supabase
+        doc = supabase.table("documents").select("*").eq("id", document_id).execute()
+        
+        if not doc.data:
+            return {"success": False, "error": "Document non trouvé"}
+        
+        doc = doc.data[0]
+        
+        # Créer le contenu du fichier
+        content = f"""Document: {doc['name']}
+Type: {doc['type']}
+Statut: {doc['status']}
+Date d'échéance: {doc.get('due_date', 'Non définie')}
+Notes: {doc.get('notes', 'Aucune')}
+
+URL originale: {doc.get('url', 'Non renseignée')}
+Fichier: {doc.get('file_url', 'Non renseigné')}
+
+--- Exporté depuis Sovereign le {datetime.now().strftime('%d/%m/%Y à %H:%M')} ---
+"""
+        
+        # Créer le fichier dans Drive
+        file_metadata = {
+            'name': f"{doc['name']}.txt",
+            'parents': [GOOGLE_DRIVE_FOLDER_ID]
+        }
+        
+        media = MediaIoBaseUpload(
+            io.BytesIO(content.encode('utf-8')),
+            mimetype='text/plain',
+            resumable=True
+        )
+        
+        file = service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields='id, webViewLink'
+        ).execute()
+        
+        # Mettre à jour le document avec le lien Drive
+        supabase.table("documents").update({
+            "drive_backup_id": file.get('id'),
+            "drive_link": file.get('webViewLink'),
+            "backed_up_at": datetime.now().isoformat()
+        }).eq("id", document_id).execute()
+        
+        logger.info(f"📁 Document {doc['name']} sauvegardé dans Google Drive")
+        
+        return {
+            "success": True,
+            "message": "Document sauvegardé dans Google Drive",
+            "drive_link": file.get('webViewLink'),
+            "drive_id": file.get('id')
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Erreur backup Drive: {e}")
+        return {"success": False, "error": str(e)}
+
+@app.post("/api/drive/backup-all-documents")
+async def backup_all_documents_to_drive():
+    """Sauvegarde tous les documents non encore sauvegardés"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        # Récupérer les documents non sauvegardés
+        docs = supabase.table("documents").select("*").is_("drive_backup_id", "null").execute()
+        
+        results = []
+        for doc in docs.data:
+            result = await backup_document_to_drive({"document_id": doc["id"]})
+            results.append({
+                "id": doc["id"],
+                "name": doc["name"],
+                "success": result.get("success", False),
+                "drive_link": result.get("drive_link")
+            })
+        
+        backed_up = len([r for r in results if r["success"]])
+        
+        return {
+            "success": True,
+            "message": f"{backed_up} document(s) sauvegardé(s) sur {len(results)}",
+            "results": results
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Erreur backup all: {e}")
+        return {"success": False, "error": str(e)}
