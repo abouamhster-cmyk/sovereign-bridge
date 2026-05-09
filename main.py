@@ -2556,12 +2556,12 @@ async def chat_endpoint(request: ChatRequest):
                 logger.info(f"📧 Envoi email: {args.get('to')} - {result.get('success')}")
             
             
-                elif name == "create_task":
-                    result = await create_task_from_conversation(ExecuteTaskRequest(
-                        title=args.get("title"),
-                        due_date=args.get("due_date") or None,  # ← Sécurisé
-                        priority=args.get("priority", "normal")
-                    ))
+            elif name == "create_task":
+                result = await create_task_from_conversation(ExecuteTaskRequest(
+                    title=args.get("title"),
+                    due_date=args.get("due_date") or None,
+                    priority=args.get("priority", "normal")
+                ))
                 if result.get("success"):
                     content = f"✅ Tâche créée: {args['title']}"
                 else:
