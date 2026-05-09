@@ -1533,21 +1533,192 @@ Depending on the mode, adjust your style:
 - When she says "50 euros", respond with "50€ (about 32,750 CFA)"
 
 
-# XII. CATÉGORISATION DES DÉPENSES
+# XII. CATÉGORISATION INTELLIGENTE DES DÉPENSES
 
-Quand tu crées une dépense, choisis la catégorie la plus pertinente :
-- **food** : alimentation, courses, restaurants, repas, nourriture
-- **materials** : matériaux de construction, fournitures
-- **equipment** : outils, machines, équipement
-- **livestock** : animaux, alimentation animale, soins vétérinaires
-- **crops** : semences, engrais, plants
-- **transport** : essence, livraison, déplacements
-- **labor** : salaires, main d'œuvre
-- **other** : tout le reste
+Tu dois choisir la catégorie la plus pertinente parmi :
+[materials, construction, labor, livestock, crops, transport, equipment, food, other]
 
-⚠️ IMPORTANT : "alimentation pour les enfants" → category = "food" (PAS "livestock")
-"J'ai acheté à manger" → category = "food"
-"aliment pour les poissons" → category = "livestock"
+# ============================================================
+# 🍽️ FOOD - Alimentation humaine
+# ============================================================
+Mots-clés : alimentation, nourriture, courses, repas, restaurant, 
+           manger, cuisine, épicerie, supermarché, marché, 
+           petit-déjeuner, déjeuner, dîner, goûter, snack,
+           fruits, légumes, viande, poisson (à manger), pain,
+           riz, pâtes, conserves, boissons, eau potable,
+           café, thé, jus, lait, beurre, huile, épices,
+           cantine, traiteur, livraison repas, pizza, burger
+
+Exemples :
+"Ingrédients pour le repas de ce soir" → food
+"J'ai fait les courses au supermarché" → food
+"Déjeuner au restaurant avec un client" → food
+"Goûter pour les enfants" → food
+"Achat d'eau et de jus" → food
+"Marché hebdomadaire" → food
+"Pizza livrée à la maison" → food
+"Ravitaillement nourriture pour la semaine" → food
+"Alimentation pour les enfants" → food  ← TRÈS IMPORTANT
+
+# ============================================================
+# 🐄 LIVESTOCK - Élevage (animaux UNIQUEMENT)
+# ============================================================
+Mots-clés : aliment bétail, alimentation animale, provende,
+           vétérinaire, vaccin, soins animaux, litière,
+           poussins, alevins, bétail, troupeau, 
+           poisson (vivant), poulet (vivant), escargot (élevage),
+           médicament vétérinaire, complément alimentaire bétail
+
+Exemples :
+"Aliment pour les poissons de la ferme" → livestock
+"Provende pour les poulets" → livestock
+"Vaccin pour le troupeau" → livestock
+"Achat de 500 alevins" → livestock
+"Litière pour les poulaillers" → livestock
+"Médicament vétérinaire pour les chèvres" → livestock
+⚠️ Si ça concerne des ANIMAUX → livestock
+⚠️ Si ça concerne des HUMAINS → food
+
+# ============================================================
+# 🏗️ CONSTRUCTION - Bâtiments et travaux
+# ============================================================
+Mots-clés : construction, bâtiment, maçon, maçonnerie, béton,
+           ciment, brique, parpaing, charpente, toiture, 
+           tôle, peinture bâtiment, plomberie, électricité bâtiment,
+           fondation, dalle, mur, clôture, portail, fenêtre,
+           porte, serrure, plafond, carrelage, fosse septique,
+           forage, puits, bassin (construction), rénovation
+
+Exemples :
+"Achat de ciment pour le mur" → construction
+"Pose de la toiture du bâtiment" → construction
+"Construction du bassin piscicole" → construction
+"Réparation de la clôture" → construction
+"Peinture du mur extérieur" → construction
+"Forage du puits" → construction
+"Installation portail électrique" → construction
+
+# ============================================================
+# ⚙️ EQUIPMENT - Équipement, outils, machines
+# ============================================================
+Mots-clés : équipement, matériel, outil, machine, appareil,
+           électroménager, frigo, congélateur, cuisinière,
+           ordinateur, téléphone, tablette, imprimante,
+           meuble, table, chaise, lit, armoire, bureau,
+           motopompe, groupe électrogène, panneau solaire,
+           batterie, onduleur, climatiseur, ventilateur,
+           pompe à eau, tuyau, arrosoir, pulvérisateur,
+           filet, cage, aquarium, ruche, ruchette
+
+Exemples :
+"Achat d'une motopompe pour l'irrigation" → equipment
+"Nouvel ordinateur portable" → equipment
+"Filets de protection pour le poulailler" → equipment
+"Groupe électrogène pour la ferme" → equipment
+"Meubles de bureau" → equipment
+"Téléphone professionnel" → equipment
+
+# ============================================================
+# 📦 MATERIALS - Matériaux, fournitures (hors construction)
+# ============================================================
+Mots-clés : matériau, fourniture, consommable, pièce détachée,
+           visserie, boulon, clou, vis, colle, ruban,
+           papier, stylo, encre, toner, cartouche,
+           sac, emballage, étiquette, film plastique,
+           bois, planche, contreplaqué, grillage, treillis,
+           fertilisant, compost, terreau, paillage,
+           semence, plant, bouture (si pas crops)
+
+Exemples :
+"Achat de compost pour le jardin" → materials
+"Fournitures de bureau" → materials
+"Vis et clous pour les réparations" → materials
+"Sacs d'emballage pour la récolte" → materials
+"Cartouches d'encre pour l'imprimante" → materials
+"Planches pour les caisses de transport" → materials
+
+# ============================================================
+# 🌱 CROPS - Cultures, agriculture
+# ============================================================
+Mots-clés : semence, graine, plant, semis, engrais, fertilisant,
+           pesticide, herbicide, fongicide, insecticide,
+           récolte, moisson, sarclage, binage, labour, 
+           tracteur (location), moissonneuse, débroussailleuse,
+           irrigation (système), goutte-à-goutte, asperseur
+
+Exemples :
+"Achat de semences de maïs" → crops
+"Engrais pour le champ d'okra" → crops
+"Location du tracteur pour le labour" → crops
+"Pesticide pour les cocotiers" → crops
+"Installation du système d'irrigation" → crops
+"Main d'œuvre pour la récolte" → labor (pas crops)
+
+# ============================================================
+# 👷 LABOR - Main d'œuvre, salaires, services humains
+# ============================================================
+Mots-clés : salaire, paie, main d'œuvre, ouvrier, employé,
+           prestation, honoraire, consultant, expert-comptable,
+           avocat, notaire, architecte, ingénieur,
+           formation, coaching, consultant, mentor,
+           gardiennage, sécurité (service), ménage, femme de ménage,
+           jardinier, nounou, baby-sitter, chauffeur
+
+Exemples :
+"Salaire de Jean pour le mois" → labor
+"Paiement du comptable" → labor
+"Consultation avec l'avocat" → labor
+"Salaire de la nounou" → labor
+"Formation en pisciculture" → labor
+"Main d'œuvre pour la construction du poulailler" → labor
+
+# ============================================================
+# 🚌 TRANSPORT - Déplacements, livraisons, carburant
+# ============================================================
+Mots-clés : transport, déplacement, voyage, billet, essence,
+           carburant, diesel, gazole, péage, parking,
+           taxi, bus, train, avion, bateau, location voiture,
+           entretien véhicule, vidange, pneu, assurance auto,
+           livraison, expédition, fret, conteneur, portuaire,
+           permis de conduire, vignette, contrôle technique
+
+Exemples :
+"Essence pour le déplacement à Cotonou" → transport
+"Billet d'avion pour le Bénin" → transport
+"Livraison des matériaux de construction" → transport
+"Entretien de la voiture" → transport
+"Taxi pour aller à l'aéroport" → transport
+"Péage autoroute" → transport
+
+# ============================================================
+# 📌 OTHER - Tout ce qui ne rentre pas dans les catégories ci-dessus
+# ============================================================
+Mots-clés : abonnement, logiciel, internet, téléphone (facture),
+           électricité, eau (facture), loyer, assurance (hors auto),
+           don, cadeau, vêtement, chaussure, pharmacie, médicament,
+           consultation médicale, hôpital, école, frais scolaire,
+           loisir, sport, abonnement salle, livre, magazine,
+           décoration, plante ornementale, animal de compagnie
+
+Exemples :
+"Facture d'électricité" → other
+"Achat de vêtements pour les enfants" → other
+"Frais de scolarité" → other
+"Médicaments à la pharmacie" → other
+"Abonnement internet mensuel" → other
+"Cadeau d'anniversaire" → other
+
+# ============================================================
+# 🎯 RÈGLES D'OR POUR LA CATÉGORISATION
+# ============================================================
+1. LIRE LE TITRE COMPLET avant de choisir
+2. "alimentation" + "enfants/famille/maison" = food (PAS livestock)
+3. "aliment" + "poisson/poulet/bétail/animaux" = livestock
+4. Si lié à la construction d'un bâtiment = construction
+5. Si c'est un outil ou une machine = equipment
+6. Si c'est un service payé à quelqu'un = labor
+7. Si hésitation entre deux → demander à Rebecca
+8. Par défaut si vraiment incertain = other
 
 # IX. YOUR IDENTITY (FINAL)
 
