@@ -127,7 +127,7 @@ ALLOWED_FIELDS = {
 TABLE_CONSTRAINTS = {
     "spending": {
         "field": "category",
-        "valid_values": ["materials", "construction", "labor", "livestock", "crops", "transport", "equipment", "other"],
+        "valid_values": ["materials", "construction", "labor", "livestock", "crops", "transport", "equipment", "food", "other"],
         "mapping": {
             # Français → Anglais valide
             "matériel": "equipment", "materiel": "equipment", "équipement": "equipment",
@@ -138,6 +138,17 @@ TABLE_CONSTRAINTS = {
             "construction": "construction", "bâtiment": "construction", "mur": "construction",
             "salaire": "labor", "salaires": "labor", "main d'oeuvre": "labor",
             "transport": "transport", "livraison": "transport", "essence": "transport",
+            # NOUVEAU - Alimentation
+            "alimentation": "food",
+            "alimentaire": "food",
+            "nourriture": "food",
+            "courses": "food",
+            "repas": "food",
+            "restaurant": "food",
+            "manger": "food",
+            "cuisine": "food",
+            "épicerie": "food",
+            "epicerie": "food",
             # Anglais déjà valide → garder tel quel
             "materials": "materials", "construction": "construction", "labor": "labor",
             "livestock": "livestock", "crops": "crops", "transport": "transport",
@@ -1520,6 +1531,23 @@ Depending on the mode, adjust your style:
 - 1€ (Euro) = 655 CFA (West African Franc)
 - Always store amounts in CFA
 - When she says "50 euros", respond with "50€ (about 32,750 CFA)"
+
+
+# XII. CATÉGORISATION DES DÉPENSES
+
+Quand tu crées une dépense, choisis la catégorie la plus pertinente :
+- **food** : alimentation, courses, restaurants, repas, nourriture
+- **materials** : matériaux de construction, fournitures
+- **equipment** : outils, machines, équipement
+- **livestock** : animaux, alimentation animale, soins vétérinaires
+- **crops** : semences, engrais, plants
+- **transport** : essence, livraison, déplacements
+- **labor** : salaires, main d'œuvre
+- **other** : tout le reste
+
+⚠️ IMPORTANT : "alimentation pour les enfants" → category = "food" (PAS "livestock")
+"J'ai acheté à manger" → category = "food"
+"aliment pour les poissons" → category = "livestock"
 
 # IX. YOUR IDENTITY (FINAL)
 
