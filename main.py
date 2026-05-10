@@ -506,6 +506,90 @@ async def save_user_memory(category: str, key: str, value: str, user_id: str = "
         return False
 
 
+
+
+
+# =====================================================
+# GESTION DES CONTACTS
+# =====================================================
+
+async def get_contact_number(contact_name: str, user_id: str = "rebecca") -> dict:
+    """Cherche un numéro de téléphone pour un contact.
+    Retourne: {"found": bool, "phone": str, "source": str}
+    """
+    if not supabase:
+        return {"found": False, "phone": None, "source": None}
+    
+    contact_name_lower = contact_name.lower().strip()
+    
+    # 1. Chercher dans user_memory (contacts rapides)
+    result = supabase.table("user_memory").select("*").eq("user_id", user_id).eq("category", "contact").execute()
+    for mem in result.data:
+        key = mem.get("key", "").lower()
+        if contact_name_lower in key or key in contact_name_lower:
+            return {"found": True, "phone": mem.get("value"), "source": "memory"}
+    
+    # 2. Chercher dans lf_contacts
+    contacts = supabase.table("lf_contacts").select("*").eq("user_id", user_id).execute()
+    for contact in contacts.data:
+        name = contact.get("name", "").lower()
+        if contact_name_lower in name or name in contact_name_lower:
+            if contact.get("phone"):
+                return {"found": True, "phone": contact.get("phone"), "source": "contacts_table"}
+    
+    return {"found": False, "phone": None, "source": None}
+
+
+def extract_phone_from_text(text: str) -> str:
+    """Extrait un numéro de téléphone du texte"""
+    import re
+    patterns = [
+        r'(\+229\s*\d{2}\s*\d{2}\s*\d{2}\s*\d{2})',  # +229 XX XX XX XX
+        r'(\+229\s*\d{8})',                           # +229XXXXXXXX
+        r'(0[67]\s*\d{2}\s*\d{2}\s*\d{2}\s*\d{2})',  # 06 XX XX XX XX ou 07
+        r'(\d{2}\s*\d{2}\s*\d{2}\s*\d{2}\s*\d{2})',   # XX XX XX XX XX (10 chiffres)
+        r'(\d{8})',                                    # 8 chiffres
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            phone = match.group(1).replace(" ", "")
+            # Standardiser le format
+            if phone.startswith("0") and len(phone) == 10:
+                phone = "+229" + phone[1:]
+            elif len(phone) == 8:
+                phone = "+229" + phone
+            return phone
+    return None
+
+
+async def save_contact_memory(contact_name: str, phone: str, user_id: str = "rebecca"):
+    """Sauvegarde un contact dans la mémoire rapide"""
+    if not supabase:
+        return False
+    
+    key = f"{contact_name.lower()}_phone"
+    
+    # Vérifier si existe déjà
+    existing = supabase.table("user_memory").select("*").eq("user_id", user_id).eq("category", "contact").eq("key", key).execute()
+    
+    if existing.data:
+        supabase.table("user_memory").update({
+            "value": phone,
+            "updated_at": datetime.now().isoformat()
+        }).eq("id", existing.data[0]["id"]).execute()
+    else:
+        supabase.table("user_memory").insert({
+            "category": "contact",
+            "key": key,
+            "value": phone,
+            "user_id": user_id,
+            "created_at": datetime.now().isoformat()
+        }).execute()
+    
+    logger.info(f"💾 Contact sauvegardé: {contact_name} -> {phone}")
+    return True
+    
 # =====================================================
 # FONCTIONS POUR LA VISION ET LES DOCUMENTS
 # =====================================================
@@ -1736,6 +1820,46 @@ Mots-clés : abonnement, logiciel, internet, téléphone (facture), électricit�
 6. Si c'est un service payé = labor
 7. Si hésitation → demander à Rebecca
 8. Par défaut → other
+
+
+# ================================================================
+# CONTACTS ET COMMUNICATION (DYNAMIQUE)
+# ================================================================
+
+## Comment gérer les appels, SMS et WhatsApp
+
+**Quand Rebecca dit "Appelle X" ou "Envoie un SMS à X" :**
+
+1. Cherche le numéro de X dans la mémoire ou dans la table lf_contacts
+2. Si trouvé, utilise-le directement
+3. Si non trouvé, demande le numéro
+
+**Exemple - Numéro trouvé en mémoire :**
+"Je trouve le numéro de Jean : 97 12 34 56. Je l'appelle ?
+
+[ACTION:{"type":"make_call","params":{"phone":"+22997123456"},"label":"📞 Appeler Jean"}]
+[ACTION:{"type":"send_whatsapp","params":{"phone":"+22997123456","body":"Bonjour Jean, c'est Rebecca"},"label":"💚 WhatsApp"}]
+
+**Exemple - Numéro donné dans la conversation :**
+Rebecca dit : "Appelle Jean au 97123456"
+Réponse : "J'appelle Jean au 97 12 34 56.
+[ACTION:{"type":"make_call","params":{"phone":"+22997123456"},"label":"📞 Appeler Jean"}]
+Veux-tu que je le garde en mémoire pour la prochaine fois ?
+[ACTION:{"type":"save_memory","params":{"category":"contact","key":"jean_phone","value":"+22997123456"},"label":"💾 Enregistrer ce contact"}]
+
+**Exemple - Numéro non trouvé :**
+"Je n'ai pas le numéro de [contact] en mémoire. Peux-tu me le donner ?
+[ACTION:{"type":"save_memory","params":{"category":"contact","key":"[contact]_phone","value":"__NUMÉRO__"},"label":"💾 Enregistrer après"}]
+
+## Actions de communication disponibles
+
+📞 Appeler → [ACTION:{"type":"make_call","params":{"phone":"NUMÉRO"},"label":"📞 Appeler [nom]"}]
+💬 SMS → [ACTION:{"type":"send_sms","params":{"phone":"NUMÉRO","body":"Message"},"label":"📱 Envoyer SMS"}]
+💚 WhatsApp → [ACTION:{"type":"send_whatsapp","params":{"phone":"NUMÉRO","body":"Message"},"label":"💚 WhatsApp [nom]"}]
+✈️ Telegram → [ACTION:{"type":"send_telegram","params":{"username":"@username","body":"Message"},"label":"✈️ Telegram"}]
+🎥 Visio → [ACTION:{"type":"video_call","params":{"link":"LIEN"},"label":"🎥 Rejoindre visio"}]
+💾 Enregistrer contact → [ACTION:{"type":"save_memory","params":{"category":"contact","key":"nom_phone","value":"NUMÉRO"},"label":"💾 Enregistrer"}]
+
 
 # ================================================================
 # XIII. YOUR IDENTITY (FINAL)
