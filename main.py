@@ -3,8 +3,9 @@ import uuid
 import json
 from typing import Optional
 import logging
+ import hashlib
 import hmac
-import hashlib
+from pydantic import BaseModel
 import re
 import asyncio  
 from datetime import datetime, timedelta
@@ -12,7 +13,6 @@ from typing import Union, List, Dict, Any
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import UploadFile, File
-from pydantic import BaseModel
 from openai import OpenAI
 from supabase import create_client, Client
 from pywebpush import webpush, WebPushException
@@ -4091,9 +4091,7 @@ async def send_email(request: EmailRequest):
 # WEBHOOKS
 # =====================================================
 
-import hmac
-import hashlib
-from pydantic import BaseModel
+
 
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "sovereign-secret-key-2024")
 
@@ -5491,19 +5489,29 @@ async def whatsapp_send(request: Dict[str, Any]):
 
 @app.post("/api/whatsapp/webhook")
 async def whatsapp_webhook(request: Request):
-    """Version ultra simple pour capturer le format"""
+    """Version debug - log tout ce qui arrive"""
+    import json
+    
+    # 1. Récupérer le corps brut
     body = await request.body()
     body_str = body.decode('utf-8')
     
-    # Log complet (visible dans Render)
-    print("=" * 50)
-    print("📱 WHATSAPP WEBHOOK RECU")
+    # 2. Afficher dans les logs Render (IMPORTANT)
+    print("=" * 60)
+    print("📱 WHATSAPP WEBHOOK REÇU")
     print(f"Body brut: {body_str}")
-    print("=" * 50)
+    print("=" * 60)
     
-    # Retourner toujours 200 pour que GreenAPI arrête d'essayer
-    return {"status": "ok", "received": True}
-
+    # 3. Essayer de parser
+    try:
+        data = json.loads(body_str) if body_str else {}
+        print(f"JSON parsé: {data}")
+    except Exception as e:
+        print(f"Erreur parsing JSON: {e}")
+        data = {}
+    
+    # 4. Toujours retourner 200
+    return {"status": "ok", "received": True, "raw": body_str[:200]}
 
 
 @app.get("/api/whatsapp/conversations")
