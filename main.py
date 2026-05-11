@@ -3,21 +3,51 @@ import uuid
 import json
 from typing import Optional
 import logging
-import hashlib
-import hmac
-from pydantic import BaseModel
 import re
-import asyncio  
+import asyncio
 from datetime import datetime, timedelta
 from typing import Union, List, Dict, Any
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import UploadFile, File
+from pydantic import BaseModel
 from openai import OpenAI
 from supabase import create_client, Client
 from pywebpush import webpush, WebPushException
 import httpx
 
+
+# =====================================================
+# FASTAPI INITIALIZATION
+# =====================================================
+
+app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://sovereignallmighty.netlify.app", "http://localhost:3000", "*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# =====================================================
+# WHATSAPP WEBHOOK - PLACÉ ICI APRÈS CORS
+# =====================================================
+
+@app.api_route("/api/whatsapp/webhook", methods=["GET", "POST", "OPTIONS"])
+async def whatsapp_webhook(request: Request):
+    if request.method == "OPTIONS":
+        return Response(status_code=200)
+    
+    body = await request.body()
+    body_str = body.decode('utf-8')
+    
+    print("=" * 50)
+    print("📱 WhatsApp webhook reçu")
+    print(f"Body: {body_str}")
+    print("=" * 50)
+    
+    return {"status": "ok"}
 
 # =====================================================
 # FONCTIONS UTILITAIRES
@@ -43,18 +73,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-# =====================================================
-# FASTAPI INITIALIZATION
-# =====================================================
 
-app = FastAPI()
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["https://sovereignallmighty.netlify.app", "http://localhost:3000", "*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 
 # =====================================================
@@ -5486,32 +5505,6 @@ async def whatsapp_send(request: Dict[str, Any]):
     except Exception as e:
         logger.error(f"Erreur envoi WhatsApp: {e}")
         return {"success": False, "error": str(e)}
-
-@app.post("/api/whatsapp/webhook")
-async def whatsapp_webhook(request: Request):
-    """Version debug - log tout ce qui arrive"""
-    import json
-    
-    # 1. Récupérer le corps brut
-    body = await request.body()
-    body_str = body.decode('utf-8')
-    
-    # 2. Afficher dans les logs Render (IMPORTANT)
-    print("=" * 60)
-    print("📱 WHATSAPP WEBHOOK REÇU")
-    print(f"Body brut: {body_str}")
-    print("=" * 60)
-    
-    # 3. Essayer de parser
-    try:
-        data = json.loads(body_str) if body_str else {}
-        print(f"JSON parsé: {data}")
-    except Exception as e:
-        print(f"Erreur parsing JSON: {e}")
-        data = {}
-    
-    # 4. Toujours retourner 200
-    return {"status": "ok", "received": True, "raw": body_str[:200]}
 
 
 @app.get("/api/whatsapp/conversations")
