@@ -543,6 +543,75 @@ async def test_webhook():
     
     return {"success": False, "error": "Supabase non configuré"}
 
+
+
+
+
+
+
+# =====================================================
+# WHATSAPP VIA BAILEYS (gratuit, illimité)
+# =====================================================
+
+BAILEYS_URL = os.environ.get("BAILEYS_URL", "http://localhost:10000")
+
+@app.post("/api/whatsapp-baileys/message")
+async def baileys_message(request: Dict[str, Any]):
+    """Reçoit les messages de Baileys"""
+    from_ = request.get("from")
+    from_name = request.get("from_name")
+    message = request.get("message")
+    
+    print(f"💬 [Baileys - {from_name}]: {message}")
+    
+    # Sauvegarde en base
+    if supabase:
+        supabase.table("whatsapp_messages").insert({
+            "from": from_,
+            "from_name": from_name,
+            "message": message,
+            "status": "pending",
+            "created_at": datetime.now().isoformat()
+        }).execute()
+    
+    # Analyser avec Becks
+    try:
+        analysis = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": f"Message WhatsApp de {from_name}: {message}. Réponds brièvement (1-2 phrases max) comme si tu étais Rebecca."}],
+            max_tokens=100
+        )
+        reply = analysis.choices[0].message.content
+        
+        # Envoyer la réponse via Baileys
+        async with httpx.AsyncClient() as client_http:
+            await client_http.post(f"{BAILEYS_URL}/api/send", json={"to": from_, "message": reply})
+        
+    except Exception as e:
+        print(f"Erreur analyse: {e}")
+    
+    return {"status": "ok"}
+
+@app.post("/api/whatsapp-baileys/send")
+async def baileys_send(request: Dict[str, Any]):
+    """Envoie un message via Baileys"""
+    to = request.get("to")
+    message = request.get("message")
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.post(f"{BAILEYS_URL}/api/send", json={"to": to, "message": message})
+        return response.json()
+
+@app.get("/api/whatsapp-baileys/status")
+async def baileys_status():
+    """Vérifie si Baileys est connecté"""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(f"{BAILEYS_URL}/api/status")
+            return response.json()
+    except:
+        return {"connected": False, "error": "Service Baileys non disponible"}
+        
 # =====================================================
 # FONCTIONS UTILITAIRES
 # =====================================================
