@@ -5491,73 +5491,18 @@ async def whatsapp_send(request: Dict[str, Any]):
 
 @app.post("/api/whatsapp/webhook")
 async def whatsapp_webhook(request: Request):
-    """Reçoit les messages WhatsApp entrants - Version robuste"""
-    try:
-        # Récupérer le corps brut
-        body = await request.body()
-        logger.info(f"📱 Webhook WhatsApp - Corps brut: {body[:500]}")
-        
-        # Essayer de parser le JSON
-        try:
-            import json
-            data = json.loads(body)
-        except:
-            data = {}
-        
-        logger.info(f"📱 Webhook WhatsApp - JSON parsé: {data}")
-        
-        # GreenAPI peut envoyer différentes structures
-        # Format 1: notification directe
-        if "messageData" in data:
-            message_data = data.get("messageData", {})
-            text_message = message_data.get("textMessageData", {}).get("textMessage", "")
-            sender_data = data.get("senderData", {})
-            sender = sender_data.get("sender", "")
-            sender_name = sender_data.get("senderName", "Inconnu")
-        
-        # Format 2: webhook standard
-        elif "body" in data:
-            text_message = data.get("body", "")
-            sender = data.get("from", "")
-            sender_name = data.get("author", "Inconnu")
-        
-        # Format 3: message direct
-        elif "message" in data:
-            text_message = data.get("message", "")
-            sender = data.get("sender", "")
-            sender_name = "Inconnu"
-        
-        else:
-            logger.warning("📱 Format de webhook non reconnu")
-            return {"status": "received", "note": "format not recognized"}
-        
-        if text_message and sender:
-            logger.info(f"💬 Message de {sender_name} ({sender}): {text_message}")
-            
-            # Analyser avec Becks (optionnel, peut être désactivé pour test)
-            try:
-                chat_response = client.chat.completions.create(
-                    model="gpt-4o",
-                    messages=[
-                        {"role": "system", "content": f"Tu es Becks. Réponds brièvement à ce message WhatsApp de {sender_name} (1-2 phrases max)."},
-                        {"role": "user", "content": text_message}
-                    ],
-                    max_tokens=256
-                )
-                reply = chat_response.choices[0].message.content
-                logger.info(f"🤖 Réponse Becks: {reply[:100]}")
-                
-                # Option: répondre automatiquement
-                # await whatsapp_send({"to": sender, "message": reply})
-                
-            except Exception as e:
-                logger.error(f"Erreur analyse: {e}")
-        
-        return {"status": "ok"}
-        
-    except Exception as e:
-        logger.error(f"❌ Erreur webhook: {e}")
-        return {"status": "error", "message": str(e)}
+    """Version ultra simple pour capturer le format"""
+    body = await request.body()
+    body_str = body.decode('utf-8')
+    
+    # Log complet (visible dans Render)
+    print("=" * 50)
+    print("📱 WHATSAPP WEBHOOK RECU")
+    print(f"Body brut: {body_str}")
+    print("=" * 50)
+    
+    # Retourner toujours 200 pour que GreenAPI arrête d'essayer
+    return {"status": "ok", "received": True}
 
 
 
