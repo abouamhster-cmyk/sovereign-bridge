@@ -79,30 +79,101 @@ async def whatsapp_webhook(request: Request):
     if request.method == "OPTIONS":
         return Response(status_code=200)
     
-    # 1. Récupérer le corps brut
     body = await request.body()
     body_str = body.decode('utf-8')
     
-    # 2. Log complet (IMPORTANT)
-    print("=" * 60)
-    print("📦 WEBHOOK RECU - CORPS COMPLET:")
-    print(body_str)
-    print("=" * 60)
+    try:
+        data = json.loads(body_str)
+    except:
+        data = {}
     
-    # 3. Sauvegarde DIRECTE sans analyse
-    if supabase:
-        try:
-            # Insérer même si on ne comprend pas le format
-            result = supabase.table("whatsapp_messages").insert({
-                "from": "test",
-                "from_name": "test",
-                "message": body_str[:500],  # Sauvegarde le JSON brut
-                "status": "raw",
-                "created_at": datetime.now().isoformat()
-            }).execute()
-            print("✅ Message BRUT sauvegardé dans Supabase")
-        except Exception as e:
-            print(f"❌ Erreur sauvegarde brute: {e}")
+    # Ignorer les statuts d'envoi et les erreurs de quota
+    if data.get("typeWebhook") in ["outgoingMessageStatus", "outgoingAPIMessageReceived", "quotaExceeded"]:
+        return {"status": "ok"}
+    
+    # Traiter uniquement les messages entrants
+    if data.get("typeWebhook") == "incomingMessageReceived":
+        message_data = data.get("messageData", {})
+        if message_data.get("typeMessage") == "textMessage":
+            text_message = message_data.get("textMessageData", {}).get("textMessage", "")
+            sender_data = data.get("senderData", {})
+            sender = sender_data.get("sender", "")
+            sender_name = sender_data.get("senderName", "Inconnu")
+            chat_id = sender_data.get("chatId", sender)
+            
+            print(f"💬 [{sender_name}]: {text_message}")
+            
+            # Sauvegarde en base
+            if supabase:
+                try:
+                    supabase.table("whatsapp_messages").insert({
+                        "from": sender,
+                        "from_name": sender_name,
+                        "message": text_message,
+                        "status": "pending",
+                        "created_at": datetime.now().isoformat()
+                    }).execute()
+                    print(f"✅ Message sauvegardé dans Supabase")
+                except Exception as e:
+                    print(f"❌ Erreur sauvegarde: {e}")
+            
+            # Analyse avec Becks pour réponse auto
+            try:
+                analysis_prompt = f"""Message WhatsApp de {sender_name}: "{text_message}"
+
+Réponds UNIQUEMENT avec ce format JSON:
+{{"action": "auto_reply", "reply": "ta réponse courte (1-2 phrases max, naturel)"}}
+ou
+{{"action": "need_human", "summary": "résumé court pour Rebecca"}}"""
+                
+                analysis = client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[{"role": "user", "content": analysis_prompt}],
+                    max_tokens=150,
+                    temperature=0.7
+                )
+                
+                import json as json_lib
+                result_text = analysis.choices[0].message.content
+                result_text = result_text.replace("```json", "").replace("```", "").strip()
+                result = json_lib.loads(result_text)
+                
+                if result.get("action") == "auto_reply" and result.get("reply"):
+                    reply = result.get("reply")
+                    reply = naturalize_response(reply)
+                    delay_seconds = random.randint(60, 120)
+                    print(f"⏰ Réponse auto dans {delay_seconds//60} min: {reply[:50]}...")
+                    
+                    async def delayed_reply():
+                        await asyncio.sleep(delay_seconds)
+                        await whatsapp_send_message(chat_id, reply)
+                        print(f"✅ Réponse envoyée")
+                    
+                    asyncio.create_task(delayed_reply())
+                    
+                    if supabase:
+                        supabase.table("whatsapp_messages").update({
+                            "response": reply,
+                            "status": "auto"
+                        }).eq("from", sender).eq("message", text_message).execute()
+                
+                else:
+                    print(f"📱 Message nécessite Rebecca - Notification envoyée")
+                    await send_notification_sync({
+                        "title": f"📱 WhatsApp - {sender_name}",
+                        "body": text_message[:100],
+                        "url": "/whatsapp",
+                        "type": "whatsapp"
+                    })
+                    
+            except Exception as e:
+                print(f"❌ Erreur analyse: {e}")
+                await send_notification_sync({
+                    "title": f"📱 WhatsApp - {sender_name}",
+                    "body": text_message[:100],
+                    "url": "/whatsapp",
+                    "type": "whatsapp"
+                })
     
     return {"status": "ok"}
 
