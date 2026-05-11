@@ -94,30 +94,86 @@ async def whatsapp_webhook(request: Request):
     # Traiter uniquement les messages entrants
     if data.get("typeWebhook") == "incomingMessageReceived":
         message_data = data.get("messageData", {})
-        if message_data.get("typeMessage") == "textMessage":
+        message_type = message_data.get("typeMessage", "")
+        
+        sender_data = data.get("senderData", {})
+        sender = sender_data.get("sender", "")
+        sender_name = sender_data.get("senderName", "Inconnu")
+        chat_id = sender_data.get("chatId", sender)
+        
+        text_message = ""
+        
+        # ========== TEXTE ==========
+        if message_type == "textMessage":
             text_message = message_data.get("textMessageData", {}).get("textMessage", "")
-            sender_data = data.get("senderData", {})
-            sender = sender_data.get("sender", "")
-            sender_name = sender_data.get("senderName", "Inconnu")
-            chat_id = sender_data.get("chatId", sender)
-            
             print(f"💬 [{sender_name}]: {text_message}")
+        
+        # ========== AUDIO (Message vocal) ==========
+        elif message_type == "audioMessage":
+            audio_data = message_data.get("audioMessageData", {})
+            audio_url = audio_data.get("url")
+            audio_duration = audio_data.get("duration", 0)
             
-            # Sauvegarde en base
-            if supabase:
+            print(f"🎤 Message vocal reçu de {sender_name} ({audio_duration}s)")
+            
+            if audio_url and supabase:
                 try:
-                    supabase.table("whatsapp_messages").insert({
-                        "from": sender,
-                        "from_name": sender_name,
-                        "message": text_message,
-                        "status": "pending",
-                        "created_at": datetime.now().isoformat()
-                    }).execute()
-                    print(f"✅ Message sauvegardé dans Supabase")
+                    # Télécharger l'audio
+                    async with httpx.AsyncClient() as client_http:
+                        audio_response = await client_http.get(audio_url)
+                        audio_content = audio_response.content
+                    
+                    # Sauvegarder temporairement
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
+                        tmp.write(audio_content)
+                        tmp_path = tmp.name
+                    
+                    # Transcrire avec Whisper
+                    with open(tmp_path, "rb") as audio_file:
+                        transcript = client.audio.transcriptions.create(
+                            model="whisper-1",
+                            file=audio_file,
+                            language="fr"
+                        )
+                    
+                    os.unlink(tmp_path)
+                    transcribed_text = transcript.text
+                    text_message = f"🎤 [VOCAL] {transcribed_text}"
+                    print(f"📝 Transcription: {transcribed_text}")
+                    
                 except Exception as e:
-                    print(f"❌ Erreur sauvegarde: {e}")
-            
-            # Analyse avec Becks pour réponse auto
+                    print(f"❌ Erreur transcription vocale: {e}")
+                    text_message = "🎤 [Message vocal non transcrit]"
+        
+        # ========== IMAGE ==========
+        elif message_type == "imageMessage":
+            image_data = message_data.get("imageMessageData", {})
+            caption = image_data.get("caption", "")
+            text_message = f"🖼️ [IMAGE] {caption if caption else 'Pas de légende'}"
+            print(f"🖼️ Image reçue de {sender_name}: {caption}")
+        
+        # ========== AUTRES ==========
+        else:
+            text_message = f"📎 [{message_type}]"
+            print(f"📎 Autre type reçu: {message_type}")
+        
+        # Sauvegarde en base
+        if text_message and supabase:
+            try:
+                supabase.table("whatsapp_messages").insert({
+                    "from": sender,
+                    "from_name": sender_name,
+                    "message": text_message,
+                    "status": "pending",
+                    "created_at": datetime.now().isoformat()
+                }).execute()
+                print(f"✅ Message sauvegardé dans Supabase")
+            except Exception as e:
+                print(f"❌ Erreur sauvegarde: {e}")
+        
+        # Analyse avec Becks pour réponse auto (uniquement pour texte ou vocal transcrit)
+        if text_message and not text_message.startswith("🖼️") and not text_message.startswith("📎"):
             try:
                 analysis_prompt = f"""Message WhatsApp de {sender_name}: "{text_message}"
 
@@ -174,6 +230,14 @@ ou
                     "url": "/whatsapp",
                     "type": "whatsapp"
                 })
+        elif text_message:
+            # Pour les images/autres, toujours notifier Rebecca
+            await send_notification_sync({
+                "title": f"📱 WhatsApp - {sender_name}",
+                "body": text_message[:100],
+                "url": "/whatsapp",
+                "type": "whatsapp"
+            })
     
     return {"status": "ok"}
 
@@ -340,6 +404,34 @@ async def whatsapp_reply(request: Dict[str, Any]):
             .execute()
     
     return {"success": success}
+
+
+
+@app.post("/api/whatsapp/send-image")
+async def whatsapp_send_image(request: Dict[str, Any]):
+    """Envoie une image WhatsApp"""
+    to = request.get("to")
+    image_base64 = request.get("image")
+    caption = request.get("caption", "")
+    
+    if not to or not image_base64:
+        return {"success": False, "error": "to et image requis"}
+    
+    clean_to = to.replace("@c.us", "").replace("+", "")
+    
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        response = await client.post(
+            f"{GREENAPI_BASE_URL}/sendFileByUpload/{GREENAPI_API_TOKEN}",
+            json={
+                "chatId": f"{clean_to}@c.us",
+                "file": image_base64,
+                "fileName": "image.jpg",
+                "caption": caption
+            }
+        )
+        return {"success": response.status_code == 200}
+
+
 # =====================================================
 # FONCTIONS UTILITAIRES
 # =====================================================
