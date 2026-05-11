@@ -103,8 +103,19 @@ async def whatsapp_webhook(request: Request):
             
             print(f"💬 [{sender_name}]: {text_message}")
             
-            # Nettoyer le numéro pour l'affichage
-            clean_sender = sender.replace("@c.us", "").replace("+", "")
+            # ✅ SAUVEGARDER IMMÉDIATEMENT EN BASE
+            if supabase:
+                try:
+                    insert_result = supabase.table("whatsapp_messages").insert({
+                        "from": sender,
+                        "from_name": sender_name,
+                        "message": text_message,
+                        "status": "pending",
+                        "created_at": datetime.now().isoformat()
+                    }).execute()
+                    print(f"✅ Message sauvegardé dans Supabase (id: {insert_result.data[0]['id'] if insert_result.data else 'unknown'})")
+                except Exception as e:
+                    print(f"❌ Erreur sauvegarde: {e}")
             
             # Analyser si Becks peut répondre ou si c'est pour Rebecca
             analysis_prompt = f"""Tu es Becks, l'assistante de Rebecca. Un message WhatsApp arrive de {sender_name}.
@@ -142,10 +153,8 @@ Sois naturelle, comme si tu parlais à une amie. Pas de formules robotiques."""
                 
                 if result.get("action") == "auto_reply" and result.get("reply"):
                     reply = result.get("reply")
-                    # Rendre naturel
                     reply = naturalize_response(reply)
                     
-                    # Délai aléatoire avant réponse (2-4 minutes)
                     delay_seconds = random.randint(MIN_REPLY_DELAY, MAX_REPLY_DELAY)
                     print(f"⏰ Réponse automatique dans {delay_seconds//60} min: {reply[:50]}...")
                     
@@ -156,13 +165,16 @@ Sois naturelle, comme si tu parlais à une amie. Pas de formules robotiques."""
                     
                     asyncio.create_task(delayed_reply())
                     
-                    # Sauvegarder
-                    await save_whatsapp_message(sender, sender_name, text_message, reply, "auto")
+                    # Mettre à jour le statut du message en base
+                    if supabase:
+                        supabase.table("whatsapp_messages").update({
+                            "response": reply,
+                            "status": "auto"
+                        }).eq("from", sender).eq("message", text_message).execute()
                 
                 else:  # need_human
                     summary = result.get("summary", f"Nouveau message de {sender_name}")
                     
-                    # Envoyer une notification push à Rebecca
                     await send_notification_sync({
                         "title": f"📱 WhatsApp - {sender_name}",
                         "body": text_message[:100] + ("..." if len(text_message) > 100 else ""),
@@ -171,14 +183,10 @@ Sois naturelle, comme si tu parlais à une amie. Pas de formules robotiques."""
                         "tag": f"wa_{sender}"
                     })
                     
-                    # Sauvegarder
-                    await save_whatsapp_message(sender, sender_name, text_message, summary, "pending")
-                    
-                    print(f"📱 Message pour Rebecca - Notification envoyée")
+                    print(f"📱 Notification envoyée pour message de {sender_name}")
                     
             except Exception as e:
                 print(f"❌ Erreur analyse: {e}")
-                # En cas d'erreur, envoyer quand même une notification
                 await send_notification_sync({
                     "title": f"📱 WhatsApp - {sender_name}",
                     "body": text_message[:100],
@@ -189,12 +197,13 @@ Sois naturelle, comme si tu parlais à une amie. Pas de formules robotiques."""
     return {"status": "ok"}
 
 async def save_whatsapp_message(sender: str, sender_name: str, message: str, response: str, status: str):
-    """Sauvegarde dans Supabase"""
+    """Sauvegarde un message WhatsApp dans Supabase"""
     if not supabase:
-        return
+        print("❌ Supabase non configuré - message non sauvegardé")
+        return False
     
     try:
-        supabase.table("whatsapp_messages").insert({
+        result = supabase.table("whatsapp_messages").insert({
             "from": sender,
             "from_name": sender_name,
             "message": message,
@@ -202,24 +211,44 @@ async def save_whatsapp_message(sender: str, sender_name: str, message: str, res
             "status": status,  # auto, pending, replied
             "created_at": datetime.now().isoformat()
         }).execute()
+        
+        print(f"✅ Message sauvegardé: {sender_name} - {message[:50]}")
+        return True
     except Exception as e:
-        print(f"Erreur sauvegarde: {e}")
+        print(f"❌ Erreur sauvegarde WhatsApp: {e}")
+        return False
+
 
 async def whatsapp_send_message(to: str, message: str):
-    """Envoie un message WhatsApp"""
+    """Envoie un message WhatsApp via GreenAPI"""
     if not GREENAPI_ID_INSTANCE or not GREENAPI_API_TOKEN:
+        print("❌ GreenAPI non configuré")
         return False
     
-    clean_to = to.replace("@c.us", "").replace("+", "")
+    # Nettoyer le numéro (enlever @c.us, +, espaces)
+    clean_to = to.replace("@c.us", "").replace("+", "").replace(" ", "")
     
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(
-            f"{GREENAPI_BASE_URL}/sendMessage/{GREENAPI_API_TOKEN}",
-            json={"chatId": f"{clean_to}@c.us", "message": message}
-        )
-        return response.status_code == 200
-
-
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{GREENAPI_BASE_URL}/sendMessage/{GREENAPI_API_TOKEN}",
+                json={
+                    "chatId": f"{clean_to}@c.us",
+                    "message": message
+                }
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                print(f"✅ Message WhatsApp envoyé à {clean_to}: {message[:50]}...")
+                return True
+            else:
+                print(f"❌ Erreur envoi WhatsApp: {response.status_code}")
+                return False
+                
+    except Exception as e:
+        print(f"❌ Exception envoi WhatsApp: {e}")
+        return False
 
 @app.post("/api/whatsapp/summary")
 async def whatsapp_summary():
