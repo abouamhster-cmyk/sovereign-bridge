@@ -3,6 +3,7 @@ import uuid
 import json
 from typing import Optional
 import logging
+import random
 import re
 import asyncio
 from datetime import datetime, timedelta
@@ -33,12 +34,6 @@ app.add_middleware(
 # =====================================================
 # WHATSAPP WEBHOOK - PLACÉ ICI APRÈS CORS
 # =====================================================
-# =====================================================
-# WHATSAPP WEBHOOK - VERSION NATURELLE
-# =====================================================
-
-import random
-
 # Délai de réponse aléatoire entre 2 et 4 minutes (pour faire naturel)
 MIN_REPLY_DELAY = 120  # 2 minutes en secondes
 MAX_REPLY_DELAY = 240  # 4 minutes en secondes
@@ -225,6 +220,116 @@ async def whatsapp_send_message(to: str, message: str):
         return response.status_code == 200
 
 
+
+@app.post("/api/whatsapp/summary")
+async def whatsapp_summary():
+    """Génère un résumé des messages WhatsApp pour Rebecca"""
+    if not supabase:
+        return {"summary": "Aucun message WhatsApp reçu."}
+    
+    cutoff = (datetime.now() - timedelta(days=7)).isoformat()
+    
+    result = supabase.table("whatsapp_messages")\
+        .select("*")\
+        .eq("status", "pending")\
+        .gte("created_at", cutoff)\
+        .order("created_at", desc=True)\
+        .execute()
+    
+    if not result.data:
+        return {"summary": "Aucun message WhatsApp en attente.", "has_messages": False}
+    
+    # Analyser les messages avec Becks
+    messages_text = ""
+    for msg in result.data[:10]:
+        messages_text += f"- **{msg.get('from_name', 'Inconnu')}** ({msg.get('created_at', '')[:10]}): {msg.get('message')}\n"
+    
+    prompt = f"""Voici les messages WhatsApp en attente de réponse :
+
+{messages_text}
+
+Rédige un résumé pour Rebecca :
+1. Dis-lui combien de messages en attente
+2. Classe-les par priorité (urgent, important, normal)
+3. Pour chaque message prioritaire, propose une réponse
+4. Demande-lui ce qu'elle veut répondre
+
+Sois naturelle, comme une assistante qui présente des messages à sa patronne."""
+    
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "system", "content": prompt}],
+        max_tokens=500
+    )
+    
+    return {
+        "summary": response.choices[0].message.content,
+        "has_messages": True,
+        "messages": result.data[:10]
+    }
+# =====================================================
+# WHATSAPP - GESTION DES CONVERSATIONS
+# =====================================================
+
+@app.get("/api/whatsapp/conversations")
+async def get_whatsapp_conversations(days: int = 7):
+    """Récupère les conversations WhatsApp des derniers jours"""
+    if not supabase:
+        return {"conversations": []}
+    
+    cutoff_date = (datetime.now() - timedelta(days=days)).isoformat()
+    
+    result = supabase.table("whatsapp_messages")\
+        .select("*")\
+        .gte("created_at", cutoff_date)\
+        .order("created_at", desc=True)\
+        .execute()
+    
+    # Grouper par expéditeur
+    conversations = {}
+    for msg in result.data:
+        sender = msg.get("from")
+        if sender not in conversations:
+            conversations[sender] = {
+                "from": sender,
+                "from_name": msg.get("from_name", "Inconnu"),
+                "messages": [],
+                "unread": 0,
+                "last_message_at": msg.get("created_at")
+            }
+        conversations[sender]["messages"].append({
+            "id": msg.get("id"),
+            "message": msg.get("message"),
+            "response": msg.get("response"),
+            "status": msg.get("status", "pending"),
+            "created_at": msg.get("created_at")
+        })
+        if msg.get("status") == "pending":
+            conversations[sender]["unread"] += 1
+    
+    return {"conversations": list(conversations.values())}
+
+@app.post("/api/whatsapp/reply")
+async def whatsapp_reply(request: Dict[str, Any]):
+    """Envoie une réponse WhatsApp (depuis Rebecca)"""
+    to = request.get("to")
+    message = request.get("message")
+    message_id = request.get("message_id")
+    
+    if not to or not message:
+        return {"success": False, "error": "to et message requis"}
+    
+    # Envoyer via GreenAPI
+    success = await whatsapp_send_message(to, message)
+    
+    if success and message_id and supabase:
+        # Marquer comme répondu
+        supabase.table("whatsapp_messages")\
+            .update({"status": "replied", "response": message})\
+            .eq("id", message_id)\
+            .execute()
+    
+    return {"success": success}
 # =====================================================
 # FONCTIONS UTILITAIRES
 # =====================================================
@@ -2188,6 +2293,48 @@ Bonne réponse :
 
 **Si tu ne sais pas quoi dire de vraiment utile, pose une question précise. Ne comble pas le silence avec du remplissage.**
 
+## COMMANDE : "Montre-moi les messages WhatsApp"
+
+Quand Rebecca dit "Montre-moi les messages WhatsApp" :
+
+1. Appelle l'API GET /api/whatsapp/conversations
+2. Présente les messages par ordre de priorité
+3. Propose des réponses avec boutons [ACTION:{"type":"whatsapp_reply",...}]
+
+Exemple de réponse :
+"📱 Tu as 2 messages en attente :
+
+🔴 **Jean** (aujourd'hui) : "Le devis est prêt ?"
+
+👉 Je te propose de répondre : "Oui Jean, il est prêt. Je te l'envoie."
+
+[ACTION:{"type":"whatsapp_reply","params":{"to":"22997123456","message":"Oui Jean, le devis est prêt. Je te l'envoie.","message_id":"msg_123"},"label":"📱 Envoyer à Jean"}]
+
+Veux-tu que je modifie la réponse ?"
+
+
+📱 Tu as 3 messages WhatsApp en attente :
+
+🔴 URGENT - Jean (aujourd'hui 14h32) :
+"Le dossier DDA est-il prêt ? Je dois le soumettre demain."
+
+🟡 IMPORTANT - Marie (hier 18h15) :
+"Pour la réunion de mardi, c'est confirmé ?"
+
+🟢 NORMAL - Paul (hier 10h) :
+"Merci pour les infos !"
+
+---
+
+Pour Jean, je te propose de répondre :
+
+[ACTION:{"type":"whatsapp_reply","params":{"to":"22997123456","message":"Oui Jean, le dossier DDA est prêt. Je te l'envoie dans la journée.","message_id":"msg_123"},"label":"📱 Envoyer à Jean"}]
+[ACTION:{"type":"whatsapp_reply_custom","params":{"to":"22997123456","original_message":"Le dossier DDA est-il prêt ?"},"label":"✏️ Personnaliser réponse"}]
+
+Pour Marie :
+[ACTION:{"type":"whatsapp_reply","params":{"to":"22998765432","message":"Oui Marie, la réunion de mardi est confirmée à 14h.","message_id":"msg_456"},"label":"📱 Envoyer à Marie"}]
+
+Dis-moi ce que tu veux répondre, ou modifie ma proposition.
 # ================================================================
 # XIII. YOUR IDENTITY (FINAL)
 # ================================================================
