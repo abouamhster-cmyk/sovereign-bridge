@@ -33,6 +33,51 @@ app.add_middleware(
 # =====================================================
 # WHATSAPP WEBHOOK - PLACÉ ICI APRÈS CORS
 # =====================================================
+# =====================================================
+# WHATSAPP WEBHOOK - VERSION NATURELLE
+# =====================================================
+
+import random
+
+# Délai de réponse aléatoire entre 2 et 4 minutes (pour faire naturel)
+MIN_REPLY_DELAY = 120  # 2 minutes en secondes
+MAX_REPLY_DELAY = 240  # 4 minutes en secondes
+
+# Ticks de langage naturels (style Rebecca)
+THINKING_PREFIXES = [
+    "", "Mmh ", "Euh ", "Alors ", "Attends ", "Je réfléchis... ", 
+    "Là tout de suite ", "Franchement ", "Je dirais ", "En vrai "
+]
+
+RELAXED_PREFIXES = [
+    "Ok ", "Bien vu ", "D'accord ", "Ça marche ", "Entendu ", 
+    "C'est noté ", "Parfait ", "Nickel ", "Ça roule "
+]
+
+EMOJIS = ["", "✨", "👌", "🙏", "😊", "❤️", "🌱"]
+
+def naturalize_response(text: str) -> str:
+    """Rend la réponse plus naturelle, moins robotique"""
+    import random
+    
+    # Ajouter un préfixe aléatoire une fois sur 3
+    if random.random() < 0.3:
+        prefix = random.choice(THINKING_PREFIXES)
+        text = prefix + text[0].lower() + text[1:] if text else text
+    
+    # Ajouter un emoji une fois sur 4
+    if random.random() < 0.25:
+        text += " " + random.choice(EMOJIS)
+    
+    # Éviter les formules trop polies et robotiques
+    text = text.replace("Je suis désolé", "Désolée")
+    text = text.replace("Je ne peux pas", "Je peux pas")
+    text = text.replace("Je vais", "Je")
+    text = text.replace("Souhaitez-vous", "Tu veux")
+    text = text.replace("Pouvez-vous", "Tu peux")
+    text = text.replace("Cordialement", "")
+    
+    return text.strip()
 
 @app.api_route("/api/whatsapp/webhook", methods=["GET", "POST", "OPTIONS"])
 async def whatsapp_webhook(request: Request):
@@ -42,12 +87,143 @@ async def whatsapp_webhook(request: Request):
     body = await request.body()
     body_str = body.decode('utf-8')
     
-    print("=" * 50)
-    print("📱 WhatsApp webhook reçu")
-    print(f"Body: {body_str}")
-    print("=" * 50)
+    try:
+        data = json.loads(body_str)
+    except:
+        data = {}
+    
+    # Ignorer les statuts d'envoi
+    if data.get("typeWebhook") in ["outgoingMessageStatus", "outgoingAPIMessageReceived"]:
+        return {"status": "ok"}
+    
+    # Traiter uniquement les messages entrants
+    if data.get("typeWebhook") == "incomingMessageReceived":
+        message_data = data.get("messageData", {})
+        if message_data.get("typeMessage") == "textMessage":
+            text_message = message_data.get("textMessageData", {}).get("textMessage", "")
+            sender_data = data.get("senderData", {})
+            sender = sender_data.get("sender", "")
+            sender_name = sender_data.get("senderName", "Inconnu")
+            chat_id = sender_data.get("chatId", sender)
+            
+            print(f"💬 [{sender_name}]: {text_message}")
+            
+            # Nettoyer le numéro pour l'affichage
+            clean_sender = sender.replace("@c.us", "").replace("+", "")
+            
+            # Analyser si Becks peut répondre ou si c'est pour Rebecca
+            analysis_prompt = f"""Tu es Becks, l'assistante de Rebecca. Un message WhatsApp arrive de {sender_name}.
+
+Message: "{text_message}"
+
+Tu dois décider si tu peux répondre TOUTE SEULE ou si ça nécessite Rebecca.
+
+RÈGLES POUR RÉPONDRE SEULE :
+- Informations générales, questions simples, salutations, remerciements
+- Demandes sur l'agenda public, heures, disponibilités basiques
+- Confirmation de réception, "je transmets", etc.
+
+RÈGLES POUR ENVOYER À REBECCA :
+- Informations personnelles, décisions, urgences
+- Demandes d'argent, de rendez-vous spécifiques
+- [CONTACT] : le message demande spécifiquement Rebecca
+- Quand tu n'es pas sûre
+
+Réponds UNIQUEMENT avec ce format JSON :
+{{"action": "auto_reply" ou "need_human", "reply": "ta réponse si auto_reply", "summary": "résumé pour Rebecca si need_human"}}
+
+Sois naturelle, comme si tu parlais à une amie. Pas de formules robotiques."""
+            
+            try:
+                analysis = client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[{"role": "system", "content": analysis_prompt}],
+                    max_tokens=200,
+                    temperature=0.7
+                )
+                
+                import json as json_lib
+                result = json_lib.loads(analysis.choices[0].message.content)
+                
+                if result.get("action") == "auto_reply" and result.get("reply"):
+                    reply = result.get("reply")
+                    # Rendre naturel
+                    reply = naturalize_response(reply)
+                    
+                    # Délai aléatoire avant réponse (2-4 minutes)
+                    delay_seconds = random.randint(MIN_REPLY_DELAY, MAX_REPLY_DELAY)
+                    print(f"⏰ Réponse automatique dans {delay_seconds//60} min: {reply[:50]}...")
+                    
+                    async def delayed_reply():
+                        await asyncio.sleep(delay_seconds)
+                        await whatsapp_send_message(chat_id, reply)
+                        print(f"✅ Réponse envoyée après {delay_seconds//60} min")
+                    
+                    asyncio.create_task(delayed_reply())
+                    
+                    # Sauvegarder
+                    await save_whatsapp_message(sender, sender_name, text_message, reply, "auto")
+                
+                else:  # need_human
+                    summary = result.get("summary", f"Nouveau message de {sender_name}")
+                    
+                    # Envoyer une notification push à Rebecca
+                    await send_notification_sync({
+                        "title": f"📱 WhatsApp - {sender_name}",
+                        "body": text_message[:100] + ("..." if len(text_message) > 100 else ""),
+                        "url": "/whatsapp",
+                        "type": "whatsapp",
+                        "tag": f"wa_{sender}"
+                    })
+                    
+                    # Sauvegarder
+                    await save_whatsapp_message(sender, sender_name, text_message, summary, "pending")
+                    
+                    print(f"📱 Message pour Rebecca - Notification envoyée")
+                    
+            except Exception as e:
+                print(f"❌ Erreur analyse: {e}")
+                # En cas d'erreur, envoyer quand même une notification
+                await send_notification_sync({
+                    "title": f"📱 WhatsApp - {sender_name}",
+                    "body": text_message[:100],
+                    "url": "/whatsapp",
+                    "type": "whatsapp"
+                })
     
     return {"status": "ok"}
+
+async def save_whatsapp_message(sender: str, sender_name: str, message: str, response: str, status: str):
+    """Sauvegarde dans Supabase"""
+    if not supabase:
+        return
+    
+    try:
+        supabase.table("whatsapp_messages").insert({
+            "from": sender,
+            "from_name": sender_name,
+            "message": message,
+            "response": response,
+            "status": status,  # auto, pending, replied
+            "created_at": datetime.now().isoformat()
+        }).execute()
+    except Exception as e:
+        print(f"Erreur sauvegarde: {e}")
+
+async def whatsapp_send_message(to: str, message: str):
+    """Envoie un message WhatsApp"""
+    if not GREENAPI_ID_INSTANCE or not GREENAPI_API_TOKEN:
+        return False
+    
+    clean_to = to.replace("@c.us", "").replace("+", "")
+    
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            f"{GREENAPI_BASE_URL}/sendMessage/{GREENAPI_API_TOKEN}",
+            json={"chatId": f"{clean_to}@c.us", "message": message}
+        )
+        return response.status_code == 200
+
 
 # =====================================================
 # FONCTIONS UTILITAIRES
