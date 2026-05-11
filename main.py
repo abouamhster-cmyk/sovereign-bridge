@@ -34,6 +34,9 @@ app.add_middleware(
 # =====================================================
 # WHATSAPP WEBHOOK - PLACÉ ICI APRÈS CORS
 # =====================================================
+
+GREENAPI_BASE_URL = f"https://api.green-api.com/waInstance{GREENAPI_ID_INSTANCE}" if GREENAPI_ID_INSTANCE else None
+
 # Délai de réponse aléatoire entre 2 et 4 minutes (pour faire naturel)
 MIN_REPLY_DELAY = 120  # 2 minutes en secondes
 MAX_REPLY_DELAY = 240  # 4 minutes en secondes
@@ -431,6 +434,116 @@ async def whatsapp_send_image(request: Dict[str, Any]):
         )
         return {"success": response.status_code == 200}
 
+# =====================================================
+# WHATSAPP VIA GREENAPI (100% CLOUD)
+# =====================================================
+
+GREENAPI_ID_INSTANCE = os.environ.get("GREENAPI_ID_INSTANCE")
+GREENAPI_API_TOKEN = os.environ.get("GREENAPI_API_TOKEN")
+
+@app.post("/api/whatsapp/send")
+async def whatsapp_send(request: Dict[str, Any]):
+    """Envoie un message WhatsApp via GreenAPI"""
+    to = request.get("to")
+    message = request.get("message")
+    
+    if not to or not message:
+        return {"success": False, "error": "to et message requis"}
+    
+    if not GREENAPI_ID_INSTANCE or not GREENAPI_API_TOKEN:
+        return {"success": False, "error": "GreenAPI non configuré"}
+    
+    # Nettoyer le numéro (enlever + et espaces)
+    clean_number = to.replace("+", "").replace(" ", "")
+    
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{GREENAPI_BASE_URL}/sendMessage/{GREENAPI_API_TOKEN}",
+                json={
+                    "chatId": f"{clean_number}@c.us",
+                    "message": message
+                }
+            )
+            result = response.json()
+            
+        return {
+            "success": result.get("idMessage") is not None,
+            "message_id": result.get("idMessage")
+        }
+    except Exception as e:
+        logger.error(f"Erreur envoi WhatsApp: {e}")
+        return {"success": False, "error": str(e)}
+
+
+
+
+@app.get("/api/whatsapp/status")
+async def whatsapp_status():
+    """Vérifie si GreenAPI est configuré"""
+    if not GREENAPI_ID_INSTANCE or not GREENAPI_API_TOKEN:
+        return {"configured": False, "error": "GreenAPI non configuré"}
+    
+    return {"configured": True, "idInstance": GREENAPI_ID_INSTANCE}
+
+
+
+
+@app.get("/api/whatsapp/test-db")
+async def test_db():
+    """Test la connexion à la base"""
+    if not supabase:
+        return {"error": "Supabase non configuré"}
+    
+    try:
+        # Test lecture
+        result = supabase.table("whatsapp_messages").select("*").limit(1).execute()
+        return {
+            "supabase_ok": True,
+            "table_exists": True,
+            "message_count": len(result.data)
+        }
+    except Exception as e:
+        return {
+            "supabase_ok": True,
+            "table_exists": False,
+            "error": str(e)
+        }
+
+
+@app.post("/api/whatsapp/test-webhook")
+async def test_webhook():
+    """Simule un webhook pour tester la sauvegarde"""
+    
+    test_message = {
+        "typeWebhook": "incomingMessageReceived",
+        "messageData": {
+            "typeMessage": "textMessage",
+            "textMessageData": {
+                "textMessage": "Ceci est un message de test"
+            }
+        },
+        "senderData": {
+            "sender": "22900000000@c.us",
+            "senderName": "Test User"
+        }
+    }
+    
+    # Appeler la fonction de sauvegarde directement
+    if supabase:
+        try:
+            result = supabase.table("whatsapp_messages").insert({
+                "from": "22900000000@c.us",
+                "from_name": "Test User",
+                "message": "Ceci est un message de test",
+                "status": "pending",
+                "created_at": datetime.now().isoformat()
+            }).execute()
+            return {"success": True, "inserted": result.data}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    
+    return {"success": False, "error": "Supabase non configuré"}
 
 # =====================================================
 # FONCTIONS UTILITAIRES
@@ -5913,139 +6026,3 @@ async def backup_all_documents_to_drive():
         return {"success": False, "error": str(e)}
 
 
-# =====================================================
-# WHATSAPP VIA GREENAPI (100% CLOUD)
-# =====================================================
-
-GREENAPI_ID_INSTANCE = os.environ.get("GREENAPI_ID_INSTANCE")
-GREENAPI_API_TOKEN = os.environ.get("GREENAPI_API_TOKEN")
-GREENAPI_BASE_URL = f"https://api.green-api.com/waInstance{GREENAPI_ID_INSTANCE}"
-
-@app.post("/api/whatsapp/send")
-async def whatsapp_send(request: Dict[str, Any]):
-    """Envoie un message WhatsApp via GreenAPI"""
-    to = request.get("to")
-    message = request.get("message")
-    
-    if not to or not message:
-        return {"success": False, "error": "to et message requis"}
-    
-    if not GREENAPI_ID_INSTANCE or not GREENAPI_API_TOKEN:
-        return {"success": False, "error": "GreenAPI non configuré"}
-    
-    # Nettoyer le numéro (enlever + et espaces)
-    clean_number = to.replace("+", "").replace(" ", "")
-    
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                f"{GREENAPI_BASE_URL}/sendMessage/{GREENAPI_API_TOKEN}",
-                json={
-                    "chatId": f"{clean_number}@c.us",
-                    "message": message
-                }
-            )
-            result = response.json()
-            
-        return {
-            "success": result.get("idMessage") is not None,
-            "message_id": result.get("idMessage")
-        }
-    except Exception as e:
-        logger.error(f"Erreur envoi WhatsApp: {e}")
-        return {"success": False, "error": str(e)}
-
-
-@app.get("/api/whatsapp/conversations")
-async def whatsapp_conversations():
-    """Récupère l'historique des conversations WhatsApp"""
-    if not supabase:
-        return {"conversations": []}
-    
-    result = supabase.table("whatsapp_messages").select("*").order("created_at", desc=True).limit(50).execute()
-    
-    return {"conversations": result.data}
-
-@app.get("/api/whatsapp/status")
-async def whatsapp_status():
-    """Vérifie si GreenAPI est configuré"""
-    if not GREENAPI_ID_INSTANCE or not GREENAPI_API_TOKEN:
-        return {"configured": False, "error": "GreenAPI non configuré"}
-    
-    return {"configured": True, "idInstance": GREENAPI_ID_INSTANCE}
-
-
-@app.get("/api/whatsapp/test-webhook")
-async def test_webhook():
-    """Pour tester le format du webhook"""
-    return {
-        "expected_format": {
-            "messageData": {
-                "textMessageData": {
-                    "textMessage": "le message"
-                }
-            },
-            "senderData": {
-                "sender": "229XXXXXXXX@c.us",
-                "senderName": "Nom"
-            }
-        },
-        "note": "Assure-toi que GreenAPI envoie ce format"
-    }
-
-
-@app.get("/api/whatsapp/test-db")
-async def test_db():
-    """Test la connexion à la base"""
-    if not supabase:
-        return {"error": "Supabase non configuré"}
-    
-    try:
-        # Test lecture
-        result = supabase.table("whatsapp_messages").select("*").limit(1).execute()
-        return {
-            "supabase_ok": True,
-            "table_exists": True,
-            "message_count": len(result.data)
-        }
-    except Exception as e:
-        return {
-            "supabase_ok": True,
-            "table_exists": False,
-            "error": str(e)
-        }
-
-
-@app.post("/api/whatsapp/test-webhook")
-async def test_webhook():
-    """Simule un webhook pour tester la sauvegarde"""
-    
-    test_message = {
-        "typeWebhook": "incomingMessageReceived",
-        "messageData": {
-            "typeMessage": "textMessage",
-            "textMessageData": {
-                "textMessage": "Ceci est un message de test"
-            }
-        },
-        "senderData": {
-            "sender": "22900000000@c.us",
-            "senderName": "Test User"
-        }
-    }
-    
-    # Appeler la fonction de sauvegarde directement
-    if supabase:
-        try:
-            result = supabase.table("whatsapp_messages").insert({
-                "from": "22900000000@c.us",
-                "from_name": "Test User",
-                "message": "Ceci est un message de test",
-                "status": "pending",
-                "created_at": datetime.now().isoformat()
-            }).execute()
-            return {"success": True, "inserted": result.data}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-    
-    return {"success": False, "error": "Supabase non configuré"}
