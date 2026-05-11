@@ -5903,3 +5903,25 @@ async def test_webhook():
         },
         "note": "Assure-toi que GreenAPI envoie ce format"
     }
+
+
+@app.get("/api/whatsapp/test-db")
+async def test_db():
+    """Test la connexion à la base"""
+    if not supabase:
+        return {"error": "Supabase non configuré"}
+    
+    try:
+        # Test lecture
+        result = supabase.table("whatsapp_messages").select("*").limit(1).execute()
+        return {
+            "supabase_ok": True,
+            "table_exists": True,
+            "message_count": len(result.data)
+        }
+    except Exception as e:
+        return {
+            "supabase_ok": True,
+            "table_exists": False,
+            "error": str(e)
+        }
