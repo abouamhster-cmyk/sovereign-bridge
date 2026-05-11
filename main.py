@@ -113,59 +113,47 @@ async def whatsapp_webhook(request: Request):
                         "status": "pending",
                         "created_at": datetime.now().isoformat()
                     }).execute()
-                    print(f"✅ Message sauvegardé dans Supabase (id: {insert_result.data[0]['id'] if insert_result.data else 'unknown'})")
+                    print(f"✅ Message sauvegardé")
                 except Exception as e:
                     print(f"❌ Erreur sauvegarde: {e}")
             
-            # Analyser si Becks peut répondre ou si c'est pour Rebecca
-            analysis_prompt = f"""Tu es Becks, l'assistante de Rebecca. Un message WhatsApp arrive de {sender_name}.
-
-Message: "{text_message}"
-
-Tu dois décider si tu peux répondre TOUTE SEULE ou si ça nécessite Rebecca.
-
-RÈGLES POUR RÉPONDRE SEULE :
-- Informations générales, questions simples, salutations, remerciements
-- Demandes sur l'agenda public, heures, disponibilités basiques
-- Confirmation de réception, "je transmets", etc.
-
-RÈGLES POUR ENVOYER À REBECCA :
-- Informations personnelles, décisions, urgences
-- Demandes d'argent, de rendez-vous spécifiques
-- [CONTACT] : le message demande spécifiquement Rebecca
-- Quand tu n'es pas sûre
-
-Réponds UNIQUEMENT avec ce format JSON :
-{{"action": "auto_reply" ou "need_human", "reply": "ta réponse si auto_reply", "summary": "résumé pour Rebecca si need_human"}}
-
-Sois naturelle, comme si tu parlais à une amie. Pas de formules robotiques."""
-            
+            # Analyser avec Becks pour réponse automatique
             try:
+                # Prompt simplifié pour aller plus vite
+                analysis_prompt = f"""Message WhatsApp de {sender_name}: "{text_message}"
+
+Réponds UNIQUEMENT avec ce format JSON:
+{{"action": "auto_reply", "reply": "ta réponse courte"}}
+ou
+{{"action": "need_human", "summary": "résumé court"}}
+
+Sois naturelle, 1-2 phrases max."""
+                
                 analysis = client.chat.completions.create(
                     model="gpt-4o",
-                    messages=[{"role": "system", "content": analysis_prompt}],
-                    max_tokens=200,
+                    messages=[{"role": "user", "content": analysis_prompt}],
+                    max_tokens=150,
                     temperature=0.7
                 )
                 
                 import json as json_lib
-                result = json_lib.loads(analysis.choices[0].message.content)
+                result_text = analysis.choices[0].message.content
+                # Nettoyer le texte (enlever les backticks éventuels)
+                result_text = result_text.replace("```json", "").replace("```", "").strip()
+                result = json_lib.loads(result_text)
                 
                 if result.get("action") == "auto_reply" and result.get("reply"):
                     reply = result.get("reply")
-                    reply = naturalize_response(reply)
-                    
-                    delay_seconds = random.randint(MIN_REPLY_DELAY, MAX_REPLY_DELAY)
-                    print(f"⏰ Réponse automatique dans {delay_seconds//60} min: {reply[:50]}...")
+                    delay_seconds = random.randint(60, 120)  # 1-2 minutes
+                    print(f"⏰ Réponse dans {delay_seconds//60} min: {reply[:50]}...")
                     
                     async def delayed_reply():
                         await asyncio.sleep(delay_seconds)
                         await whatsapp_send_message(chat_id, reply)
-                        print(f"✅ Réponse envoyée après {delay_seconds//60} min")
+                        print(f"✅ Réponse envoyée")
                     
                     asyncio.create_task(delayed_reply())
                     
-                    # Mettre à jour le statut du message en base
                     if supabase:
                         supabase.table("whatsapp_messages").update({
                             "response": reply,
@@ -173,17 +161,13 @@ Sois naturelle, comme si tu parlais à une amie. Pas de formules robotiques."""
                         }).eq("from", sender).eq("message", text_message).execute()
                 
                 else:  # need_human
-                    summary = result.get("summary", f"Nouveau message de {sender_name}")
-                    
+                    print(f"📱 Message pour Rebecca - Notification envoyée")
                     await send_notification_sync({
                         "title": f"📱 WhatsApp - {sender_name}",
-                        "body": text_message[:100] + ("..." if len(text_message) > 100 else ""),
+                        "body": text_message[:100],
                         "url": "/whatsapp",
-                        "type": "whatsapp",
-                        "tag": f"wa_{sender}"
+                        "type": "whatsapp"
                     })
-                    
-                    print(f"📱 Notification envoyée pour message de {sender_name}")
                     
             except Exception as e:
                 print(f"❌ Erreur analyse: {e}")
