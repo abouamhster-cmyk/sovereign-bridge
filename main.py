@@ -3,6 +3,8 @@ import uuid
 import json
 from typing import Optional
 import logging
+import hmac
+import hashlib
 import re
 import asyncio  
 from datetime import datetime, timedelta
@@ -5443,3 +5445,120 @@ async def backup_all_documents_to_drive():
     except Exception as e:
         logger.error(f"❌ Erreur backup all: {e}")
         return {"success": False, "error": str(e)}
+
+
+# =====================================================
+# WHATSAPP VIA GREENAPI (100% CLOUD)
+# =====================================================
+
+GREENAPI_ID_INSTANCE = os.environ.get("GREENAPI_ID_INSTANCE")
+GREENAPI_API_TOKEN = os.environ.get("GREENAPI_API_TOKEN")
+GREENAPI_BASE_URL = f"https://api.green-api.com/waInstance{GREENAPI_ID_INSTANCE}"
+
+@app.post("/api/whatsapp/send")
+async def whatsapp_send(request: Dict[str, Any]):
+    """Envoie un message WhatsApp via GreenAPI"""
+    to = request.get("to")
+    message = request.get("message")
+    
+    if not to or not message:
+        return {"success": False, "error": "to et message requis"}
+    
+    if not GREENAPI_ID_INSTANCE or not GREENAPI_API_TOKEN:
+        return {"success": False, "error": "GreenAPI non configuré"}
+    
+    # Nettoyer le numéro (enlever + et espaces)
+    clean_number = to.replace("+", "").replace(" ", "")
+    
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{GREENAPI_BASE_URL}/sendMessage/{GREENAPI_API_TOKEN}",
+                json={
+                    "chatId": f"{clean_number}@c.us",
+                    "message": message
+                }
+            )
+            result = response.json()
+            
+        return {
+            "success": result.get("idMessage") is not None,
+            "message_id": result.get("idMessage")
+        }
+    except Exception as e:
+        logger.error(f"Erreur envoi WhatsApp: {e}")
+        return {"success": False, "error": str(e)}
+
+@app.post("/api/whatsapp/webhook")
+async def whatsapp_webhook(request: Request):
+    """Reçoit les messages WhatsApp entrants"""
+    try:
+        body = await request.json()
+    except:
+        body = {}
+    
+    logger.info(f"📱 Webhook WhatsApp reçu: {body}")
+    
+    # Extraire le message
+    message_data = body.get("messageData", {})
+    text_message = message_data.get("textMessageData", {}).get("textMessage", "")
+    sender_data = body.get("senderData", {})
+    sender = sender_data.get("sender", "")
+    sender_name = sender_data.get("senderName", "Inconnu")
+    
+    if text_message and sender:
+        logger.info(f"💬 Message de {sender_name} ({sender}): {text_message}")
+        
+        # Analyser avec Becks
+        try:
+            chat_response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": f"""Tu es Becks, l'assistante de Rebecca. Tu reçois un message WhatsApp de {sender_name}.
+
+RÈGLES IMPORTANTES :
+- Sois brève : 1-2 phrases maximum
+- Propose une action si nécessaire
+- Si le message nécessite une réponse, réponds directement
+- Utilise le format [ACTION:...] si besoin"""},
+                    {"role": "user", "content": text_message}
+                ],
+                max_tokens=256
+            )
+            
+            reply = chat_response.choices[0].message.content
+            
+            # Sauvegarder en base
+            if supabase:
+                supabase.table("whatsapp_messages").insert({
+                    "from": sender,
+                    "from_name": sender_name,
+                    "message": text_message,
+                    "reply": reply,
+                    "created_at": datetime.now().isoformat()
+                }).execute()
+            
+            logger.info(f"🤖 Réponse Becks: {reply[:100]}")
+            
+        except Exception as e:
+            logger.error(f"Erreur analyse message: {e}")
+    
+    return {"status": "ok"}
+
+@app.get("/api/whatsapp/conversations")
+async def whatsapp_conversations():
+    """Récupère l'historique des conversations WhatsApp"""
+    if not supabase:
+        return {"conversations": []}
+    
+    result = supabase.table("whatsapp_messages").select("*").order("created_at", desc=True).limit(50).execute()
+    
+    return {"conversations": result.data}
+
+@app.get("/api/whatsapp/status")
+async def whatsapp_status():
+    """Vérifie si GreenAPI est configuré"""
+    if not GREENAPI_ID_INSTANCE or not GREENAPI_API_TOKEN:
+        return {"configured": False, "error": "GreenAPI non configuré"}
+    
+    return {"configured": True, "idInstance": GREENAPI_ID_INSTANCE}
