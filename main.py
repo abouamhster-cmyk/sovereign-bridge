@@ -5491,59 +5491,75 @@ async def whatsapp_send(request: Dict[str, Any]):
 
 @app.post("/api/whatsapp/webhook")
 async def whatsapp_webhook(request: Request):
-    """Reçoit les messages WhatsApp entrants"""
+    """Reçoit les messages WhatsApp entrants - Version robuste"""
     try:
-        body = await request.json()
-    except:
-        body = {}
-    
-    logger.info(f"📱 Webhook WhatsApp reçu: {body}")
-    
-    # Extraire le message
-    message_data = body.get("messageData", {})
-    text_message = message_data.get("textMessageData", {}).get("textMessage", "")
-    sender_data = body.get("senderData", {})
-    sender = sender_data.get("sender", "")
-    sender_name = sender_data.get("senderName", "Inconnu")
-    
-    if text_message and sender:
-        logger.info(f"💬 Message de {sender_name} ({sender}): {text_message}")
+        # Récupérer le corps brut
+        body = await request.body()
+        logger.info(f"📱 Webhook WhatsApp - Corps brut: {body[:500]}")
         
-        # Analyser avec Becks
+        # Essayer de parser le JSON
         try:
-            chat_response = client.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {"role": "system", "content": f"""Tu es Becks, l'assistante de Rebecca. Tu reçois un message WhatsApp de {sender_name}.
+            import json
+            data = json.loads(body)
+        except:
+            data = {}
+        
+        logger.info(f"📱 Webhook WhatsApp - JSON parsé: {data}")
+        
+        # GreenAPI peut envoyer différentes structures
+        # Format 1: notification directe
+        if "messageData" in data:
+            message_data = data.get("messageData", {})
+            text_message = message_data.get("textMessageData", {}).get("textMessage", "")
+            sender_data = data.get("senderData", {})
+            sender = sender_data.get("sender", "")
+            sender_name = sender_data.get("senderName", "Inconnu")
+        
+        # Format 2: webhook standard
+        elif "body" in data:
+            text_message = data.get("body", "")
+            sender = data.get("from", "")
+            sender_name = data.get("author", "Inconnu")
+        
+        # Format 3: message direct
+        elif "message" in data:
+            text_message = data.get("message", "")
+            sender = data.get("sender", "")
+            sender_name = "Inconnu"
+        
+        else:
+            logger.warning("📱 Format de webhook non reconnu")
+            return {"status": "received", "note": "format not recognized"}
+        
+        if text_message and sender:
+            logger.info(f"💬 Message de {sender_name} ({sender}): {text_message}")
+            
+            # Analyser avec Becks (optionnel, peut être désactivé pour test)
+            try:
+                chat_response = client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[
+                        {"role": "system", "content": f"Tu es Becks. Réponds brièvement à ce message WhatsApp de {sender_name} (1-2 phrases max)."},
+                        {"role": "user", "content": text_message}
+                    ],
+                    max_tokens=256
+                )
+                reply = chat_response.choices[0].message.content
+                logger.info(f"🤖 Réponse Becks: {reply[:100]}")
+                
+                # Option: répondre automatiquement
+                # await whatsapp_send({"to": sender, "message": reply})
+                
+            except Exception as e:
+                logger.error(f"Erreur analyse: {e}")
+        
+        return {"status": "ok"}
+        
+    except Exception as e:
+        logger.error(f"❌ Erreur webhook: {e}")
+        return {"status": "error", "message": str(e)}
 
-RÈGLES IMPORTANTES :
-- Sois brève : 1-2 phrases maximum
-- Propose une action si nécessaire
-- Si le message nécessite une réponse, réponds directement
-- Utilise le format [ACTION:...] si besoin"""},
-                    {"role": "user", "content": text_message}
-                ],
-                max_tokens=256
-            )
-            
-            reply = chat_response.choices[0].message.content
-            
-            # Sauvegarder en base
-            if supabase:
-                supabase.table("whatsapp_messages").insert({
-                    "from": sender,
-                    "from_name": sender_name,
-                    "message": text_message,
-                    "reply": reply,
-                    "created_at": datetime.now().isoformat()
-                }).execute()
-            
-            logger.info(f"🤖 Réponse Becks: {reply[:100]}")
-            
-        except Exception as e:
-            logger.error(f"Erreur analyse message: {e}")
-    
-    return {"status": "ok"}
+
 
 @app.get("/api/whatsapp/conversations")
 async def whatsapp_conversations():
@@ -5562,3 +5578,22 @@ async def whatsapp_status():
         return {"configured": False, "error": "GreenAPI non configuré"}
     
     return {"configured": True, "idInstance": GREENAPI_ID_INSTANCE}
+
+
+@app.get("/api/whatsapp/test-webhook")
+async def test_webhook():
+    """Pour tester le format du webhook"""
+    return {
+        "expected_format": {
+            "messageData": {
+                "textMessageData": {
+                    "textMessage": "le message"
+                }
+            },
+            "senderData": {
+                "sender": "229XXXXXXXX@c.us",
+                "senderName": "Nom"
+            }
+        },
+        "note": "Assure-toi que GreenAPI envoie ce format"
+    }
