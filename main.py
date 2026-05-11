@@ -5925,3 +5925,38 @@ async def test_db():
             "table_exists": False,
             "error": str(e)
         }
+
+
+@app.post("/api/whatsapp/test-webhook")
+async def test_webhook():
+    """Simule un webhook pour tester la sauvegarde"""
+    
+    test_message = {
+        "typeWebhook": "incomingMessageReceived",
+        "messageData": {
+            "typeMessage": "textMessage",
+            "textMessageData": {
+                "textMessage": "Ceci est un message de test"
+            }
+        },
+        "senderData": {
+            "sender": "22900000000@c.us",
+            "senderName": "Test User"
+        }
+    }
+    
+    # Appeler la fonction de sauvegarde directement
+    if supabase:
+        try:
+            result = supabase.table("whatsapp_messages").insert({
+                "from": "22900000000@c.us",
+                "from_name": "Test User",
+                "message": "Ceci est un message de test",
+                "status": "pending",
+                "created_at": datetime.now().isoformat()
+            }).execute()
+            return {"success": True, "inserted": result.data}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    
+    return {"success": False, "error": "Supabase non configuré"}
