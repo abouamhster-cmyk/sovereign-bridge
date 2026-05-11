@@ -35,7 +35,6 @@ app.add_middleware(
 # WHATSAPP WEBHOOK - PLACÉ ICI APRÈS CORS
 # =====================================================
 
-GREENAPI_BASE_URL = f"https://api.green-api.com/waInstance{GREENAPI_ID_INSTANCE}" if GREENAPI_ID_INSTANCE else None
 
 # Délai de réponse aléatoire entre 2 et 4 minutes (pour faire naturel)
 MIN_REPLY_DELAY = 120  # 2 minutes en secondes
@@ -438,8 +437,7 @@ async def whatsapp_send_image(request: Dict[str, Any]):
 # WHATSAPP VIA GREENAPI (100% CLOUD)
 # =====================================================
 
-GREENAPI_ID_INSTANCE = os.environ.get("GREENAPI_ID_INSTANCE")
-GREENAPI_API_TOKEN = os.environ.get("GREENAPI_API_TOKEN")
+
 
 @app.post("/api/whatsapp/send")
 async def whatsapp_send(request: Dict[str, Any]):
@@ -581,7 +579,10 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
 VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY")
 VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY")
-VAPID_CLAIMS = {"sub": "mailto:sovereign@rebecca.com"}
+VAPID_CLAIMS = {"sub": "mailto:jbillcataria@gmail.com"}
+GREENAPI_ID_INSTANCE = os.environ.get("GREENAPI_ID_INSTANCE")
+GREENAPI_API_TOKEN = os.environ.get("GREENAPI_API_TOKEN")
+GREENAPI_BASE_URL = f"https://api.green-api.com/waInstance{GREENAPI_ID_INSTANCE}" if GREENAPI_ID_INSTANCE else None
 
 if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY manquante")
