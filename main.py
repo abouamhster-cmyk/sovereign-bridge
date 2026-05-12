@@ -2547,7 +2547,17 @@ Si tu veux être proactive, tu peux aussi dire :
 [ACTION:{"type":"whatsapp_get_conversations","params":{"days":7},"label":"📱 Voir messages (7 jours)"}]
 
 
+# Version allégée pour les modes conversationnels
+LIGHT_PROACTIVITY = """
+## RÈGLE IMPORTANTE : 
+- Sois naturelle, ne force pas les boutons
+- Utilise [ACTION:...] SEULEMENT si Rebecca demande explicitement une action
+- La plupart du temps, réponds simplement sans bouton
+"""
 
+# Pour les modes "parle-moi", "sovereign-mode" - AUCUN bouton
+# Pour "fais-le-avec-moi" - quelques boutons
+# Pour les autres - boutons seulement si pertinent
 # ================================================================
 # RÈGLES DE PROACTIVITÉ - À UTILISER AVEC MODÉRATION
 # ================================================================
