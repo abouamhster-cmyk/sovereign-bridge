@@ -339,12 +339,31 @@ async def whatsapp_reply(request: Dict[str, Any]):
     if not to or not message:
         return {"success": False, "error": "to et message requis"}
     
+    # Envoyer via GreenAPI
     success = await whatsapp_send_message(to, message)
     
-    if success and message_id and supabase:
-        supabase.table("whatsapp_messages").update({
-            "status": "replied", "response": message
-        }).eq("id", message_id).execute()
+    if success and supabase:
+        # Si un message_id est fourni, on le marque directement
+        if message_id:
+            supabase.table("whatsapp_messages").update({
+                "status": "replied", 
+                "response": message
+            }).eq("id", message_id).execute()
+        else:
+            # Sinon, trouver le dernier message "pending" de ce contact
+            pending = supabase.table("whatsapp_messages")\
+                .select("id")\
+                .eq("from", to)\
+                .eq("status", "pending")\
+                .order("created_at", desc=True)\
+                .limit(1)\
+                .execute()
+            
+            if pending.data:
+                supabase.table("whatsapp_messages").update({
+                    "status": "replied", 
+                    "response": message
+                }).eq("id", pending.data[0]["id"]).execute()
     
     return {"success": success}
 
