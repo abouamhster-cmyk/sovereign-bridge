@@ -176,7 +176,7 @@ ou
                     temperature=0.7
                 )
                 
-                              import json as json_lib
+            import json as json_lib
                 result_text = analysis.choices[0].message.content
                 result_text = result_text.replace("```json", "").replace("```", "").strip()
                 result = json_lib.loads(result_text)
