@@ -176,7 +176,7 @@ ou
                     temperature=0.7
                 )
                 
-                import json as json_lib
+                              import json as json_lib
                 result_text = analysis.choices[0].message.content
                 result_text = result_text.replace("```json", "").replace("```", "").strip()
                 result = json_lib.loads(result_text)
@@ -187,30 +187,48 @@ ou
                     delay_seconds = random.randint(MIN_REPLY_DELAY, MAX_REPLY_DELAY)
                     print(f"⏰ Réponse auto dans {delay_seconds//60} min: {reply[:50]}...")
                     
+                    # Sauvegarder l'ID du message pour vérification
+                    msg_id = None
+                    if supabase:
+                        insert_result = supabase.table("whatsapp_messages").insert({
+                            "from": sender,
+                            "from_name": sender_name,
+                            "message": text_message,
+                            "response": reply,
+                            "status": "auto_pending",
+                            "created_at": datetime.now().isoformat()
+                        }).execute()
+                        if insert_result.data:
+                            msg_id = insert_result.data[0].get("id")
+                    
                     async def delayed_reply():
                         await asyncio.sleep(delay_seconds)
-                        # Vérifier si Rebecca n'a pas déjà répondu
-                        if supabase:
-                            existing = supabase.table("whatsapp_messages")\
-                                .select("*")\
-                                .eq("from", sender)\
-                                .eq("status", "replied")\
+                        
+                        # Vérifier si le message a été marqué comme "replied" entre-temps
+                        if supabase and msg_id:
+                            check = supabase.table("whatsapp_messages")\
+                                .select("status")\
+                                .eq("id", msg_id)\
                                 .execute()
-                            if existing.data:
-                                print(f"⏭️ Rebecca a déjà répondu, annulation")
+                            
+                            if check.data and check.data[0].get("status") == "replied":
+                                print(f"⏭️ Message déjà répondu manuellement, annulation")
                                 return
+                        
+                        # Envoyer la réponse
                         await whatsapp_send_message(chat_id, reply)
-                        print(f"✅ Réponse envoyée")
+                        print(f"✅ Réponse auto envoyée")
+                        
+                        # Mettre à jour le statut
+                        if supabase and msg_id:
+                            supabase.table("whatsapp_messages").update({
+                                "status": "auto_sent"
+                            }).eq("id", msg_id).execute()
                     
                     asyncio.create_task(delayed_reply())
-                    
-                    if supabase:
-                        supabase.table("whatsapp_messages").update({
-                            "response": reply, "status": "auto"
-                        }).eq("from", sender).eq("message", text_message).execute()
                 
                 else:
-                    print(f"📱 Message pour Rebecca")
+                    print(f"📱 Message nécessite Rebecca")
                     send_notification_sync({
                         "title": f"📱 WhatsApp - {sender_name}",
                         "body": text_message[:100],
