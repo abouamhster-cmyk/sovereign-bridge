@@ -201,28 +201,34 @@ ou
                             msg_id = insert_result.data[0].get("id")
                     
                     async def delayed_reply():
+                        print(f"🔍 Délai de {delay_seconds} secondes démarré...")
                         await asyncio.sleep(delay_seconds)
                         
-                        # Vérifier si le message a été marqué comme "replied" entre-temps
+                        print(f"🔍 Vérification du message {msg_id}...")
+                        
+                        # Vérifier si le message a été marqué comme "replied"
                         if supabase and msg_id:
                             check = supabase.table("whatsapp_messages")\
                                 .select("status")\
                                 .eq("id", msg_id)\
                                 .execute()
                             
+                            print(f"🔍 Statut trouvé: {check.data[0].get('status') if check.data else 'None'}")
+                            
                             if check.data and check.data[0].get("status") == "replied":
-                                print(f"⏭️ Message déjà répondu manuellement, annulation")
+                                print(f"⏭️ Annulation: message déjà répondu manuellement")
                                 return
                         
                         # Envoyer la réponse
+                        print(f"🔍 Envoi de la réponse: {reply[:50]}...")
                         await whatsapp_send_message(chat_id, reply)
                         print(f"✅ Réponse auto envoyée")
                         
-                        # Mettre à jour le statut
                         if supabase and msg_id:
                             supabase.table("whatsapp_messages").update({
                                 "status": "auto_sent"
                             }).eq("id", msg_id).execute()
+
                     
                     asyncio.create_task(delayed_reply())
                 
