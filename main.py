@@ -225,7 +225,7 @@ ou
                 
                 else:
                     print(f"📱 Message nécessite Rebecca - Notification envoyée")
-                    await send_notification_sync({
+                    send_notification_sync({
                         "title": f"📱 WhatsApp - {sender_name}",
                         "body": text_message[:100],
                         "url": "/whatsapp",
@@ -234,7 +234,7 @@ ou
                     
             except Exception as e:
                 print(f"❌ Erreur analyse: {e}")
-                await send_notification_sync({
+                send_notification_sync({
                     "title": f"📱 WhatsApp - {sender_name}",
                     "body": text_message[:100],
                     "url": "/whatsapp",
@@ -242,7 +242,7 @@ ou
                 })
         elif text_message:
             # Pour les images/autres, toujours notifier Rebecca
-            await send_notification_sync({
+            send_notification_sync({
                 "title": f"📱 WhatsApp - {sender_name}",
                 "body": text_message[:100],
                 "url": "/whatsapp",
