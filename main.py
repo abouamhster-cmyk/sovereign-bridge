@@ -104,7 +104,15 @@ async def whatsapp_webhook(request: Request):
         chat_id = sender_data.get("chatId", sender)
         
         text_message = ""
+
+        # ========== IGNORER LES RÉACTIONS ==========
+        if message_type == "reactionMessage":
+            print(f"⏭️ Réaction ignorée de {sender_name}")
+            return {"status": "ok"}
         
+        if message_type == "textMessage":
+            text_message = message_data.get("textMessageData", {}).get("textMessage", "")
+            print(f"💬 [{sender_name}]: {text_message}")
         # ========== TEXTE ==========
         if message_type == "textMessage":
             text_message = message_data.get("textMessageData", {}).get("textMessage", "")
@@ -348,8 +356,8 @@ Sois naturelle, comme une assistante qui présente des messages à sa patronne."
 # =====================================================
 
 @app.get("/api/whatsapp/conversations")
-async def get_whatsapp_conversations(days: int = 7):
-    """Récupère les conversations WhatsApp des derniers jours"""
+async def get_whatsapp_conversations(days: int = 30):  # Passage à 30 jours
+    """Récupère les conversations WhatsApp du mois"""
     if not supabase:
         return {"conversations": []}
     
@@ -364,26 +372,54 @@ async def get_whatsapp_conversations(days: int = 7):
     # Grouper par expéditeur
     conversations = {}
     for msg in result.data:
-        sender = msg.get("from")
+        sender = msg.get("from", "")
+        
+        # ⚠️ IGNORER LES GROUPES
+        # Les groupes WhatsApp ont souvent des IDs comme "xxxxxx@g.us"
+        if sender.endswith("@g.us"):
+            continue
+        
+        # Ignorer les numéros trop longs ou invalides
+        if len(sender) < 10:
+            continue
+        
+        # Nettoyer le nom
+        from_name = msg.get("from_name", "Inconnu")
+        if from_name == "Inconnu" or len(from_name) < 2:
+            from_name = sender.split("@")[0][:15]
+        
         if sender not in conversations:
             conversations[sender] = {
                 "from": sender,
-                "from_name": msg.get("from_name", "Inconnu"),
+                "from_name": from_name,
                 "messages": [],
                 "unread": 0,
                 "last_message_at": msg.get("created_at")
             }
+        
+        # Message tronqué pour l'affichage
+        message_text = msg.get("message", "")
+        if len(message_text) > 150:
+            message_text = message_text[:150] + "..."
+        
         conversations[sender]["messages"].append({
             "id": msg.get("id"),
-            "message": msg.get("message"),
-            "response": msg.get("response"),
+            "message": message_text,
+            "type": "text",
             "status": msg.get("status", "pending"),
             "created_at": msg.get("created_at")
         })
+        
         if msg.get("status") == "pending":
             conversations[sender]["unread"] += 1
     
-    return {"conversations": list(conversations.values())}
+    # Filtrer les conversations vides
+    filtered = [c for c in conversations.values() if c["messages"]]
+    
+    # Trier par date du dernier message
+    filtered.sort(key=lambda x: x["last_message_at"], reverse=True)
+    
+    return {"conversations": filtered[:15]}  # Max 15 conversations
 
 @app.post("/api/whatsapp/reply")
 async def whatsapp_reply(request: Dict[str, Any]):
