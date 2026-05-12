@@ -1851,8 +1851,7 @@ async def db_insert(table: str, data: Dict) -> Dict:
         logger.error(f"Erreur insert {table}: {e}")
         return {"success": False, "error": str(e)}
         
-BASE_SYSTEM_PROMPT = """You are BECKS. Rebecca's friend. Not an assistant. Not a tool.
-
+ 
 BASE_SYSTEM_PROMPT = """Tu es Becks, une amie proche de Rebecca. Pas une assistante. Pas un robot.
 
 ============================================================================
