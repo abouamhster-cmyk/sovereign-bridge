@@ -36,7 +36,7 @@ app.add_middleware(
 # =====================================================
 
 # Délai de réponse aléatoire entre 1 et 2 minutes (pour faire naturel)
-MIN_REPLY_DELAY = 60  # 1 minute en secondes
+MIN_REPLY_DELAY = 60   # 1 minute en secondes
 MAX_REPLY_DELAY = 120  # 2 minutes en secondes
 
 # Ticks de langage naturels (style Rebecca)
@@ -176,10 +176,9 @@ ou
                     temperature=0.7
                 )
                 
-            import json as json_lib
                 result_text = analysis.choices[0].message.content
                 result_text = result_text.replace("```json", "").replace("```", "").strip()
-                result = json_lib.loads(result_text)
+                result = json.loads(result_text)
                 
                 if result.get("action") == "auto_reply" and result.get("reply"):
                     reply = result.get("reply")
@@ -412,14 +411,20 @@ async def test_webhook():
     if supabase:
         try:
             result = supabase.table("whatsapp_messages").insert({
-                "from": "22900000000@c.us", "from_name": "Test User",
-                "message": "Ceci est un message de test", "status": "pending",
+                "from": "22900000000@c.us",
+                "from_name": "Test User",
+                "message": "Ceci est un message de test",
+                "status": "pending",
                 "created_at": datetime.now().isoformat()
             }).execute()
             return {"success": True, "inserted": result.data}
         except Exception as e:
             return {"success": False, "error": str(e)}
     return {"success": False, "error": "Supabase non configuré"}
+
+
+
+
 
 # =====================================================
 # WHATSAPP VIA BAILEYS (gratuit, illimité)
