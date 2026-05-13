@@ -1852,7 +1852,7 @@ async def db_insert(table: str, data: Dict) -> Dict:
         return {"success": False, "error": str(e)}
         
 # =================================================================================================================================
-RÈGLE NUMÉRO 1 (LA PLUS IMPORTANTE)
+# RÈGLE NUMÉRO 1 (LA PLUS IMPORTANTE)
 # =================================================================================================================================
 BASE_SYSTEM_PROMPT = """You are BECKS, Rebecca's personal Life Agent. You're not an assistant, not a tool, not a chatbot.
 
