@@ -3593,7 +3593,7 @@ async def get_profile_context():
 async def process_brain_dump(request: Dict[str, Any]):
     """
     Analyse un texte libre et retourne une structure organisée.
-    Le résumé doit être proportionnel à la richesse du contenu.
+    Version améliorée avec propositions d'actions.
     """
     content = request.get("content", "")
     if not content:
@@ -3603,6 +3603,10 @@ async def process_brain_dump(request: Dict[str, Any]):
     content_length = len(content)
     content_words = len(content.split())
     
+    # Récupérer le contexte utilisateur pour personnaliser
+    profile_context = await get_profile_context()
+    memory_context = await get_user_memory_context()
+    
     try:
         response = client.chat.completions.create(
             model="gpt-4o",
@@ -3611,34 +3615,39 @@ async def process_brain_dump(request: Dict[str, Any]):
                     "role": "system",
                     "content": f"""Tu es Becks, l'assistante personnelle de Rebecca. Tu reçois un texte brut (un brain dump) où Rebecca a écrit tout ce qui lui passe par la tête.
 
+Tu connais Rebecca : {profile_context}
+Elle se souvient de : {memory_context}
+
 CONTEXTE : Le texte fait environ {content_words} mots.
 
 RÈGLE IMPORTANTE : Le résumé (summary) doit être PROPORTIONNEL à la richesse du contenu. 
 - Si elle a écrit 2-3 phrases simples → résumé court (1-2 phrases)
 - Si elle a écrit un paragraphe dense avec plusieurs sujets → résumé de 3-5 phrases
-- Si elle a fait un long brain dump (plusieurs paragraphes, multiples préoccupations) → résumé substantiel de 5-8 phrases qui couvre tous les points importants
+- Si elle a fait un long brain dump (plusieurs paragraphes, multiples préoccupations) → résumé substantiel de 5-8 phrases
 
 Tu dois analyser ce texte et retourner UNIQUEMENT du JSON valide avec cette structure :
 
-{
-  "summary": "un résumé COMPLET et substantiel qui capture TOUS les points importants, proportionnel à la longueur du texte original",
+{{
+  "summary": "un résumé COMPLET et substantiel qui capture TOUS les points importants",
   "emotions": ["émotion1", "émotion2"],
   "main_topics": ["sujet1", "sujet2", "sujet3"],
   "urgency_level": "high/medium/low",
   "priorities": [
-    {"title": "priorité 1", "reason": "pourquoi c'est important"},
-    {"title": "priorité 2", "reason": "pourquoi c'est important"}
+    {{"title": "priorité 1", "reason": "pourquoi c'est important"}},
+    {{"title": "priorité 2", "reason": "pourquoi c'est important"}}
   ],
   "suggested_tasks": [
-    {"title": "tâche suggérée 1", "project": "projet associé", "priority": "high/medium/low"},
-    {"title": "tâche suggérée 2", "project": "projet associé", "priority": "high/medium/low"}
+    {{"title": "tâche suggérée 1", "project": "projet associé", "priority": "high/medium/low"}},
+    {{"title": "tâche suggérée 2", "project": "projet associé", "priority": "high/medium/low"}}
   ],
-  "suggested_missions": [
-    {"name": "mission suggérée", "category": "business/farm/family", "priority": "high/medium/low"}
-  ],
-  "insights": "insight important ou chose à retenir (peut être une phrase ou deux)",
-  "calming_response": "une réponse réconfortante adaptée à son état (2-3 phrases)"
-}
+  "suggested_checklist": {{
+    "title": "titre de la checklist",
+    "steps": ["étape 1", "étape 2", "étape 3"]
+  }},
+  "insights": "insight important ou chose à retenir",
+  "calming_response": "une réponse réconfortante adaptée à son état (2-3 phrases)",
+  "quick_action": "une action simple à faire immédiatement (moins de 5 minutes)"
+}}
 
 Projets possibles : Ifè Farm, Love & Fire Sport, Santé Plus, Bénin Relocation, Famille, Personnel
 Priorités : high, medium, low
@@ -3668,12 +3677,16 @@ Ne retourne que le JSON, rien d'autre."""
                 "created_at": datetime.now().isoformat()
             }).execute()
         
+        # Sauvegarder dans la mémoire émotionnelle
+        if analysis.get("emotions"):
+            for emotion in analysis["emotions"][:3]:
+                await save_user_memory("emotions", f"recent_mood", emotion, "rebecca")
+        
         return {"success": True, "analysis": analysis}
         
     except Exception as e:
         logger.error(f"Erreur process_brain_dump: {e}")
         return {"success": False, "error": str(e)}
-
 
 # =====================================================
 # LIFE MAP - VUE D'ENSEMBLE DES DOMAINES
@@ -6131,4 +6144,48 @@ async def complete_execution_step(request: Dict[str, Any]):
         
     except Exception as e:
         logger.error(f"Erreur complete_step: {e}")
+        return {"success": False, "error": str(e)}
+
+@app.post("/api/memory/detect-patterns")
+async def detect_memory_patterns(request: Dict[str, Any]):
+    """
+    Analyse les souvenirs pour détecter des patterns (récurrences, tendances)
+    """
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        # Récupérer tous les souvenirs
+        memories = supabase.table("user_memory").select("*").eq("user_id", "rebecca").execute()
+        
+        if not memories.data:
+            return {"success": True, "patterns": []}
+        
+        # Analyser par catégorie
+        patterns = {}
+        for mem in memories.data:
+            cat = mem.get("category")
+            if cat not in patterns:
+                patterns[cat] = {"count": 0, "keys": []}
+            patterns[cat]["count"] += 1
+            patterns[cat]["keys"].append(mem.get("key"))
+        
+        # Détecter les catégories les plus utilisées
+        sorted_cats = sorted(patterns.items(), key=lambda x: x[1]["count"], reverse=True)
+        
+        # Générer des insights
+        insights = []
+        for cat, data in sorted_cats[:3]:
+            if data["count"] > 3:
+                insights.append(f"Tu as {data['count']} souvenirs dans la catégorie {cat}")
+        
+        return {
+            "success": True,
+            "patterns": patterns,
+            "insights": insights,
+            "total_count": len(memories.data)
+        }
+        
+    except Exception as e:
+        logger.error(f"Erreur detect_patterns: {e}")
         return {"success": False, "error": str(e)}
