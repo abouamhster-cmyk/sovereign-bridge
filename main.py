@@ -3409,7 +3409,7 @@ async def family_events_reminder():
 
 @app.get("/api/profile")
 async def get_user_profile():
-    """Récupère le profil utilisateur complet"""
+    """Récupère le profil utilisateur complet (incluant user_memory)"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
@@ -3421,7 +3421,26 @@ async def get_user_profile():
             supabase.table("user_profile").insert({"user_id": "rebecca"}).execute()
             result = supabase.table("user_profile").select("*").eq("user_id", "rebecca").execute()
         
-        return {"success": True, "profile": result.data[0] if result.data else None}
+        profile = result.data[0] if result.data else {}
+        
+        # Récupérer les champs additionnels depuis user_memory
+        memory_result = supabase.table("user_memory").select("*")\
+            .eq("user_id", "rebecca")\
+            .eq("category", "profile")\
+            .execute()
+        
+        for mem in memory_result.data:
+            value = mem["value"]
+            # Essayer de parser le JSON si nécessaire
+            try:
+                if value.startswith('{') or value.startswith('['):
+                    value = json.loads(value)
+            except:
+                pass
+            profile[mem["key"]] = value
+        
+        return {"success": True, "profile": profile}
+        
     except Exception as e:
         logger.error(f"Erreur get_user_profile: {e}")
         return {"success": False, "error": str(e)}
@@ -3429,19 +3448,76 @@ async def get_user_profile():
 
 @app.put("/api/profile")
 async def update_user_profile(request: Dict[str, Any]):
-    """Met à jour le profil utilisateur"""
+    """Met à jour le profil utilisateur - Accepte tous les champs"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
-        # Ne pas permettre la modification de l'id
+        # Nettoyer la requête
         request.pop("id", None)
         request.pop("user_id", None)
-        request["updated_at"] = datetime.now().isoformat()
         
-        result = supabase.table("user_profile").update(request).eq("user_id", "rebecca").execute()
+        # Champs qui vont directement dans user_profile
+        profile_fields = [
+            "preferred_name", "full_name", "birthday", 
+            "children", "projects", "current_goals",
+            "upcoming_milestones", "communication_preferences"
+        ]
         
-        return {"success": True, "profile": result.data[0] if result.data else None}
+        profile_data = {}
+        
+        for key, value in request.items():
+            if key in profile_fields:
+                profile_data[key] = value
+            elif key != "updated_at":
+                # Tous les autres champs vont dans user_memory
+                try:
+                    # Vérifier si la clé existe déjà
+                    existing = supabase.table("user_memory").select("*")\
+                        .eq("user_id", "rebecca")\
+                        .eq("category", "profile")\
+                        .eq("key", key)\
+                        .execute()
+                    
+                    if existing.data:
+                        supabase.table("user_memory").update({
+                            "value": str(value) if not isinstance(value, (dict, list)) else json.dumps(value),
+                            "updated_at": datetime.now().isoformat()
+                        }).eq("id", existing.data[0]["id"]).execute()
+                    else:
+                        supabase.table("user_memory").insert({
+                            "category": "profile",
+                            "key": key,
+                            "value": str(value) if not isinstance(value, (dict, list)) else json.dumps(value),
+                            "user_id": "rebecca",
+                            "created_at": datetime.now().isoformat()
+                        }).execute()
+                    logger.info(f"💾 Champ '{key}' sauvegardé dans user_memory")
+                except Exception as e:
+                    logger.error(f"Erreur sauvegarde mémoire pour {key}: {e}")
+        
+        # Mettre à jour user_profile
+        if profile_data:
+            profile_data["updated_at"] = datetime.now().isoformat()
+            result = supabase.table("user_profile").update(profile_data).eq("user_id", "rebecca").execute()
+            logger.info(f"✅ Profil mis à jour: {list(profile_data.keys())}")
+        else:
+            result = supabase.table("user_profile").select("*").eq("user_id", "rebecca").execute()
+        
+        # Récupérer le profil complet (incluant les données de user_memory)
+        final_profile = result.data[0] if result.data else {}
+        
+        # Ajouter les champs de user_memory
+        memory_result = supabase.table("user_memory").select("*")\
+            .eq("user_id", "rebecca")\
+            .eq("category", "profile")\
+            .execute()
+        
+        for mem in memory_result.data:
+            final_profile[mem["key"]] = mem["value"]
+        
+        return {"success": True, "profile": final_profile}
+        
     except Exception as e:
         logger.error(f"Erreur update_user_profile: {e}")
         return {"success": False, "error": str(e)}
