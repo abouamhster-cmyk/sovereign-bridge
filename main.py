@@ -5877,3 +5877,81 @@ async def update_projects(request: Dict[str, Any]):
     except Exception as e:
         logger.error(f"❌ Erreur update_projects: {e}")
         return {"success": False, "error": str(e)}
+
+
+
+@app.put("/api/profile/identity")
+async def update_identity(request: Dict[str, Any]):
+    """Met à jour uniquement l'identité (preferred_name, full_name, birthday)"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        # Champs autorisés pour l'identité
+        identity_fields = ["preferred_name", "full_name", "birthday"]
+        
+        clean_data = {}
+        for key, value in request.items():
+            if key in identity_fields and value is not None:
+                clean_data[key] = value
+        
+        if not clean_data:
+            return {"success": False, "error": "Aucun champ valide à mettre à jour"}
+        
+        clean_data["updated_at"] = datetime.now().isoformat()
+        
+        result = supabase.table("user_profile").update(clean_data).eq("user_id", "rebecca").execute()
+        
+        profile_result = supabase.table("user_profile").select("*").eq("user_id", "rebecca").execute()
+        
+        return {"success": True, "profile": profile_result.data[0] if profile_result.data else {}}
+        
+    except Exception as e:
+        logger.error(f"Erreur update_identity: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@app.put("/api/profile/children")
+async def update_children(request: Dict[str, Any]):
+    """Met à jour uniquement les enfants"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        children = request.get("children", [])
+        
+        result = supabase.table("user_profile").update({
+            "children": children,
+            "updated_at": datetime.now().isoformat()
+        }).eq("user_id", "rebecca").execute()
+        
+        profile_result = supabase.table("user_profile").select("*").eq("user_id", "rebecca").execute()
+        
+        return {"success": True, "profile": profile_result.data[0] if profile_result.data else {}}
+        
+    except Exception as e:
+        logger.error(f"Erreur update_children: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@app.put("/api/profile/goals")
+async def update_goals(request: Dict[str, Any]):
+    """Met à jour uniquement les objectifs"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        goals = request.get("current_goals", [])
+        
+        result = supabase.table("user_profile").update({
+            "current_goals": goals,
+            "updated_at": datetime.now().isoformat()
+        }).eq("user_id", "rebecca").execute()
+        
+        profile_result = supabase.table("user_profile").select("*").eq("user_id", "rebecca").execute()
+        
+        return {"success": True, "profile": profile_result.data[0] if profile_result.data else {}}
+        
+    except Exception as e:
+        logger.error(f"Erreur update_goals: {e}")
+        return {"success": False, "error": str(e)}
