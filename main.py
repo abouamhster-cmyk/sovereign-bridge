@@ -5428,25 +5428,32 @@ async def send_morning_notification():
         overdue_tasks = supabase.table("tasks").select("*").lt("due_date", today).neq("status", "done").execute()
         overdue_count = len(overdue_tasks.data)
         
-        # Construire un message humain (une phrase, pas une liste)
+        pending_docs = supabase.table("documents").select("*").neq("status", "approved").execute()
+        docs_count = len(pending_docs.data)
+        
+        active_missions = supabase.table("missions").select("*").eq("status", "active").execute()
+        missions_count = len(active_missions.data)
+        
+        # Construire un message humain (une seule phrase)
         if overdue_count > 0:
             body = f"⚠️ {overdue_count} tâche(s) en retard. On regarde ça ensemble ?"
         elif tasks_count > 0:
             body = f"📋 {tasks_count} chose(s) à faire aujourd'hui. Je suis là si tu veux."
+        elif docs_count > 0:
+            body = f"📄 {docs_count} document(s) en attente. Besoin d'aide ?"
+        elif missions_count > 0:
+            body = f"🎯 {missions_count} mission(s) active(s). Je suis là si tu veux."
         else:
             body = f"☀️ Bonne journée Rebecca. Je suis là si tu as besoin."
         
-        # Ajouter un son personnalisé dans les options de notification
-        sound_url = "/sounds/morning-chime.mp3"  # À créer
-        
-        # Envoyer la notification push avec son et vibration
+        # Envoyer la notification push
         notification_data = {
             "title": "🌅 Rebecca",
             "body": body,
-            "url": "/chat",  # Redirige vers le chat
+            "url": "/chat",
             "type": "morning",
-            "sound": sound_url,
-            "vibrate": [200, 100, 200],  # Vibration courte
+            "sound": "/sounds/notification.mp3",
+            "vibrate": [200, 100, 200],
             "requireInteraction": False,
             "silent": False,
             "tag": f"morning_{today}"
