@@ -5597,7 +5597,7 @@ async def backup_all_documents_to_drive():
 async def get_morning_greeting():
     """Retourne un message d'accueil personnalisé basé sur les vraies données du jour"""
     if not supabase:
-        return {"success": True, "message": "Salut. Je suis là."}
+        return {"success": True, "message": "Salut Rebecca. Je suis là."}
     
     try:
         today = datetime.now().date().isoformat()
@@ -5609,22 +5609,62 @@ async def get_morning_greeting():
         pending_docs = supabase.table("documents").select("*").neq("status", "approved").execute()
         active_missions = supabase.table("missions").select("*").eq("status", "active").execute()
         
-        # Construire un message personnalisé
-        greeting = "☀️ Bonjour" if hour < 12 else "🌤️ Bon après-midi" if hour < 18 else "🌙 Bonsoir"
+        # Récupérer l'humeur du jour
+        mood_result = supabase.table("mood_entries").select("mood").eq("date", today).execute()
+        current_mood = mood_result.data[0]["mood"] if mood_result.data else None
         
+        # Déterminer le moment de la journée
+        if hour < 12:
+            time_context = "matin"
+            greeting = "☀️ Bonjour"
+        elif hour < 18:
+            time_context = "après-midi"
+            greeting = "🌤️ Bon après-midi"
+        else:
+            time_context = "soir"
+            greeting = "🌙 Bonsoir"
+        
+        # Adapter le message en fonction de l'humeur
+        mood_messages = {
+            "fatiguée": "Je sens que tu es fatiguée. On va y aller doucement aujourd'hui.",
+            "stressée": "Je sens que tu es stressée. On respire et on priorise l'essentiel.",
+            "excellent": "Tu as de l'énergie aujourd'hui ! C'est le moment d'avancer.",
+            "bien": "Content de te sentir bien. On peut avancer sereinement.",
+            "neutre": "Journée neutre. On avance à ton rythme."
+        }
+        
+        mood_message = mood_messages.get(current_mood, "") if current_mood else ""
+        
+        # Construire le message
         message_parts = [f"{greeting} Rebecca."]
+        
+        # Ajouter une info sur l'humeur si disponible
+        if mood_message:
+            message_parts.append(mood_message)
         
         # Ajouter une info pertinente (une seule, pas une liste)
         if overdue_tasks.data:
-            message_parts.append(f"Tu as {len(overdue_tasks.data)} tâche(s) en retard.")
+            count = len(overdue_tasks.data)
+            message_parts.append(f"Tu as {count} tâche(s) en retard. On regarde ça ensemble ?")
         elif tasks_today.data:
-            message_parts.append(f"Tu as {len(tasks_today.data)} tâche(s) aujourd'hui.")
+            count = len(tasks_today.data)
+            message_parts.append(f"Tu as {count} tâche(s) aujourd'hui.")
         elif pending_docs.data:
-            message_parts.append(f"Tu as {len(pending_docs.data)} document(s) en attente.")
+            count = len(pending_docs.data)
+            message_parts.append(f"Tu as {count} document(s) en attente.")
         elif active_missions.data:
-            message_parts.append(f"Tu as {len(active_missions.data)} mission(s) active(s).")
+            count = len(active_missions.data)
+            message_parts.append(f"Tu as {count} mission(s) active(s).")
+        else:
+            # Si rien d'urgent, message plus détendu
+            messages_sans_urgence = [
+                "Rien d'urgent aujourd'hui. Profites-en pour avancer sur ce qui compte vraiment.",
+                "Journée calme. Idéal pour prendre de l'avance ou te reposer.",
+                "Tout est sous contrôle. Tu peux respirer."
+            ]
+            message_parts.append(random.choice(messages_sans_urgence))
         
-        # Ajouter une question ouverte
+        # Ajouter une question ouverte ou une proposition d'action
         questions = [
             "Par quoi tu veux commencer ?",
             "Besoin de moi sur quelque chose en particulier ?",
@@ -5637,8 +5677,93 @@ async def get_morning_greeting():
         
     except Exception as e:
         logger.error(f"Erreur morning greeting: {e}")
-        return {"success": True, "message": "Salut. Je suis là."}
+        return {"success": True, "message": "Salut Rebecca. Je suis là."}
 
+
+@app.get("/api/dashboard/today")
+async def get_today_dashboard():
+    """Retourne toutes les données nécessaires pour le dashboard du jour"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        today = datetime.now().date().isoformat()
+        
+        # Récupérer les tâches du jour
+        tasks_today = supabase.table("tasks").select("*").eq("due_date", today).neq("status", "done").execute()
+        
+        # Récupérer les tâches en retard
+        overdue_tasks = supabase.table("tasks").select("*").lt("due_date", today).neq("status", "done").execute()
+        
+        # Récupérer les missions actives
+        active_missions = supabase.table("missions").select("*").eq("status", "active").execute()
+        
+        # Récupérer les documents en attente
+        pending_docs = supabase.table("documents").select("*").neq("status", "approved").execute()
+        
+        # Récupérer l'humeur du jour
+        mood_result = supabase.table("mood_entries").select("mood").eq("date", today).execute()
+        current_mood = mood_result.data[0]["mood"] if mood_result.data else None
+        
+        # Calculer les priorités (simple pour commencer)
+        priorities = []
+        for task in overdue_tasks.data[:2]:
+            priorities.append({
+                "id": task["id"],
+                "title": task["title"],
+                "priority_reason": "⚠️ En retard",
+                "score": 40
+            })
+        
+        for task in tasks_today.data[:3 - len(priorities)]:
+            if task["id"] not in [p["id"] for p in priorities]:
+                priorities.append({
+                    "id": task["id"],
+                    "title": task["title"],
+                    "priority_reason": "📅 À faire aujourd'hui",
+                    "score": 30
+                })
+        
+        # Suggestions de moves (basées sur les données)
+        suggestions = {
+            "money_move": "Vérifier les finances du jour",
+            "family_move": "Prendre des nouvelles des enfants",
+            "business_move": "Avancer sur une mission prioritaire",
+            "stabilization_move": "Prendre 5 minutes pour respirer"
+        }
+        
+        # Personnaliser les moves si possible
+        if active_missions.data and len(active_missions.data) > 0:
+            suggestions["business_move"] = f"Avancer sur {active_missions.data[0]['name']}"
+        
+        # Message de guidance calme
+        calm_guidance = "Une chose à la fois. Tu gères."
+        if current_mood == "stressée":
+            calm_guidance = "Respire. Rien n'est aussi urgent qu'il n'y paraît."
+        elif current_mood == "fatiguée":
+            calm_guidance = "Repose-toi. La productivité peut attendre."
+        
+        return {
+            "success": True,
+            "greeting": await get_morning_greeting(),
+            "priorities": priorities,
+            "tasks_today": tasks_today.data[:5],
+            "overdue_tasks": overdue_tasks.data[:5],
+            "active_missions": active_missions.data[:5],
+            "pending_docs": pending_docs.data[:5],
+            "suggestions": suggestions,
+            "calm_guidance": calm_guidance,
+            "stats": {
+                "tasks_count": len(tasks_today.data),
+                "overdue_count": len(overdue_tasks.data),
+                "missions_count": len(active_missions.data),
+                "docs_count": len(pending_docs.data)
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Erreur dashboard today: {e}")
+        return {"success": False, "error": str(e)}
 
 
 @app.post("/api/morning-notification")
