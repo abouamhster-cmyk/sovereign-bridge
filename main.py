@@ -3460,12 +3460,19 @@ async def get_user_profile():
 
 @app.put("/api/profile")
 async def update_user_profile(request: Dict[str, Any]):
-    """Met à jour le profil utilisateur - Ignore les champs inconnus"""
+    """Met à jour le profil utilisateur"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
-        # Champs autorisés dans la table user_profile
+        # LOG pour voir ce qui est reçu
+        logger.info(f"📥 Requête PUT /api/profile reçue: {request}")
+        
+        # Nettoyer la requête
+        request.pop("id", None)
+        request.pop("user_id", None)
+        
+        # Champs autorisés
         allowed_fields = [
             "preferred_name", "full_name", "birthday", 
             "children", "projects", "current_goals",
@@ -3477,9 +3484,17 @@ async def update_user_profile(request: Dict[str, Any]):
         for key, value in request.items():
             if key in allowed_fields:
                 clean_data[key] = value
+            else:
+                logger.warning(f"⚠️ Champ ignoré: {key}")
+        
+        # Si aucun champ valide, retourner une erreur claire
+        if not clean_data:
+            return {"success": False, "error": "Aucun champ valide à mettre à jour"}
         
         # Ajouter la date de mise à jour
         clean_data["updated_at"] = datetime.now().isoformat()
+        
+        logger.info(f"📤 Mise à jour avec: {clean_data}")
         
         # Mettre à jour le profil
         result = supabase.table("user_profile").update(clean_data).eq("user_id", "rebecca").execute()
@@ -3490,9 +3505,9 @@ async def update_user_profile(request: Dict[str, Any]):
         return {"success": True, "profile": profile_result.data[0] if profile_result.data else {}}
         
     except Exception as e:
-        logger.error(f"Erreur update_user_profile: {e}")
+        logger.error(f"❌ Erreur update_user_profile: {e}")
         return {"success": False, "error": str(e)}
-
+        
 @app.post("/api/profile/children")
 async def add_child(request: Dict[str, Any]):
     """Ajoute un enfant au profil"""
