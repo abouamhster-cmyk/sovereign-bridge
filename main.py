@@ -5363,4 +5363,103 @@ async def backup_all_documents_to_drive():
         logger.error(f"❌ Erreur backup all: {e}")
         return {"success": False, "error": str(e)}
 
+@app.get("/api/morning-greeting")
+async def get_morning_greeting():
+    """Retourne un message d'accueil personnalisé basé sur les vraies données du jour"""
+    if not supabase:
+        return {"success": True, "message": "Salut. Je suis là."}
+    
+    try:
+        today = datetime.now().date().isoformat()
+        hour = datetime.now().hour
+        
+        # Récupérer les vraies données
+        tasks_today = supabase.table("tasks").select("*").eq("due_date", today).neq("status", "done").execute()
+        overdue_tasks = supabase.table("tasks").select("*").lt("due_date", today).neq("status", "done").execute()
+        pending_docs = supabase.table("documents").select("*").neq("status", "approved").execute()
+        active_missions = supabase.table("missions").select("*").eq("status", "active").execute()
+        
+        # Construire un message personnalisé
+        greeting = "☀️ Bonjour" if hour < 12 else "🌤️ Bon après-midi" if hour < 18 else "🌙 Bonsoir"
+        
+        message_parts = [f"{greeting} Rebecca."]
+        
+        # Ajouter une info pertinente (une seule, pas une liste)
+        if overdue_tasks.data:
+            message_parts.append(f"Tu as {len(overdue_tasks.data)} tâche(s) en retard.")
+        elif tasks_today.data:
+            message_parts.append(f"Tu as {len(tasks_today.data)} tâche(s) aujourd'hui.")
+        elif pending_docs.data:
+            message_parts.append(f"Tu as {len(pending_docs.data)} document(s) en attente.")
+        elif active_missions.data:
+            message_parts.append(f"Tu as {len(active_missions.data)} mission(s) active(s).")
+        
+        # Ajouter une question ouverte
+        questions = [
+            "Par quoi tu veux commencer ?",
+            "Besoin de moi sur quelque chose en particulier ?",
+            "Dis-moi ce qui te préoccupe.",
+            "Je suis là si tu as besoin."
+        ]
+        message_parts.append(random.choice(questions))
+        
+        return {"success": True, "message": " ".join(message_parts)}
+        
+    except Exception as e:
+        logger.error(f"Erreur morning greeting: {e}")
+        return {"success": True, "message": "Salut. Je suis là."}
 
+
+
+@app.post("/api/morning-notification")
+async def send_morning_notification():
+    """Envoie une notification matinale humaine avec son et vibration"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        today = datetime.now().date().isoformat()
+        hour = datetime.now().hour
+        
+        # Récupérer les vraies données
+        tasks_today = supabase.table("tasks").select("*").eq("due_date", today).neq("status", "done").execute()
+        tasks_count = len(tasks_today.data)
+        
+        overdue_tasks = supabase.table("tasks").select("*").lt("due_date", today).neq("status", "done").execute()
+        overdue_count = len(overdue_tasks.data)
+        
+        # Construire un message humain (une phrase, pas une liste)
+        if overdue_count > 0:
+            body = f"⚠️ {overdue_count} tâche(s) en retard. On regarde ça ensemble ?"
+        elif tasks_count > 0:
+            body = f"📋 {tasks_count} chose(s) à faire aujourd'hui. Je suis là si tu veux."
+        else:
+            body = f"☀️ Bonne journée Rebecca. Je suis là si tu as besoin."
+        
+        # Ajouter un son personnalisé dans les options de notification
+        sound_url = "/sounds/morning-chime.mp3"  # À créer
+        
+        # Envoyer la notification push avec son et vibration
+        notification_data = {
+            "title": "🌅 Rebecca",
+            "body": body,
+            "url": "/chat",  # Redirige vers le chat
+            "type": "morning",
+            "sound": sound_url,
+            "vibrate": [200, 100, 200],  # Vibration courte
+            "requireInteraction": False,
+            "silent": False,
+            "tag": f"morning_{today}"
+        }
+        
+        results = send_notification_sync(notification_data)
+        
+        return {
+            "success": True,
+            "notification_sent": len(results) > 0,
+            "message": body
+        }
+        
+    except Exception as e:
+        logger.error(f"Erreur morning notification: {e}")
+        return {"success": False, "error": str(e)}
