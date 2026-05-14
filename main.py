@@ -838,7 +838,7 @@ class ExecuteTaskRequest(BaseModel):
 # =====================================================
 
 def send_notification_sync(notification_data: Dict[str, Any]) -> List[Dict]:
-    """Envoie une notification à tous les abonnés avec logging pour éviter les doublons"""
+    """Envoie une notification à tous les abonnés avec logging et stockage pour l'interface"""
     if not supabase:
         logger.error("Supabase non configuré")
         return []
@@ -846,39 +846,133 @@ def send_notification_sync(notification_data: Dict[str, Any]) -> List[Dict]:
     notif_type = notification_data.get("type", "default")
     today = datetime.now().date().isoformat()
     
-    # Vérifier si cette notification a déjà été envoyée aujourd'hui
-    try:
-        existing = supabase.table("notifications_log").select("*")\
-            .eq("type", notif_type)\
-            .eq("date", today)\
-            .eq("user_id", "rebecca")\
-            .execute()
-        
-        if existing.data and len(existing.data) > 0:
-            logger.info(f"⏭️ Notification {notif_type} déjà envoyée aujourd'hui, ignorée")
-            return []
-    except Exception as e:
-        logger.error(f"Erreur vérification log: {e}")
+    # Types de notifications qui peuvent être envoyées plusieurs fois (urgences)
+    multi_allow_types = ["task_reminder", "document_reminder", "family_reminder"]
     
+    # Vérifier si cette notification a déjà été envoyée aujourd'hui (sauf pour les types autorisés)
+    if notif_type not in multi_allow_types:
+        try:
+            existing = supabase.table("notifications_log").select("*")\
+                .eq("type", notif_type)\
+                .eq("date", today)\
+                .eq("user_id", "rebecca")\
+                .execute()
+            
+            if existing.data and len(existing.data) > 0:
+                logger.info(f"⏭️ Notification {notif_type} déjà envoyée aujourd'hui, ignorée")
+                return []
+        except Exception as e:
+            logger.error(f"Erreur vérification log: {e}")
+    
+    # ============================================
+    # 1. STOCKER LA NOTIFICATION DANS LA BASE (pour l'interface)
+    # ============================================
+    try:
+        notification_record = {
+            "title": notification_data.get("title", "SOVEREIGN"),
+            "body": notification_data.get("body", ""),
+            "type": notif_type,
+            "url": notification_data.get("url", "/"),
+            "user_id": "rebecca",
+            "created_at": datetime.now().isoformat(),
+            "read": False
+        }
+        
+        # Insérer dans la table notifications
+        insert_result = supabase.table("notifications").insert(notification_record).execute()
+        
+        if insert_result.data:
+            logger.info(f"💾 Notification stockée en base (id: {insert_result.data[0].get('id')})")
+    except Exception as e:
+        logger.error(f"Erreur stockage notification dans 'notifications': {e}")
+    
+    # ============================================
+    # 2. ENVOYER LES NOTIFICATIONS PUSH
+    # ============================================
     subscriptions = supabase.table("push_subscriptions").select("*").execute()
     results = []
     
-    # ... (reste du code d'envoi des notifications inchangé) ...
+    # Styles selon le type
+    type_styles = {
+        "task": {"emoji": "📋", "color": "#3B82F6"},
+        "mission": {"emoji": "🎯", "color": "#8B5CF6"},
+        "win": {"emoji": "🏆", "color": "#F59E0B"},
+        "money": {"emoji": "💰", "color": "#10B981"},
+        "family": {"emoji": "👨‍👩‍👧‍👦", "color": "#EC4899"},
+        "document": {"emoji": "📄", "color": "#EF4444"},
+        "morning": {"emoji": "🌅", "color": "#D4AF37"},
+        "default": {"emoji": "👑", "color": "#D4AF37"}
+    }
     
-    # Si au moins une notification a été envoyée, logger
+    style = type_styles.get(notif_type, type_styles["default"])
+    title_with_emoji = f"{style['emoji']} {notification_data.get('title', 'SOVEREIGN')}"
+    
+    for sub in subscriptions.data:
+        try:
+            webpush(
+                subscription_info={
+                    "endpoint": sub["endpoint"],
+                    "keys": sub["keys"]
+                },
+                data=json.dumps({
+                    "title": title_with_emoji,
+                    "body": notification_data.get("body", ""),
+                    "url": notification_data.get("url", "/"),
+                    "icon": "/icons/icon-192x192.png",
+                    "badge": "/icons/icon-96x96.png",
+                    "image": "/icons/icon-512x512.png",
+                    "type": notif_type,
+                    "sound": notification_data.get("sound", "/sounds/notification.mp3"),
+                    "vibrate": notification_data.get("vibrate", [200, 100, 200]),
+                    "requireInteraction": notification_data.get("requireInteraction", False),
+                    "silent": notification_data.get("silent", False),
+                    "timestamp": datetime.now().isoformat()
+                }),
+                vapid_private_key=VAPID_PRIVATE_KEY,
+                vapid_claims=VAPID_CLAIMS
+            )
+            results.append({"status": "sent", "endpoint": sub["endpoint"][:50]})
+            logger.info(f"✅ Notification {style['emoji']} envoyée à {sub['endpoint'][:50]}...")
+        except WebPushException as e:
+            if e.response and e.response.status_code == 410:
+                # Subscription expirée, on la supprime
+                supabase.table("push_subscriptions").delete().eq("endpoint", sub["endpoint"]).execute()
+                results.append({"status": "expired", "endpoint": sub["endpoint"][:50]})
+                logger.info(f"🗑️ Subscription expirée supprimée: {sub['endpoint'][:50]}...")
+            else:
+                results.append({"status": "error", "error": str(e)})
+                logger.error(f"❌ Erreur webpush: {e}")
+    
+    # ============================================
+    # 3. LOGGER DANS notifications_log (pour éviter les doublons)
+    # ============================================
     if results and len(results) > 0:
         try:
-            supabase.table("notifications_log").insert({
-                "type": notif_type,
-                "date": today,
-                "user_id": "rebecca",
-                "sent_at": datetime.now().isoformat()
-            }).execute()
-            logger.info(f"📝 Notification {notif_type} loggée")
+            # Vérifier si déjà loggé (pour éviter les doublons de log)
+            existing_log = supabase.table("notifications_log").select("*")\
+                .eq("type", notif_type)\
+                .eq("date", today)\
+                .eq("user_id", "rebecca")\
+                .execute()
+            
+            if not existing_log.data:
+                supabase.table("notifications_log").insert({
+                    "type": notif_type,
+                    "date": today,
+                    "user_id": "rebecca",
+                    "sent_at": datetime.now().isoformat(),
+                    "metadata": {
+                        "title": notification_data.get("title"),
+                        "body": notification_data.get("body"),
+                        "count": len(results)
+                    }
+                }).execute()
+                logger.info(f"📝 Notification {notif_type} loggée dans notifications_log")
         except Exception as e:
             logger.error(f"Erreur log notification: {e}")
     
     return results
+
 
 def get_days_late(date_str: str) -> int:
     """Calcule le nombre de jours de retard"""
