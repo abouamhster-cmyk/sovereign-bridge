@@ -5991,3 +5991,144 @@ async def update_goals(request: Dict[str, Any]):
     except Exception as e:
         logger.error(f"Erreur update_goals: {e}")
         return {"success": False, "error": str(e)}
+
+
+# =====================================================
+# EXECUTION GUIDE - STEP BY STEP
+# =====================================================
+
+@app.post("/api/execute/step-by-step")
+async def step_by_step_execution(request: Dict[str, Any]):
+    """
+    Transforme une demande en plan d'action étape par étape.
+    Retourne une structure avec des étapes à cocher.
+    """
+    query = request.get("query", "")
+    context = request.get("context", {})  # Contexte optionnel (mission_id, etc.)
+    
+    if not query:
+        return {"success": False, "error": "Query requise"}
+    
+    try:
+        # Récupérer le contexte utilisateur pour personnaliser
+        profile_context = await get_profile_context()
+        memory_context = await get_user_memory_context()
+        
+        system_prompt = f"""Tu es Becks, l'agent d'exécution de Rebecca. Tu transformes une demande en plan d'action CONCRET, ÉTAPE PAR ÉTAPE.
+
+Tu connais Rebecca : {profile_context}
+Informations sur elle : {memory_context}
+
+RÈGLES IMPORTANTES :
+1. Chaque étape doit être ACTIONNABLE (commencer par un verbe)
+2. Chaque étape doit être RÉALISTE (max 10-15 min par étape)
+3. Maximum 6 étapes par plan
+4. Inclus des "victoires rapides" (étapes très courtes)
+5. Si une info manque, transforme-la en étape "Trouver X"
+
+Retourne UNIQUEMENT du JSON valide avec cette structure :
+
+{{
+  "title": "Titre du plan d'action",
+  "estimated_duration": "durée estimée (ex: 30 minutes, 2 heures)",
+  "steps": [
+    {{ "description": "Étape 1", "action_type": "type d'action (task/email/document/call/decision/research)", "estimated_minutes": 5 }},
+    {{ "description": "Étape 2", "action_type": "task", "estimated_minutes": 10 }}
+  ],
+  "success_criteria": "Ce qui définit la réussite",
+  "next_steps_hint": "Ce qu'on pourra faire après"
+}}
+
+Types d'action possibles : task, email, document, call, decision, research, wait, celebrate
+
+Si la demande est émotionnelle (fatigue, stress, etc.), retourne une version très courte (2-3 étapes) avec action_type="celebrate" ou "rest"."""
+
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": query}
+            ],
+            temperature=0.3,
+            max_tokens=800
+        )
+        
+        result_text = response.choices[0].message.content
+        result_text = result_text.replace("```json", "").replace("```", "").strip()
+        execution_plan = json.loads(result_text)
+        
+        # Sauvegarder le plan en base pour suivi
+        plan_id = str(uuid.uuid4())
+        if supabase:
+            supabase.table("execution_plans").insert({
+                "id": plan_id,
+                "title": execution_plan.get("title"),
+                "steps": execution_plan.get("steps", []),
+                "status": "active",
+                "user_id": "rebecca",
+                "created_at": datetime.now().isoformat()
+            }).execute()
+        
+        return {
+            "success": True,
+            "plan_id": plan_id,
+            "plan": execution_plan
+        }
+        
+    except Exception as e:
+        logger.error(f"Erreur step_by_step: {e}")
+        return {"success": False, "error": str(e), "fallback": True}
+
+
+@app.post("/api/execute/complete-step")
+async def complete_execution_step(request: Dict[str, Any]):
+    """Marque une étape comme complétée"""
+    plan_id = request.get("plan_id")
+    step_index = request.get("step_index")
+    
+    if not plan_id or step_index is None:
+        return {"success": False, "error": "plan_id et step_index requis"}
+    
+    try:
+        if not supabase:
+            return {"success": True, "message": "Pas de base, étape fictive"}
+        
+        # Récupérer le plan
+        result = supabase.table("execution_plans").select("*").eq("id", plan_id).execute()
+        if not result.data:
+            return {"success": False, "error": "Plan non trouvé"}
+        
+        plan = result.data[0]
+        steps = plan.get("steps", [])
+        completed_steps = plan.get("completed_steps", [])
+        
+        if step_index not in completed_steps:
+            completed_steps.append(step_index)
+            
+            # Envoyer une notification de progression
+            send_notification_sync({
+                "title": "✅ Étape accomplie",
+                "body": f"'{steps[step_index].get('description', 'Étape')}' - Reste {len(steps) - len(completed_steps)} étape(s)",
+                "url": "/chat",
+                "type": "task"
+            })
+        
+        progress = int((len(completed_steps) / len(steps)) * 100) if steps else 0
+        
+        supabase.table("execution_plans").update({
+            "completed_steps": completed_steps,
+            "progress": progress,
+            "updated_at": datetime.now().isoformat()
+        }).eq("id", plan_id).execute()
+        
+        return {
+            "success": True,
+            "completed_steps": completed_steps,
+            "progress": progress,
+            "remaining": len(steps) - len(completed_steps),
+            "is_complete": len(completed_steps) >= len(steps)
+        }
+        
+    except Exception as e:
+        logger.error(f"Erreur complete_step: {e}")
+        return {"success": False, "error": str(e)}
