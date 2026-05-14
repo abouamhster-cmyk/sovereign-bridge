@@ -5640,10 +5640,9 @@ async def get_morning_greeting():
         logger.error(f"Erreur morning greeting: {e}")
         return {"success": True, "message": "Salut Rebecca. Je suis là."}
 
-
 @app.get("/api/dashboard/today")
 async def get_today_dashboard():
-    """Retourne toutes les données nécessaires pour le dashboard du jour"""
+    """Retourne toutes les données nécessaires pour le dashboard du jour avec des messages humains"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
@@ -5705,7 +5704,10 @@ async def get_today_dashboard():
                     "score": 20
                 })
         
-        # Générer le message de Becks
+        # ============================================
+        # GÉNÉRER UN MESSAGE HUMAIN ET PERSONNALISÉ
+        # ============================================
+        
         hour = datetime.now().hour
         if hour < 12:
             greeting_prefix = "☀️ Bonjour"
@@ -5714,31 +5716,60 @@ async def get_today_dashboard():
         else:
             greeting_prefix = "🌙 Bonsoir"
         
-        # Adapter le message selon l'humeur et les données
+        # Adapter le message selon l'humeur
         if current_mood == "fatiguée":
-            mood_message = "Je sens que tu es fatiguée. On va y aller doucement."
+            mood_phrase = "Je sens que tu es fatiguée."
         elif current_mood == "stressée":
-            mood_message = "Je sens que tu es stressée. On respire et on priorise."
+            mood_phrase = "Je sens que tu es stressée."
         elif current_mood == "excellent":
-            mood_message = "Tu as de l'énergie aujourd'hui ! C'est le moment d'avancer."
+            mood_phrase = "Tu as de l'énergie aujourd'hui !"
+        elif current_mood == "bien":
+            mood_phrase = "Content de te sentir bien."
         else:
-            mood_message = ""
+            mood_phrase = ""
         
+        # Construire un message personnalisé basé sur les données réelles
         if overdue_tasks.data:
-            greeting = f"{greeting_prefix} Rebecca. {mood_message} Tu as {len(overdue_tasks.data)} tâche(s) en retard. On regarde ça ensemble ?"
+            task_list = ", ".join([t["title"][:35] for t in overdue_tasks.data[:2]])
+            if len(overdue_tasks.data) == 1:
+                greeting = f"{greeting_prefix} Rebecca. {mood_phrase} Tu as une tâche en retard : « {task_list} ». On s'en occupe maintenant ?"
+            else:
+                greeting = f"{greeting_prefix} Rebecca. {mood_phrase} Tu as {len(overdue_tasks.data)} tâches en retard. La plus urgente : « {task_list} ». Je t'aide à prioriser ?"
+        
         elif tasks_today.data:
-            greeting = f"{greeting_prefix} Rebecca. {mood_message} Tu as {len(tasks_today.data)} tâche(s) aujourd'hui."
+            task_list = ", ".join([t["title"][:35] for t in tasks_today.data[:2]])
+            if len(tasks_today.data) == 1:
+                greeting = f"{greeting_prefix} Rebecca. {mood_phrase} Ta tâche du jour : « {task_list} ». On y va ?"
+            else:
+                greeting = f"{greeting_prefix} Rebecca. {mood_phrase} Tu as {len(tasks_today.data)} choses à faire aujourd'hui. La première : « {task_list} »."
+        
         elif pending_docs.data:
-            greeting = f"{greeting_prefix} Rebecca. {mood_message} Tu as {len(pending_docs.data)} document(s) en attente."
+            doc_count = len(pending_docs.data)
+            if doc_count == 1:
+                greeting = f"{greeting_prefix} Rebecca. {mood_phrase} Tu as un document qui t'attend. Besoin que je t'aide à le remplir ?"
+            else:
+                greeting = f"{greeting_prefix} Rebecca. {mood_phrase} Tu as {doc_count} documents en attente. On fait le point ?"
+        
         elif active_missions.data:
-            greeting = f"{greeting_prefix} Rebecca. {mood_message} Tu as {len(active_missions.data)} mission(s) active(s)."
+            mission_names = ", ".join([m["name"] for m in active_missions.data[:2]])
+            if len(active_missions.data) == 1:
+                greeting = f"{greeting_prefix} Rebecca. {mood_phrase} Ta mission active : {mission_names}. Tu veux qu'on avance dessus ?"
+            else:
+                greeting = f"{greeting_prefix} Rebecca. {mood_phrase} Tes missions actives : {mission_names}. Par laquelle tu veux commencer ?"
+        
+        elif recent_wins.data:
+            win_count = len(recent_wins.data)
+            greeting = f"{greeting_prefix} Rebecca. {mood_phrase} Tu as {win_count} victoire(s) récente(s) ! C'est bien. Continue comme ça."
+        
         else:
-            greetings_no_urgent = [
-                f"{greeting_prefix} Rebecca. Rien d'urgent aujourd'hui. Profites-en pour avancer sur ce qui compte vraiment.",
-                f"{greeting_prefix} Rebecca. Journée calme. Idéal pour prendre de l'avance ou te reposer.",
-                f"{greeting_prefix} Rebecca. Tout est sous contrôle. Tu peux respirer."
+            # Messages plus naturels quand rien d'urgent
+            natural_greetings = [
+                f"{greeting_prefix} Rebecca. Rien de prévu aujourd'hui. Tu veux qu'on avance sur un projet ou tu préfères souffler ?",
+                f"{greeting_prefix} Rebecca. Journée calme. Profites-en pour respirer ou pour prendre de l'avance.",
+                f"{greeting_prefix} Rebecca. Tout est calme. Besoin de quoi ?",
+                f"{greeting_prefix} Rebecca. Pas de pression aujourd'hui. Dis-moi ce que tu veux faire."
             ]
-            greeting = random.choice(greetings_no_urgent)
+            greeting = random.choice(natural_greetings)
         
         # Suggestions de moves personnalisées
         suggestions = {
@@ -5757,12 +5788,17 @@ async def get_today_dashboard():
         if recent_wins.data:
             suggestions["stabilization_move"] = f"Célébrer {len(recent_wins.data)} victoire(s) récente(s)"
         
-        # Message de guidance calme
-        calm_guidance = "Une chose à la fois. Tu gères."
+        # Message de guidance calme (naturel)
         if current_mood == "stressée":
-            calm_guidance = "Respire. Rien n'est aussi urgent qu'il n'y paraît."
+            calm_guidance = "Respire. Rien n'est aussi urgent qu'il n'y paraît. On y va doucement."
         elif current_mood == "fatiguée":
-            calm_guidance = "Repose-toi. La productivité peut attendre."
+            calm_guidance = "Repose-toi si tu en as besoin. La productivité peut attendre."
+        elif overdue_tasks.data:
+            calm_guidance = "Les tâches en retard, c'est stressant, mais on va les gérer une par une."
+        elif tasks_today.data:
+            calm_guidance = "Une chose à la fois. Tu vas y arriver."
+        else:
+            calm_guidance = "Profite de ce moment de calme. Tu l'as mérité."
         
         return {
             "success": True,
