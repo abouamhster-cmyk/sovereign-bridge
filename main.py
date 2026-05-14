@@ -3460,92 +3460,38 @@ async def get_user_profile():
 
 @app.put("/api/profile")
 async def update_user_profile(request: Dict[str, Any]):
-    """Met à jour le profil utilisateur - Accepte tous les champs"""
+    """Met à jour le profil utilisateur - Ignore les champs inconnus"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
-        # Nettoyer la requête
-        request.pop("id", None)
-        request.pop("user_id", None)
-        
-        # Champs qui vont directement dans user_profile
-        profile_fields = [
+        # Champs autorisés dans la table user_profile
+        allowed_fields = [
             "preferred_name", "full_name", "birthday", 
             "children", "projects", "current_goals",
-            "upcoming_milestones", "communication_preferences"
+            "communication_preferences", "upcoming_milestones", "key_contacts"
         ]
         
-        profile_data = {}
-        
+        # Ne garder que les champs autorisés
+        clean_data = {}
         for key, value in request.items():
-            if key in profile_fields:
-                profile_data[key] = value
-            elif key != "updated_at" and value is not None:
-                # Tous les autres champs (email, phone, location, etc.) vont dans user_memory
-                try:
-                    # Convertir en string si nécessaire
-                    storage_value = value
-                    if isinstance(value, (dict, list)):
-                        storage_value = json.dumps(value)
-                    else:
-                        storage_value = str(value)
-                    
-                    # Vérifier si la clé existe déjà
-                    existing = supabase.table("user_memory").select("*")\
-                        .eq("user_id", "rebecca")\
-                        .eq("category", "profile")\
-                        .eq("key", key)\
-                        .execute()
-                    
-                    if existing.data:
-                        supabase.table("user_memory").update({
-                            "value": storage_value,
-                            "updated_at": datetime.now().isoformat()
-                        }).eq("id", existing.data[0]["id"]).execute()
-                    else:
-                        supabase.table("user_memory").insert({
-                            "category": "profile",
-                            "key": key,
-                            "value": storage_value,
-                            "user_id": "rebecca",
-                            "created_at": datetime.now().isoformat()
-                        }).execute()
-                    logger.info(f"💾 Champ '{key}' sauvegardé dans user_memory")
-                except Exception as e:
-                    logger.error(f"Erreur sauvegarde mémoire pour {key}: {e}")
+            if key in allowed_fields:
+                clean_data[key] = value
         
-        # Mettre à jour user_profile
-        if profile_data:
-            profile_data["updated_at"] = datetime.now().isoformat()
-            supabase.table("user_profile").update(profile_data).eq("user_id", "rebecca").execute()
-            logger.info(f"✅ Profil mis à jour: {list(profile_data.keys())}")
+        # Ajouter la date de mise à jour
+        clean_data["updated_at"] = datetime.now().isoformat()
         
-        # Récupérer le profil complet
-        result = supabase.table("user_profile").select("*").eq("user_id", "rebecca").execute()
-        final_profile = result.data[0] if result.data else {}
+        # Mettre à jour le profil
+        result = supabase.table("user_profile").update(clean_data).eq("user_id", "rebecca").execute()
         
-        # Ajouter les champs de user_memory
-        memory_result = supabase.table("user_memory").select("*")\
-            .eq("user_id", "rebecca")\
-            .eq("category", "profile")\
-            .execute()
+        # Récupérer le profil mis à jour
+        profile_result = supabase.table("user_profile").select("*").eq("user_id", "rebecca").execute()
         
-        for mem in memory_result.data:
-            value = mem["value"]
-            try:
-                if isinstance(value, str) and (value.startswith('{') or value.startswith('[')):
-                    value = json.loads(value)
-            except:
-                pass
-            final_profile[mem["key"]] = value
-        
-        return {"success": True, "profile": final_profile}
+        return {"success": True, "profile": profile_result.data[0] if profile_result.data else {}}
         
     except Exception as e:
         logger.error(f"Erreur update_user_profile: {e}")
         return {"success": False, "error": str(e)}
-        
 
 @app.post("/api/profile/children")
 async def add_child(request: Dict[str, Any]):
