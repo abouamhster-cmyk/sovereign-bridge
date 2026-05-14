@@ -5701,30 +5701,85 @@ async def get_today_dashboard():
         # Récupérer les documents en attente
         pending_docs = supabase.table("documents").select("*").neq("status", "approved").execute()
         
+        # Récupérer les victoires récentes (7 jours)
+        week_ago = (datetime.now().date() - timedelta(days=7)).isoformat()
+        recent_wins = supabase.table("wins").select("*").gte("date", week_ago).execute()
+        
+        # Récupérer les événements familiaux du jour
+        family_today = supabase.table("family_events").select("*").eq("date", today).neq("status", "done").execute()
+        
         # Récupérer l'humeur du jour
         mood_result = supabase.table("mood_entries").select("mood").eq("date", today).execute()
         current_mood = mood_result.data[0]["mood"] if mood_result.data else None
         
-        # Calculer les priorités (simple pour commencer)
+        # Calculer les priorités (basé sur l'urgence)
         priorities = []
+        
+        # 1. Tâches en retard (priorité max)
         for task in overdue_tasks.data[:2]:
             priorities.append({
                 "id": task["id"],
                 "title": task["title"],
-                "priority_reason": "⚠️ En retard",
+                "reason": "⚠️ En retard",
                 "score": 40
             })
         
+        # 2. Tâches du jour
         for task in tasks_today.data[:3 - len(priorities)]:
             if task["id"] not in [p["id"] for p in priorities]:
                 priorities.append({
                     "id": task["id"],
                     "title": task["title"],
-                    "priority_reason": "📅 À faire aujourd'hui",
+                    "reason": "📅 À faire aujourd'hui",
                     "score": 30
                 })
         
-        # Suggestions de moves (basées sur les données)
+        # 3. Missions actives à fort potentiel
+        if len(priorities) < 3:
+            for mission in active_missions.data[:3 - len(priorities)]:
+                priorities.append({
+                    "id": mission["id"],
+                    "title": f"🎯 {mission['name']}",
+                    "reason": "Mission stratégique",
+                    "score": 20
+                })
+        
+        # Générer le message de Becks
+        hour = datetime.now().hour
+        if hour < 12:
+            greeting_prefix = "☀️ Bonjour"
+        elif hour < 18:
+            greeting_prefix = "🌤️ Bon après-midi"
+        else:
+            greeting_prefix = "🌙 Bonsoir"
+        
+        # Adapter le message selon l'humeur et les données
+        if current_mood == "fatiguée":
+            mood_message = "Je sens que tu es fatiguée. On va y aller doucement."
+        elif current_mood == "stressée":
+            mood_message = "Je sens que tu es stressée. On respire et on priorise."
+        elif current_mood == "excellent":
+            mood_message = "Tu as de l'énergie aujourd'hui ! C'est le moment d'avancer."
+        else:
+            mood_message = ""
+        
+        if overdue_tasks.data:
+            greeting = f"{greeting_prefix} Rebecca. {mood_message} Tu as {len(overdue_tasks.data)} tâche(s) en retard. On regarde ça ensemble ?"
+        elif tasks_today.data:
+            greeting = f"{greeting_prefix} Rebecca. {mood_message} Tu as {len(tasks_today.data)} tâche(s) aujourd'hui."
+        elif pending_docs.data:
+            greeting = f"{greeting_prefix} Rebecca. {mood_message} Tu as {len(pending_docs.data)} document(s) en attente."
+        elif active_missions.data:
+            greeting = f"{greeting_prefix} Rebecca. {mood_message} Tu as {len(active_missions.data)} mission(s) active(s)."
+        else:
+            greetings_no_urgent = [
+                f"{greeting_prefix} Rebecca. Rien d'urgent aujourd'hui. Profites-en pour avancer sur ce qui compte vraiment.",
+                f"{greeting_prefix} Rebecca. Journée calme. Idéal pour prendre de l'avance ou te reposer.",
+                f"{greeting_prefix} Rebecca. Tout est sous contrôle. Tu peux respirer."
+            ]
+            greeting = random.choice(greetings_no_urgent)
+        
+        # Suggestions de moves personnalisées
         suggestions = {
             "money_move": "Vérifier les finances du jour",
             "family_move": "Prendre des nouvelles des enfants",
@@ -5732,9 +5787,14 @@ async def get_today_dashboard():
             "stabilization_move": "Prendre 5 minutes pour respirer"
         }
         
-        # Personnaliser les moves si possible
-        if active_missions.data and len(active_missions.data) > 0:
+        if active_missions.data:
             suggestions["business_move"] = f"Avancer sur {active_missions.data[0]['name']}"
+        
+        if family_today.data:
+            suggestions["family_move"] = f"{family_today.data[0]['title']} aujourd'hui"
+        
+        if recent_wins.data:
+            suggestions["stabilization_move"] = f"Célébrer {len(recent_wins.data)} victoire(s) récente(s)"
         
         # Message de guidance calme
         calm_guidance = "Une chose à la fois. Tu gères."
@@ -5745,20 +5805,24 @@ async def get_today_dashboard():
         
         return {
             "success": True,
-            "greeting": await get_morning_greeting(),
-            "priorities": priorities,
+            "greeting": greeting,
+            "top_priorities": priorities,
             "tasks_today": tasks_today.data[:5],
             "overdue_tasks": overdue_tasks.data[:5],
             "active_missions": active_missions.data[:5],
             "pending_docs": pending_docs.data[:5],
+            "recent_wins": len(recent_wins.data),
+            "family_today_count": len(family_today.data),
             "suggestions": suggestions,
             "calm_guidance": calm_guidance,
             "stats": {
                 "tasks_count": len(tasks_today.data),
                 "overdue_count": len(overdue_tasks.data),
                 "missions_count": len(active_missions.data),
-                "docs_count": len(pending_docs.data)
-            }
+                "docs_count": len(pending_docs.data),
+                "wins_count": len(recent_wins.data)
+            },
+            "current_mood": current_mood
         }
         
     except Exception as e:
