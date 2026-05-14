@@ -6493,3 +6493,55 @@ async def intelligent_notification_check():
     except Exception as e:
         logger.error(f"Erreur intelligent_notification_check: {e}")
         return {"success": False, "error": str(e)}
+
+
+@app.post("/api/notifications/preferences")
+async def update_notification_preferences(request: Dict[str, Any]):
+    """Met à jour les préférences de notifications de l'utilisateur"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        preferences = request.get("preferences", {})
+        
+        # Sauvegarder dans user_memory
+        for key, value in preferences.items():
+            await save_user_memory("notifications", key, str(value))
+        
+        return {"success": True, "preferences": preferences}
+        
+    except Exception as e:
+        logger.error(f"Erreur update_preferences: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/notifications/preferences")
+async def get_notification_preferences():
+    """Récupère les préférences de notifications"""
+    if not supabase:
+        return {"success": False, "preferences": {}}
+    
+    try:
+        result = supabase.table("user_memory").select("*").eq("category", "notifications").eq("user_id", "rebecca").execute()
+        
+        preferences = {}
+        for item in result.data:
+            preferences[item["key"]] = item["value"] == "True" if item["value"] in ["True", "False"] else item["value"]
+        
+        # Valeurs par défaut
+        default_preferences = {
+            "morning_checkin": True,
+            "evening_summary": True,
+            "overdue_tasks": True,
+            "brain_dump_reminder": True,
+            "win_reminder": True,
+            "intelligent_mode": True
+        }
+        
+        default_preferences.update(preferences)
+        
+        return {"success": True, "preferences": default_preferences}
+        
+    except Exception as e:
+        logger.error(f"Erreur get_preferences: {e}")
+        return {"success": False, "preferences": {}}
