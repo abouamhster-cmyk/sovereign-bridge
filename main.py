@@ -5850,3 +5850,30 @@ async def send_morning_notification():
     except Exception as e:
         logger.error(f"Erreur morning notification: {e}")
         return {"success": False, "error": str(e)}
+
+
+@app.put("/api/profile/projects")
+async def update_projects(request: Dict[str, Any]):
+    """Met à jour uniquement les projets"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        projects = request.get("projects", [])
+        
+        logger.info(f"📥 Mise à jour des projets: {len(projects)} projets")
+        
+        # Mettre à jour uniquement le champ projects
+        result = supabase.table("user_profile").update({
+            "projects": projects,
+            "updated_at": datetime.now().isoformat()
+        }).eq("user_id", "rebecca").execute()
+        
+        # Récupérer le profil complet
+        profile_result = supabase.table("user_profile").select("*").eq("user_id", "rebecca").execute()
+        
+        return {"success": True, "profile": profile_result.data[0] if profile_result.data else {}}
+        
+    except Exception as e:
+        logger.error(f"❌ Erreur update_projects: {e}")
+        return {"success": False, "error": str(e)}
