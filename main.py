@@ -6338,3 +6338,158 @@ async def detect_overload():
     except Exception as e:
         logger.error(f"Erreur detect_overload: {e}")
         return {"success": False, "error": str(e)}
+
+
+# =====================================================
+# NOTIFICATIONS PROACTIVES INTELLIGENTES
+# =====================================================
+
+@app.post("/api/notifications/intelligent-check")
+async def intelligent_notification_check():
+    """
+    Analyse le contexte et envoie des notifications intelligentes si nécessaire.
+    À appeler via cron toutes les 2-3 heures.
+    """
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        now = datetime.now()
+        today = now.date().isoformat()
+        hour = now.hour
+        
+        notifications_sent = []
+        
+        # 1. Vérifier si déjà envoyé récemment (éviter spam)
+        last_check = supabase.table("notifications_log").select("sent_at")\
+            .eq("type", "intelligent_check")\
+            .eq("user_id", "rebecca")\
+            .order("sent_at", desc=True)\
+            .limit(1)\
+            .execute()
+        
+        if last_check.data:
+            last_sent = datetime.fromisoformat(last_check.data[0]["sent_at"])
+            if (now - last_sent).total_seconds() < 7200:  # 2 heures
+                return {"success": True, "message": "Déjà vérifié récemment", "notifications_sent": []}
+        
+        # 2. Récupérer l'humeur du jour
+        mood_result = supabase.table("mood_entries").select("mood").eq("date", today).eq("user_id", "rebecca").execute()
+        current_mood = mood_result.data[0]["mood"] if mood_result.data else None
+        
+        # 3. Récupérer les tâches
+        urgent_tasks = supabase.table("tasks").select("*").eq("status", "today").neq("status", "done").execute()
+        overdue_tasks = supabase.table("tasks").select("*").lt("due_date", today).neq("status", "done").execute()
+        
+        # 4. Récupérer les brain dumps non traités
+        pending_brain_dumps = supabase.table("inbox").select("*").eq("needs_processing", True).execute()
+        
+        # 5. Récupérer les victoires récentes
+        week_ago = (now.date() - timedelta(days=7)).isoformat()
+        recent_wins = supabase.table("wins").select("*").gte("date", week_ago).execute()
+        
+        # 6. Générer des notifications contextuelles
+        notifications = []
+        
+        # ========== NOTIFICATION SURCHARGE ==========
+        if current_mood in ["stressée", "fatiguée"] and len(urgent_tasks.data) > 2:
+            notifications.append({
+                "title": "🌿 Prends soin de toi",
+                "body": f"Je sens que tu es {current_mood} et tu as {len(urgent_tasks.data)} tâches. On respire. Une chose à la fois.",
+                "url": "/rescue",
+                "type": "rescue"
+            })
+        
+        # ========== NOTIFICATION TÂCHES EN RETARD (version douce) ==========
+        elif len(overdue_tasks.data) > 0:
+            if current_mood in ["stressée", "fatiguée"]:
+                notifications.append({
+                    "title": "📋 Des tâches t'attendent",
+                    "body": f"Tu as {len(overdue_tasks.data)} tâche(s) en retard. On les regarde ensemble ? Pas de pression.",
+                    "url": "/tasks",
+                    "type": "task"
+                })
+            else:
+                notifications.append({
+                    "title": "⚠️ Tâches en retard",
+                    "body": f"Tu as {len(overdue_tasks.data)} tâche(s) en retard. Priorisons les plus importantes.",
+                    "url": "/tasks",
+                    "type": "task"
+                })
+        
+        # ========== NOTIFICATION BRAIN DUMP ==========
+        if len(pending_brain_dumps.data) > 2 and current_mood not in ["stressée", "fatiguée"]:
+            notifications.append({
+                "title": "🧠 Des idées t'attendent",
+                "body": f"Tu as {len(pending_brain_dumps.data)} idées non traitées dans ton Brain Dump. Je peux les organiser pour toi.",
+                "url": "/inbox",
+                "type": "brain_dump"
+            })
+        
+        # ========== NOTIFICATION VICTOIRES ==========
+        if len(recent_wins.data) == 0 and current_mood in ["fatiguée", "neutre"]:
+            notifications.append({
+                "title": "🏆 Une petite victoire aujourd'hui ?",
+                "body": "Même une petite chose mérite d'être célébrée. Ajoute ta victoire du jour ✨",
+                "url": "/wins",
+                "type": "win"
+            })
+        
+        # ========== NOTIFICATION FIN DE JOURNÉE ==========
+        if hour >= 19 and hour <= 21 and len(urgent_tasks.data) > 0:
+            notifications.append({
+                "title": "🌙 Fin de journée",
+                "body": f"Il te reste {len(urgent_tasks.data)} tâche(s). Demain est un autre jour. Repose-toi bien.",
+                "url": "/tasks",
+                "type": "evening"
+            })
+        
+        # ========== NOTIFICATION MORNING CHECK-IN ==========
+        if 7 <= hour <= 9 and not notifications:
+            notifications.append({
+                "title": "☀️ Bonjour Rebecca",
+                "body": "Comment te sens-tu aujourd'hui ? Je suis là pour t'aider.",
+                "url": "/chat",
+                "type": "morning"
+            })
+        
+        # 7. Envoyer les notifications (max 2 par check)
+        for notif in notifications[:2]:
+            send_notification_sync({
+                "title": notif["title"],
+                "body": notif["body"],
+                "url": notif["url"],
+                "type": notif["type"],
+                "sound": "/sounds/notification.mp3",
+                "vibrate": [200, 100, 200],
+                "requireInteraction": notif["type"] in ["rescue", "task"]
+            })
+            notifications_sent.append(notif)
+        
+        # 8. Logger
+        if notifications_sent:
+            supabase.table("notifications_log").insert({
+                "type": "intelligent_check",
+                "date": today,
+                "user_id": "rebecca",
+                "sent_at": now.isoformat(),
+                "metadata": {"notifications": len(notifications_sent), "mood": current_mood}
+            }).execute()
+        
+        return {
+            "success": True,
+            "notifications_sent": len(notifications_sent),
+            "details": notifications_sent,
+            "context": {
+                "mood": current_mood,
+                "urgent_tasks": len(urgent_tasks.data),
+                "overdue_tasks": len(overdue_tasks.data),
+                "pending_brain_dumps": len(pending_brain_dumps.data),
+                "recent_wins": len(recent_wins.data),
+                "hour": hour
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Erreur intelligent_notification_check: {e}")
+        return {"success": False, "error": str(e)}
