@@ -3407,9 +3407,16 @@ async def family_events_reminder():
 # API ROUTES - USER PROFILE
 # =====================================================
 
+
+
+
+# =====================================================
+# API ROUTES - USER PROFILE (VERSION CORRIGÉE)
+# =====================================================
+
 @app.get("/api/profile")
 async def get_user_profile():
-    """Récupère le profil utilisateur complet (incluant user_memory)"""
+    """Récupère le profil utilisateur complet"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
@@ -3418,7 +3425,13 @@ async def get_user_profile():
         
         if not result.data:
             # Créer un profil par défaut
-            supabase.table("user_profile").insert({"user_id": "rebecca"}).execute()
+            supabase.table("user_profile").insert({
+                "user_id": "rebecca",
+                "preferred_name": "Rebecca",
+                "children": [],
+                "projects": [],
+                "current_goals": []
+            }).execute()
             result = supabase.table("user_profile").select("*").eq("user_id", "rebecca").execute()
         
         profile = result.data[0] if result.data else {}
@@ -3431,9 +3444,8 @@ async def get_user_profile():
         
         for mem in memory_result.data:
             value = mem["value"]
-            # Essayer de parser le JSON si nécessaire
             try:
-                if value.startswith('{') or value.startswith('['):
+                if isinstance(value, str) and (value.startswith('{') or value.startswith('[')):
                     value = json.loads(value)
             except:
                 pass
@@ -3469,9 +3481,16 @@ async def update_user_profile(request: Dict[str, Any]):
         for key, value in request.items():
             if key in profile_fields:
                 profile_data[key] = value
-            elif key != "updated_at":
+            elif key != "updated_at" and value is not None:
                 # Tous les autres champs vont dans user_memory
                 try:
+                    # Convertir en string si nécessaire
+                    storage_value = value
+                    if isinstance(value, (dict, list)):
+                        storage_value = json.dumps(value)
+                    else:
+                        storage_value = str(value)
+                    
                     # Vérifier si la clé existe déjà
                     existing = supabase.table("user_memory").select("*")\
                         .eq("user_id", "rebecca")\
@@ -3481,14 +3500,14 @@ async def update_user_profile(request: Dict[str, Any]):
                     
                     if existing.data:
                         supabase.table("user_memory").update({
-                            "value": str(value) if not isinstance(value, (dict, list)) else json.dumps(value),
+                            "value": storage_value,
                             "updated_at": datetime.now().isoformat()
                         }).eq("id", existing.data[0]["id"]).execute()
                     else:
                         supabase.table("user_memory").insert({
                             "category": "profile",
                             "key": key,
-                            "value": str(value) if not isinstance(value, (dict, list)) else json.dumps(value),
+                            "value": storage_value,
                             "user_id": "rebecca",
                             "created_at": datetime.now().isoformat()
                         }).execute()
@@ -3499,12 +3518,11 @@ async def update_user_profile(request: Dict[str, Any]):
         # Mettre à jour user_profile
         if profile_data:
             profile_data["updated_at"] = datetime.now().isoformat()
-            result = supabase.table("user_profile").update(profile_data).eq("user_id", "rebecca").execute()
+            supabase.table("user_profile").update(profile_data).eq("user_id", "rebecca").execute()
             logger.info(f"✅ Profil mis à jour: {list(profile_data.keys())}")
-        else:
-            result = supabase.table("user_profile").select("*").eq("user_id", "rebecca").execute()
         
-        # Récupérer le profil complet (incluant les données de user_memory)
+        # Récupérer le profil complet
+        result = supabase.table("user_profile").select("*").eq("user_id", "rebecca").execute()
         final_profile = result.data[0] if result.data else {}
         
         # Ajouter les champs de user_memory
@@ -3514,7 +3532,13 @@ async def update_user_profile(request: Dict[str, Any]):
             .execute()
         
         for mem in memory_result.data:
-            final_profile[mem["key"]] = mem["value"]
+            value = mem["value"]
+            try:
+                if isinstance(value, str) and (value.startswith('{') or value.startswith('[')):
+                    value = json.loads(value)
+            except:
+                pass
+            final_profile[mem["key"]] = value
         
         return {"success": True, "profile": final_profile}
         
@@ -3531,17 +3555,16 @@ async def add_child(request: Dict[str, Any]):
     
     try:
         # Récupérer le profil actuel
-        profile = await get_user_profile()
-        if not profile.get("success"):
-            return {"success": False, "error": "Profil non trouvé"}
+        profile_result = supabase.table("user_profile").select("*").eq("user_id", "rebecca").execute()
+        children = profile_result.data[0].get("children", []) if profile_result.data else []
         
-        children = profile["profile"].get("children", [])
-        children.append({
+        new_child = {
             "name": request.get("name"),
             "nickname": request.get("nickname", ""),
             "birthday": request.get("birthday"),
             "notes": request.get("notes", "")
-        })
+        }
+        children.append(new_child)
         
         result = supabase.table("user_profile").update({
             "children": children,
@@ -3549,10 +3572,10 @@ async def add_child(request: Dict[str, Any]):
         }).eq("user_id", "rebecca").execute()
         
         return {"success": True, "children": children}
+        
     except Exception as e:
         logger.error(f"Erreur add_child: {e}")
         return {"success": False, "error": str(e)}
-
 
 @app.get("/api/profile/context")
 async def get_profile_context():
