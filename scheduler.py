@@ -92,3 +92,33 @@ if __name__ == "__main__":
             last_minute = current_minute
         
         time.sleep(60)  # Vérifier toutes les minutes
+
+
+# scheduler.py - Ajouter cette fonction
+
+def send_intelligent_notifications():
+    """Envoie des notifications contextuelles intelligentes"""
+    try:
+        response = requests.post(f"{BACKEND_URL}/api/notifications/intelligent-check", timeout=30)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("notifications_sent", 0) > 0:
+                print(f"[{datetime.now()}] 🤖 {data['notifications_sent']} notification(s) intelligente(s) envoyée(s)")
+            else:
+                print(f"[{datetime.now()}] 🤖 Aucune notification intelligente nécessaire")
+    except Exception as e:
+        print(f"[{datetime.now()}] ❌ Erreur notifications intelligentes: {e}")
+
+# Modifier run_hourly_checks pour inclure les notifications intelligentes toutes les 2 heures
+def run_hourly_checks():
+    current_minute = datetime.now().minute
+    current_hour = datetime.now().hour
+    
+    # Exécuter à la minute 0 de chaque heure
+    if current_minute == 0:
+        send_morning_notification()
+        run_all_reminders()
+        
+        # Notifications intelligentes toutes les 2 heures (heures paires)
+        if current_hour % 2 == 0:
+            send_intelligent_notifications()
