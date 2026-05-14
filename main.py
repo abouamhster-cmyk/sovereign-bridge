@@ -6189,3 +6189,152 @@ async def detect_memory_patterns(request: Dict[str, Any]):
     except Exception as e:
         logger.error(f"Erreur detect_patterns: {e}")
         return {"success": False, "error": str(e)}
+
+
+# =====================================================
+# RESCUE MODE - DÉTECTION AUTOMATIQUE DE SURCHARGE
+# =====================================================
+
+@app.post("/api/rescue/detect-overload")
+async def detect_overload():
+    """
+    Analyse les données pour détecter si l'utilisateur est en surcharge.
+    Retourne un score et des recommandations.
+    """
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        today = datetime.now().date().isoformat()
+        now = datetime.now()
+        
+        # 1. Récupérer l'humeur du jour
+        mood_result = supabase.table("mood_entries").select("mood").eq("date", today).eq("user_id", "rebecca").execute()
+        current_mood = mood_result.data[0]["mood"] if mood_result.data else None
+        
+        # 2. Tâches urgentes et en retard
+        urgent_tasks = supabase.table("tasks").select("*").eq("status", "today").neq("status", "done").execute()
+        overdue_tasks = supabase.table("tasks").select("*").lt("due_date", today).neq("status", "done").execute()
+        
+        # 3. Documents en retard
+        overdue_docs = supabase.table("documents").select("*").lt("due_date", today).neq("status", "approved").execute()
+        
+        # 4. Missions actives non avancées
+        active_missions = supabase.table("missions").select("*").eq("status", "active").execute()
+        stale_missions = [m for m in active_missions.data if not m.get("updated_at") or m["updated_at"] < (datetime.now() - timedelta(days=5)).isoformat()]
+        
+        # 5. Brain dumps non traités
+        pending_brain_dumps = supabase.table("inbox").select("*").eq("needs_processing", True).execute()
+        
+        # Calcul du score de surcharge (0-100)
+        overload_score = 0
+        reasons = []
+        
+        # Humeur
+        if current_mood == "stressée":
+            overload_score += 25
+            reasons.append("😰 Humeur stressée détectée")
+        elif current_mood == "fatiguée":
+            overload_score += 20
+            reasons.append("😴 Humeur fatiguée détectée")
+        
+        # Tâches
+        if len(overdue_tasks.data) > 0:
+            overload_score += min(len(overdue_tasks.data) * 10, 30)
+            reasons.append(f"⚠️ {len(overdue_tasks.data)} tâche(s) en retard")
+        elif len(urgent_tasks.data) > 3:
+            overload_score += min(len(urgent_tasks.data) * 5, 20)
+            reasons.append(f"📋 {len(urgent_tasks.data)} tâches urgentes")
+        
+        # Documents
+        if len(overdue_docs.data) > 0:
+            overload_score += min(len(overdue_docs.data) * 8, 20)
+            reasons.append(f"📄 {len(overdue_docs.data)} document(s) en retard")
+        
+        # Missions
+        if len(stale_missions) > 0:
+            overload_score += min(len(stale_missions) * 5, 15)
+            reasons.append(f"🎯 {len(stale_missions)} mission(s) sans activité")
+        
+        # Brain dumps
+        if len(pending_brain_dumps.data) > 3:
+            overload_score += min(len(pending_brain_dumps.data) * 2, 10)
+            reasons.append(f"🧠 {len(pending_brain_dumps.data)} idées non traitées")
+        
+        # Heure tardive (après 20h)
+        if now.hour >= 20 and len(urgent_tasks.data) > 0:
+            overload_score += 10
+            reasons.append("🌙 Heure tardive + tâches restantes")
+        
+        overload_score = min(overload_score, 100)
+        
+        # Déterminer le niveau
+        if overload_score >= 60:
+            level = "critical"
+            message = "⚠️ Tu es en surcharge sévère. Active le Rescue Mode immédiatement."
+        elif overload_score >= 35:
+            level = "high"
+            message = "🟡 Charge élevée. Ralentis et priorise l'essentiel."
+        elif overload_score >= 15:
+            level = "moderate"
+            message = "🟢 Charge modérée. Reste focus."
+        else:
+            level = "low"
+            message = "🌿 Tout va bien. Profite de ce calme."
+        
+        # Générer des actions de secours
+        rescue_actions = []
+        
+        if len(overdue_tasks.data) > 0:
+            rescue_actions.append({
+                "type": "focus_task",
+                "title": "Faire la tâche la plus urgente",
+                "task_id": overdue_tasks.data[0]["id"],
+                "task_title": overdue_tasks.data[0]["title"]
+            })
+        
+        if current_mood in ["stressée", "fatiguée"]:
+            rescue_actions.append({
+                "type": "breathing",
+                "title": "Prendre 3 respirations profondes",
+                "duration": 1
+            })
+            rescue_actions.append({
+                "type": "reset",
+                "title": "Faire une pause de 10 minutes",
+                "duration": 10
+            })
+        
+        if len(pending_brain_dumps.data) > 2:
+            rescue_actions.append({
+                "type": "brain_dump",
+                "title": "Vider son esprit dans Brain Dump",
+                "url": "/inbox"
+            })
+        
+        rescue_actions.append({
+            "type": "chat",
+            "title": "Parler à Becks",
+            "url": "/chat?mode=parle-moi"
+        })
+        
+        return {
+            "success": True,
+            "overload_score": overload_score,
+            "level": level,
+            "message": message,
+            "reasons": reasons,
+            "rescue_actions": rescue_actions[:4],  # Max 4 actions
+            "stats": {
+                "urgent_tasks": len(urgent_tasks.data),
+                "overdue_tasks": len(overdue_tasks.data),
+                "overdue_docs": len(overdue_docs.data),
+                "stale_missions": len(stale_missions),
+                "pending_brain_dumps": len(pending_brain_dumps.data)
+            },
+            "current_mood": current_mood
+        }
+        
+    except Exception as e:
+        logger.error(f"Erreur detect_overload: {e}")
+        return {"success": False, "error": str(e)}
