@@ -3482,7 +3482,7 @@ async def update_user_profile(request: Dict[str, Any]):
             if key in profile_fields:
                 profile_data[key] = value
             elif key != "updated_at" and value is not None:
-                # Tous les autres champs vont dans user_memory
+                # Tous les autres champs (email, phone, location, etc.) vont dans user_memory
                 try:
                     # Convertir en string si nécessaire
                     storage_value = value
@@ -3545,7 +3545,7 @@ async def update_user_profile(request: Dict[str, Any]):
     except Exception as e:
         logger.error(f"Erreur update_user_profile: {e}")
         return {"success": False, "error": str(e)}
-
+        
 
 @app.post("/api/profile/children")
 async def add_child(request: Dict[str, Any]):
