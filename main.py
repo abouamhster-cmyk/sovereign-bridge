@@ -1368,40 +1368,56 @@ async def get_mood_history(days: int = 30):
 
 @app.post("/api/check-task-reminders")
 async def check_task_reminders():
-    """Vérifie les tâches et envoie des rappels"""
+    """Vérifie les tâches et envoie des rappels (1x par jour max)"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
     today = datetime.now().date().isoformat()
-    tomorrow = (datetime.now().date() + timedelta(days=1)).isoformat()
+    
+    # Vérifier si déjà envoyé aujourd'hui
+    existing = supabase.table("notifications_log").select("*")\
+        .eq("type", "task_reminder")\
+        .eq("date", today)\
+        .eq("user_id", "rebecca")\
+        .execute()
+    
+    if existing.data:
+        return {"success": True, "sent": False, "message": "Déjà envoyé aujourd'hui"}
     
     notifications_sent = []
     
     try:
         tasks_today = supabase.table("tasks").select("*").eq("due_date", today).neq("status", "done").execute()
-        for task in tasks_today.data:
-            result = send_notification_sync({
-                "title": "📋 Tâche du jour",
-                "body": f"'{task['title']}' - À faire aujourd'hui",
-                "url": "/tasks",
-                "tag": f"task_{task['id']}",
-                "type": "task"
-            })
-            if result:
-                notifications_sent.append(f"task_{task['id']}")
-        
         overdue_tasks = supabase.table("tasks").select("*").lt("due_date", today).neq("status", "done").execute()
-        for task in overdue_tasks.data:
-            days_late = get_days_late(task["due_date"])
-            result = send_notification_sync({
-                "title": "⚠️ Tâche en retard",
-                "body": f"'{task['title']}' - En retard de {days_late} jour(s)",
+        
+        # Un seul message regroupé, pas un par tâche
+        if overdue_tasks.data:
+            body = f"⚠️ {len(overdue_tasks.data)} tâche(s) en retard. On regarde ça ?"
+            send_notification_sync({
+                "title": "📋 Tâches en retard",
+                "body": body,
                 "url": "/tasks",
-                "tag": f"overdue_{task['id']}",
                 "type": "task"
             })
-            if result:
-                notifications_sent.append(f"overdue_{task['id']}")
+            notifications_sent.append("overdue_tasks")
+        elif tasks_today.data:
+            body = f"📋 {len(tasks_today.data)} tâche(s) à faire aujourd'hui."
+            send_notification_sync({
+                "title": "📋 Tâches du jour",
+                "body": body,
+                "url": "/tasks",
+                "type": "task"
+            })
+            notifications_sent.append("tasks_today")
+        
+        # Logger l'envoi
+        if notifications_sent:
+            supabase.table("notifications_log").insert({
+                "type": "task_reminder",
+                "date": today,
+                "user_id": "rebecca",
+                "sent_at": datetime.now().isoformat()
+            }).execute()
         
         return {"success": True, "notifications_sent": notifications_sent, "count": len(notifications_sent)}
     
@@ -1412,9 +1428,20 @@ async def check_task_reminders():
 
 @app.post("/api/mission-reminders")
 async def mission_reminders():
-    """Rappel pour les missions inactives"""
+    """Rappel pour les missions inactives (1x par semaine max)"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
+    
+    # Vérifier si déjà envoyé cette semaine
+    week_ago = (datetime.now() - timedelta(days=7)).isoformat()
+    existing = supabase.table("notifications_log").select("*")\
+        .eq("type", "mission_reminder")\
+        .gte("sent_at", week_ago)\
+        .eq("user_id", "rebecca")\
+        .execute()
+    
+    if existing.data:
+        return {"success": True, "sent": False, "message": "Déjà envoyé cette semaine"}
     
     notifications_sent = []
     
@@ -1422,16 +1449,26 @@ async def mission_reminders():
         five_days_ago = (datetime.now() - timedelta(days=5)).isoformat()
         stale_missions = supabase.table("missions").select("*").eq("status", "active").lt("updated_at", five_days_ago).execute()
         
-        for mission in stale_missions.data:
-            result = send_notification_sync({
-                "title": "🎯 Mission en sommeil",
-                "body": f"'{mission['name']}' - Pas de mise à jour depuis 5 jours",
-                "url": f"/missions?edit={mission['id']}",
-                "tag": f"mission_{mission['id']}",
+        if stale_missions.data:
+            mission_names = ", ".join([m["name"] for m in stale_missions.data[:3]])
+            if len(stale_missions.data) > 3:
+                mission_names += f" et {len(stale_missions.data)-3} autre(s)"
+            
+            send_notification_sync({
+                "title": "🎯 Missions inactives",
+                "body": f"{len(stale_missions.data)} mission(s) sans activité : {mission_names}",
+                "url": "/missions",
                 "type": "mission"
             })
-            if result:
-                notifications_sent.append(f"mission_{mission['id']}")
+            notifications_sent = [m["id"] for m in stale_missions.data]
+            
+            # Logger l'envoi
+            supabase.table("notifications_log").insert({
+                "type": "mission_reminder",
+                "date": datetime.now().date().isoformat(),
+                "user_id": "rebecca",
+                "sent_at": datetime.now().isoformat()
+            }).execute()
         
         return {"success": True, "notifications_sent": notifications_sent, "count": len(notifications_sent)}
     
@@ -1442,42 +1479,57 @@ async def mission_reminders():
 
 @app.post("/api/document-reminders")
 async def document_reminders():
-    """Rappel pour les documents proches de l'échéance"""
+    """Rappel pour les documents proches de l'échéance (1x par jour max)"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
+    
+    today = datetime.now().date().isoformat()
+    
+    # Vérifier si déjà envoyé aujourd'hui
+    existing = supabase.table("notifications_log").select("*")\
+        .eq("type", "document_reminder")\
+        .eq("date", today)\
+        .eq("user_id", "rebecca")\
+        .execute()
+    
+    if existing.data:
+        return {"success": True, "sent": False, "message": "Déjà envoyé aujourd'hui"}
     
     notifications_sent = []
     
     try:
-        today = datetime.now().date().isoformat()
         next_week = (datetime.now().date() + timedelta(days=7)).isoformat()
         
         expiring_docs = supabase.table("documents").select("*").gte("due_date", today).lte("due_date", next_week).neq("status", "approved").execute()
-        
-        for doc in expiring_docs.data:
-            days_left = (datetime.fromisoformat(doc["due_date"]).date() - datetime.now().date()).days
-            result = send_notification_sync({
-                "title": "📄 Document bientôt dû",
-                "body": f"'{doc['name']}' - À rendre dans {days_left} jour(s)",
-                "url": "/documents",
-                "tag": f"doc_{doc['id']}",
-                "type": "document"
-            })
-            if result:
-                notifications_sent.append(f"doc_{doc['id']}")
-        
         overdue_docs = supabase.table("documents").select("*").lt("due_date", today).neq("status", "approved").execute()
-        for doc in overdue_docs.data:
-            days_late = get_days_late(doc["due_date"])
-            result = send_notification_sync({
-                "title": "⚠️ Document en retard",
-                "body": f"'{doc['name']}' - En retard de {days_late} jour(s)",
+        
+        # Priorité aux documents en retard
+        if overdue_docs.data:
+            doc_names = ", ".join([d["name"] for d in overdue_docs.data[:3]])
+            send_notification_sync({
+                "title": "⚠️ Documents en retard",
+                "body": f"{len(overdue_docs.data)} document(s) en retard : {doc_names}",
                 "url": "/documents",
-                "tag": f"doc_overdue_{doc['id']}",
                 "type": "document"
             })
-            if result:
-                notifications_sent.append(f"doc_overdue_{doc['id']}")
+            notifications_sent = [d["id"] for d in overdue_docs.data]
+        elif expiring_docs.data:
+            days_left = (datetime.fromisoformat(expiring_docs.data[0]["due_date"]).date() - datetime.now().date()).days
+            send_notification_sync({
+                "title": "📄 Documents bientôt dus",
+                "body": f"{len(expiring_docs.data)} document(s) à rendre dans {days_left} jour(s)",
+                "url": "/documents",
+                "type": "document"
+            })
+            notifications_sent = [d["id"] for d in expiring_docs.data]
+        
+        if notifications_sent:
+            supabase.table("notifications_log").insert({
+                "type": "document_reminder",
+                "date": today,
+                "user_id": "rebecca",
+                "sent_at": datetime.now().isoformat()
+            }).execute()
         
         return {"success": True, "notifications_sent": notifications_sent, "count": len(notifications_sent)}
     
@@ -1488,9 +1540,20 @@ async def document_reminders():
 
 @app.post("/api/celebration-reminder")
 async def celebration_reminder():
-    """Rappel pour encourager l'enregistrement des victoires"""
+    """Rappel pour encourager l'enregistrement des victoires (1x par semaine max)"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
+    
+    # Vérifier si déjà envoyé cette semaine
+    week_ago = (datetime.now() - timedelta(days=7)).isoformat()
+    existing = supabase.table("notifications_log").select("*")\
+        .eq("type", "celebration_reminder")\
+        .gte("sent_at", week_ago)\
+        .eq("user_id", "rebecca")\
+        .execute()
+    
+    if existing.data:
+        return {"success": True, "sent": False, "message": "Déjà envoyé cette semaine"}
     
     try:
         three_days_ago = (datetime.now() - timedelta(days=3)).isoformat()
@@ -1498,12 +1561,19 @@ async def celebration_reminder():
         
         if len(recent_wins.data) == 0:
             send_notification_sync({
-                "title": "🏆 Célèbre tes victoires !",
-                "body": "Tu n'as pas enregistré de victoire depuis 3 jours. Chaque pas compte, célèbre-le ✨",
+                "title": "🏆 Une petite victoire aujourd'hui ?",
+                "body": "Chaque pas compte. Même une petite chose mérite d'être célébrée ✨",
                 "url": "/wins",
-                "tag": "celebration_reminder",
                 "type": "win"
             })
+            
+            supabase.table("notifications_log").insert({
+                "type": "celebration_reminder",
+                "date": datetime.now().date().isoformat(),
+                "user_id": "rebecca",
+                "sent_at": datetime.now().isoformat()
+            }).execute()
+            
             return {"success": True, "sent": True, "message": "Rappel victoire envoyé"}
         
         return {"success": True, "sent": False, "message": f"{len(recent_wins.data)} victoire(s) récente(s)"}
@@ -3174,82 +3244,69 @@ async def financial_weekly_report():
 
 @app.post("/api/family-events-reminder")
 async def family_events_reminder():
-    """Rappel des événements familiaux (tous les jours à 7h)"""
+    """Rappel des événements familiaux (1x par jour max)"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
     today = datetime.now().date().isoformat()
-    tomorrow = (datetime.now().date() + timedelta(days=1)).isoformat()
-    next_3_days = (datetime.now().date() + timedelta(days=3)).isoformat()
+    
+    # Vérifier si déjà envoyé aujourd'hui
+    existing = supabase.table("notifications_log").select("*")\
+        .eq("type", "family_reminder")\
+        .eq("date", today)\
+        .eq("user_id", "rebecca")\
+        .execute()
+    
+    if existing.data:
+        return {"success": True, "sent": False, "message": "Déjà envoyé aujourd'hui"}
     
     notifications_sent = []
     
     try:
+        tomorrow = (datetime.now().date() + timedelta(days=1)).isoformat()
+        next_3_days = (datetime.now().date() + timedelta(days=3)).isoformat()
+        
         today_events = supabase.table("family_events").select("*").eq("date", today).neq("status", "done").execute()
-        
-        for event in today_events.data:
-            child_info = f" - {event['child_name']}" if event.get("child_name") else ""
-            send_notification_sync({
-                "title": "👨‍👩‍👧‍👦 Événement familial AUJOURD'HUI",
-                "body": f"{event['title']}{child_info}",
-                "url": "/family",
-                "tag": f"family_today_{event['id']}",
-                "type": "family",
-                "requireInteraction": True
-            })
-            notifications_sent.append(f"today_{event['id']}")
-        
         tomorrow_events = supabase.table("family_events").select("*").eq("date", tomorrow).neq("status", "done").execute()
         
-        for event in tomorrow_events.data:
-            child_info = f" - {event['child_name']}" if event.get("child_name") else ""
+        # Un seul message, priorité aux événements du jour
+        if today_events.data:
+            events_summary = ", ".join([f"{e['title']}" + (f" ({e['child_name']})" if e.get('child_name') else "") for e in today_events.data[:3]])
+            send_notification_sync({
+                "title": "👨‍👩‍👧‍👦 Événement familial AUJOURD'HUI",
+                "body": events_summary,
+                "url": "/family",
+                "type": "family"
+            })
+            notifications_sent = [e["id"] for e in today_events.data]
+        elif tomorrow_events.data:
+            events_summary = ", ".join([f"{e['title']}" + (f" ({e['child_name']})" if e.get('child_name') else "") for e in tomorrow_events.data[:3]])
             send_notification_sync({
                 "title": "📅 Rappel familial pour DEMAIN",
-                "body": f"{event['title']}{child_info}",
+                "body": events_summary,
                 "url": "/family",
-                "tag": f"family_tomorrow_{event['id']}",
-                "type": "family",
-                "requireInteraction": False
+                "type": "family"
             })
-            notifications_sent.append(f"tomorrow_{event['id']}")
+            notifications_sent = [e["id"] for e in tomorrow_events.data]
         
-        upcoming_events = supabase.table("family_events").select("*").gt("date", tomorrow).lte("date", next_3_days).neq("status", "done").execute()
-        
-        events_by_day = {}
-        for event in upcoming_events.data:
-            events_by_day.setdefault(event["date"], []).append(event)
-        
-        for date, events in events_by_day.items():
-            date_obj = datetime.fromisoformat(date)
-            day_name = date_obj.strftime("%A %d %B")
-            events_summary = ", ".join([f"{e['title']}" + (f" ({e['child_name']})" if e.get('child_name') else "") for e in events[:3]])
-            if len(events) > 3:
-                events_summary += f" et {len(events)-3} autre(s)"
-            
-            send_notification_sync({
-                "title": "🗓️ Événements familiaux à venir",
-                "body": f"Le {day_name} : {events_summary}",
-                "url": "/family",
-                "tag": f"family_upcoming_{date}",
-                "type": "family",
-                "requireInteraction": False
-            })
-            notifications_sent.append(f"upcoming_{date}")
+        if notifications_sent:
+            supabase.table("notifications_log").insert({
+                "type": "family_reminder",
+                "date": today,
+                "user_id": "rebecca",
+                "sent_at": datetime.now().isoformat()
+            }).execute()
         
         return {
             "success": True,
             "sent": len(notifications_sent) > 0,
             "notifications_sent": notifications_sent,
-            "count": len(notifications_sent),
-            "today_count": len(today_events.data),
-            "tomorrow_count": len(tomorrow_events.data),
-            "upcoming_count": len(upcoming_events.data)
+            "count": len(notifications_sent)
         }
     
     except Exception as e:
         logger.error(f"Erreur family_events_reminder: {e}")
         return {"success": False, "error": str(e)}
-
 
 
 # =====================================================
