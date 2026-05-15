@@ -6731,52 +6731,71 @@ async def test_morning_checkin():
         return {"success": False, "error": str(e)}
 
 
-# =====================================================
-# WEEKLY CEO VIEW - VERSION HUMAINE
-# =====================================================
 
+# =====================================================
+# WEEKLY CEO VIEW - VERSION P
+# =====================================================
 
 def _generate_human_weekly_insight(completion_rate: int, wins_count: int, balance: int, overdue_docs: int, tasks_completed: int, tasks_created: int, overdue_tasks: int) -> str:
     """
-    Génère un insight humain et personnalisé basé sur les vraies données.
+    Génère un insight humain et personnalisé - version NATURELLE
     """
     import random
     
-    # Analyser la situation
+    # Phrases d'ouverture naturelles
+    openers = [
+        "Alors cette semaine,",
+        "Voilà ce que je retiens,",
+        "En regardant ta semaine,",
+        "Tu sais quoi ?",
+        "Franchement,",
+        "Ce que je vois, c'est que"
+    ]
+    
+    # Analyser la situation réelle
     has_progress = tasks_completed > 0 or wins_count > 0
     has_stress = overdue_docs > 0 or overdue_tasks > 0
     has_money_issue = balance < 0
     is_low_energy = completion_rate < 30 and tasks_created > 0
+    is_great_week = completion_rate >= 70 and wins_count >= 2
     
+    opener = random.choice(openers)
+    
+    # Semaine exceptionnelle
+    if is_great_week:
+        return f"{opener} {tasks_completed} tâches terminées, {wins_count} victoires célébrées. Franchement, t'as géré cette semaine. Garde cette énergie, elle te mène loin. 👑"
+    
+    # Semaine avec progrès mais stress
     if has_stress and has_progress:
-        return f"🌿 {tasks_completed} tâche(s) faite(s), mais {overdue_docs} document(s) et {overdue_tasks} tâche(s) traînent. C'est normal. On les prend un par un cette semaine."
+        return f"{opener} tu as fait {tasks_completed} tâche(s), mais il reste {overdue_docs} document(s) et {overdue_tasks} tâche(s) qui traînent. C'est normal. On les prend un par un, pas la peine de tout gérer d'un coup. 🌿"
     
+    # Semaine difficile sans progression
     if has_stress and not has_progress:
-        return f"😌 Cette semaine a été lourde. {overdue_docs} document(s) en retard, {overdue_tasks} tâche(s) qui attendent. Parfois, tenir le coup est déjà une victoire."
+        if overdue_docs > 0:
+            return f"{opener} cette semaine a été lourde. {overdue_docs} document(s) en retard, et tu n'as rien pu cocher. Parfois, tenir le coup est déjà une victoire. Demain est un autre jour. 💪"
+        else:
+            return f"{opener} tu as créé {tasks_created} tâche(s) mais rien n'est terminé. C'est peut-être un signe : tu as besoin de ralentir. Écoute-toi. 🌙"
     
+    # Problème d'argent
     if has_money_issue:
-        return f"💰 Le solde est négatif ({abs(balance):,.0f} CFA). Ce n'est qu'un chiffre. Une petite action cette semaine peut inverser la tendance. On regarde ça ensemble ?"
+        return f"{opener} le solde est négatif ({abs(balance):,.0f} CFA). Ce n'est qu'un chiffre, pas un jugement. Une petite action cette semaine peut inverser la tendance. On regarde ça ensemble ? 💰"
     
+    # Basse énergie
     if is_low_energy:
-        return f"🌙 Tu as créé {tasks_created} tâche(s) mais peu sont terminées. C'est peut-être un signe : tu as besoin de ralentir. Écoute-toi."
+        return f"{opener} tu as créé {tasks_created} tâche(s) mais peu sont terminées. Parfois, ralentir permet de mieux repartir. C'est peut-être ce dont tu avais besoin. 🌿"
     
-    if completion_rate >= 80 and wins_count >= 3:
-        return f"🎉 {tasks_completed} tâches terminées, {wins_count} victoires célébrées. Cette semaine, tu étais en feu. Garde cette énergie, elle te mènera loin."
-    
-    if completion_rate >= 60:
-        return f"✅ {completion_rate}% de tes tâches sont faites. {wins_count} victoire(s). Une semaine solide. Continue comme ça, une chose à la fois."
-    
+    # Progression modérée
     if completion_rate >= 30:
         if wins_count > 0:
-            return f"🟡 {completion_rate}% des tâches complétées, mais {wins_count} victoire(s) quand même. Chaque pas compte, même petit."
+            return f"{opener} {completion_rate}% des tâches sont faites, et tu as {wins_count} victoire(s) à célébrer. Chaque pas compte, même petit. Continue comme ça. ✨"
         else:
-            return f"🟡 {completion_rate}% des tâches sont faites. Une progression modérée, mais une progression quand même. C'est bien."
+            return f"{opener} {completion_rate}% des tâches sont terminées. Une progression modérée, mais une progression quand même. C'est bien. 🌱"
     
-    # Fallback avec une touche humaine
+    # Message par défaut chaleureux
     encouragements = [
-        f"🌿 {tasks_completed} tâche(s) terminée(s) cette semaine. Parfois, ralentir permet de mieux repartir.",
-        f"✨ {tasks_completed} tâche(s) accomplie(s). Chaque petite victoire construit ton empire.",
-        f"💪 Cette semaine, tu as fait ce que tu as pu. C'est suffisant. La semaine prochaine est une nouvelle page."
+        f"{opener} {tasks_completed} tâche(s) terminée(s) cette semaine. Parfois, ralentir permet de mieux repartir. 🌿",
+        f"{opener} {tasks_completed} tâche(s) accomplie(s). Chaque petite victoire construit ton empire. 👑",
+        f"{opener} tu as fait ce que tu as pu. C'est suffisant. La semaine prochaine est une nouvelle page. 💖"
     ]
     
     return random.choice(encouragements)
@@ -6928,10 +6947,15 @@ async def get_weekly_ceo():
             pending_summary = f"📋 {len(overdue_docs.data)} documents en retard : {doc_names}. Un par un, ça va le faire."
         
         # Message "closest_to_cash" - version humaine
+        import random
         if closest_to_cash:
-            closest_summary = f"💰 {closest_to_cash} — c'est ta mission la plus proche de générer du cash. Une petite action cette semaine peut débloquer des choses."
+            cash_messages = [
+                f"💰 {closest_to_cash} — c'est ta mission la plus prometteuse côté argent. Une petite action cette semaine peut débloquer des choses. On y va ?",
+                f"💰 {closest_to_cash} a du potentiel. Même une heure cette semaine peut faire bouger les choses.",
+                f"🎯 {closest_to_cash} — si tu veux du cash rapidement, c'est par là. Un petit pas chaque jour."
+            ]
+            closest_summary = random.choice(cash_messages)
         else:
-            # Chercher une mission avec du potentiel même si pas active
             potential_mission = None
             for mission in missions_by_revenue.data:
                 if mission.get("revenue_potential", 0) > 3:
@@ -6939,63 +6963,67 @@ async def get_weekly_ceo():
                     break
             
             if potential_mission:
-                closest_summary = f"💭 {potential_mission} a du potentiel mais n'est pas active. Et si tu lui consacrais une petite heure cette semaine ?"
+                closest_summary = f"💭 {potential_mission} a du potentiel mais n'est pas active. Et si tu lui consacrais une petite heure cette semaine ? Rien que pour voir."
             else:
                 closest_summary = "💭 Aucune mission n'est proche du cash pour l'instant. C'est le moment d'en identifier une. Veux-tu qu'on en parle ?"
         
         # ========== GÉNÉRATION DES PRIORITÉS PAR IA ==========
         try:
-            # Contexte pour l'IA
-            context_for_ai = f"""Rebecca cette semaine :
-- {len(completed_tasks.data)} tâches terminées sur {len(new_tasks.data)} créées
-- {len(wins_this_week.data)} victoire(s) célébrée(s)
-- {len(pending_docs.data)} documents en attente, dont {len(overdue_docs.data)} en retard
-- {len(overdue_tasks.data)} tâches en retard
-- {len(active_missions.data)} missions actives
-- Solde financier : {total_revenue - total_spending:,.0f} CFA
-
-Sois naturelle, humaine, pratique. Génère 3 priorités pour la semaine prochaine."""
-
             response = client.chat.completions.create(
                 model="gpt-4o",
                 messages=[
-                    {"role": "system", "content": """Tu es Becks, la stratège personnelle de Rebecca. Tu connais sa vie : 
+                    {"role": "system", "content": """Tu es Becks, l'amie et stratège de Rebecca. Tu connais sa vie :
 - Maman de 4 filles (Neriah, Nylah, Norah, Sheyi)
 - Projets : Ifè Farm, Love & Fire Sport, Santé Plus, Bénin Relocation
 - Elle est souvent surchargée et a besoin de simplicité
 
-Génère 3 priorités pour la semaine prochaine. Sois PRATIQUE, HUMAINE et CONCRÈTE.
-Pas de jargon. Des vraies actions faisables.
+Génère 3 priorités pour la semaine prochaine.
+Sois NATURELLE, HUMAINE, CONCRÈTE. Pas de jargon corporate.
+Écris comme tu parlerais à une amie.
+
+Exemples de bonnes priorités :
+- "Prendre 10 minutes pour toi, sans culpabilité"
+- "Vider ta tête dans le Brain Dump, ça fait du bien"
+- "Avancer sur un seul projet, pas tous à la fois"
 
 Retourne UNIQUEMENT du JSON : {"priorities": ["action 1", "action 2", "action 3"]}"""},
-                    {"role": "user", "content": context_for_ai}
+                    {"role": "user", "content": f"""Voici le contexte de sa semaine :
+- Missions actives : {[m["name"] for m in active_missions.data[:5]]}
+- {len(pending_docs.data)} documents en attente
+- {len(overdue_docs.data)} documents en retard
+- {len(wins_this_week.data)} victoire(s) cette semaine
+- Solde net : {total_revenue - total_spending:,.0f} CFA
+
+Génère 3 priorités naturelles pour la semaine prochaine."""}
                 ],
                 max_tokens=300,
-                temperature=0.7
+                temperature=0.8
             )
             result_text = response.choices[0].message.content
             result_text = result_text.replace("```json", "").replace("```", "").strip()
             priorities_result = json.loads(result_text)
             next_week_priorities = priorities_result.get("priorities", [])
             
-            # Nettoyer et s'assurer qu'on a 3 priorités
+            # Nettoyer et humaniser les priorités
             next_week_priorities = [p.strip() for p in next_week_priorities if p and len(p) > 5]
+            
+            # Fallbacks humains
             if len(next_week_priorities) < 3:
                 fallbacks = [
-                    "Prendre 10 minutes pour toi chaque jour",
-                    "Vider ta tête dans le Brain Dump une fois",
-                    f"Avancer sur {closest_to_cash or 'une mission qui te tient à cœur'}"
+                    "🌿 Prendre un moment pour toi, ça compte",
+                    "📋 Une petite tâche, une seule, pour avancer",
+                    "💬 Parler à Becks si tu as besoin de vider ta tête"
                 ]
                 for fb in fallbacks:
                     if fb not in next_week_priorities and len(next_week_priorities) < 3:
                         next_week_priorities.append(fb)
-                        
+                
         except Exception as e:
             logger.error(f"Erreur génération priorités: {e}")
             next_week_priorities = [
-                "Prendre une pause quand tu en ressens le besoin",
-                "Faire une seule chose importante chaque jour",
-                f"Regarder ce qui traîne du côté de {closest_to_cash or 'tes projets actifs'}"
+                "🌿 Respirer. Une seule chose importante aujourd'hui.",
+                "📋 Regarder ce qui traîne et choisir une seule action",
+                f"💬 Parler à Becks de {closest_to_cash or 'ce qui te pèse'}"
             ]
         
         # ========== INSIGHT GLOBAL ==========
@@ -7052,7 +7080,7 @@ Retourne UNIQUEMENT du JSON : {"priorities": ["action 1", "action 2", "action 3"
 
 
 # =====================================================
-# CONTENT CALENDAR - ENDPOINTS
+# CONTENT CALENDAR
 # =====================================================
 
 @app.get("/api/content/calendar")
@@ -7074,13 +7102,11 @@ async def get_content_calendar(month: int = None, year: int = None):
         else:
             end_date = datetime(target_year, target_month + 1, 1).date() - timedelta(days=1)
         
-        # Récupérer les contenus du mois
         contents = supabase.table("content").select("*")\
             .gte("publish_date", start_date.isoformat())\
             .lte("publish_date", end_date.isoformat())\
             .execute()
         
-        # Organisation par date
         calendar_data = {}
         for content in contents.data:
             date = content.get("publish_date")
@@ -7089,12 +7115,11 @@ async def get_content_calendar(month: int = None, year: int = None):
                     calendar_data[date] = []
                 calendar_data[date].append(content)
         
-        # Générer des suggestions IA pour les trous dans le calendrier
         suggestions = []
         current_date = start_date
         while current_date <= end_date:
             date_str = current_date.isoformat()
-            if date_str not in calendar_data and current_date.weekday() < 5:  # Semaine seulement
+            if date_str not in calendar_data and current_date.weekday() < 5:
                 suggestions.append({
                     "date": date_str,
                     "suggested_platform": "instagram",
@@ -7108,7 +7133,7 @@ async def get_content_calendar(month: int = None, year: int = None):
             "year": target_year,
             "month": target_month,
             "calendar": calendar_data,
-            "suggestions": suggestions[:10],  # Max 10 suggestions
+            "suggestions": suggestions[:10],
             "stats": {
                 "total": len(contents.data),
                 "scheduled": len([c for c in contents.data if c.get("status") == "scheduled"]),
@@ -7121,6 +7146,7 @@ async def get_content_calendar(month: int = None, year: int = None):
         logger.error(f"Erreur content_calendar: {e}")
         return {"success": False, "error": str(e)}
 
+
 def _suggest_content_theme() -> str:
     """Génère une suggestion de thème de contenu aléatoire mais pertinente"""
     themes = [
@@ -7131,6 +7157,7 @@ def _suggest_content_theme() -> str:
     ]
     import random
     return random.choice(themes)
+
 
 @app.post("/api/content/generate-idea")
 async def generate_content_idea(request: Dict[str, Any]):
@@ -7173,7 +7200,6 @@ Retourne UNIQUEMENT du JSON:
         return {"success": False, "error": str(e)}
 
 
-
 # =====================================================
 # OPPORTUNITY SCANNER
 # =====================================================
@@ -7181,7 +7207,7 @@ Retourne UNIQUEMENT du JSON:
 @app.post("/api/opportunities/scan")
 async def scan_opportunities():
     """
-    Scan toutes les sources (inbox, notes, conversations) pour détecter des opportunités.
+    Scan toutes les sources pour détecter des opportunités.
     """
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
@@ -7189,16 +7215,10 @@ async def scan_opportunities():
     try:
         opportunities_found = []
         
-        # 1. Scanner l'inbox (brain dump)
         inbox_items = supabase.table("inbox").select("*").eq("needs_processing", False).limit(50).execute()
-        
-        # 2. Scanner les notes des missions
         missions = supabase.table("missions").select("name, notes").execute()
-        
-        # 3. Scanner les conversations récentes
         conversations = supabase.table("conversation_messages").select("content").limit(30).execute()
         
-        # Texte complet à analyser
         full_text = ""
         for item in inbox_items.data:
             full_text += item.get("content", "") + "\n"
@@ -7211,10 +7231,8 @@ async def scan_opportunities():
             except:
                 full_text += conv.get("content", "") + "\n"
         
-        # Limiter la taille
         full_text = full_text[:8000]
         
-        # Appel IA pour détecter les opportunités
         try:
             response = client.chat.completions.create(
                 model="gpt-4o",
@@ -7258,9 +7276,7 @@ Si aucune opportunité, retourne {"opportunities": []}"""},
             
             opportunities_found = result.get("opportunities", [])
             
-            # Sauvegarder les opportunités trouvées
             for opp in opportunities_found:
-                # Vérifier si elle n'existe pas déjà
                 existing = supabase.table("opportunities").select("*")\
                     .ilike("title", f"%{opp.get('title', '')}%")\
                     .execute()
@@ -7297,7 +7313,6 @@ Si aucune opportunité, retourne {"opportunities": []}"""},
         return {"success": False, "error": str(e)}
 
 
-
 # =====================================================
 # READY-TO-SEND GENERATION
 # =====================================================
@@ -7305,49 +7320,19 @@ Si aucune opportunité, retourne {"opportunities": []}"""},
 @app.post("/api/generate/ready-to-send")
 async def generate_ready_to_send(request: Dict[str, Any]):
     """
-    Génère un document prêt à être copié/envoyé (email, lettre, proposition, etc.)
+    Génère un document prêt à être copié/envoyé.
     """
-    doc_type = request.get("type", "email")  # email, letter, proposal, social, reminder
+    doc_type = request.get("type", "email")
     context = request.get("context", "")
-    tone = request.get("tone", "professional")  # professional, warm, direct, persuasive
+    tone = request.get("tone", "professional")
     recipient = request.get("recipient", "")
     sender = request.get("sender", "Rebecca")
     
     if not context:
         return {"success": False, "error": "Contexte requis"}
     
-    # Récupérer la mémoire utilisateur pour personnaliser
     memory_context = await get_user_memory_context()
     profile_context = await get_profile_context()
-    
-    # Templates de base selon le type
-    templates = {
-        "email": {
-            "subject": "Sujet de l'email",
-            "body": "Corps de l'email",
-            "signature": f"\n\nCordialement,\n{sender}"
-        },
-        "letter": {
-            "subject": None,
-            "body": "Corps de la lettre",
-            "signature": f"\n\nRespectueusement,\n{sender}"
-        },
-        "proposal": {
-            "subject": "Proposition - {title}",
-            "body": "Contenu de la proposition",
-            "signature": f"\n\nDans l'attente de votre retour,\n{sender}"
-        },
-        "social": {
-            "subject": None,
-            "body": "Contenu du post",
-            "signature": ""
-        },
-        "reminder": {
-            "subject": "Rappel : {title}",
-            "body": "Message de rappel",
-            "signature": f"\n\n{sender}"
-        }
-    }
     
     prompt = f"""Tu es Becks, l'assistante de Rebecca. Génère un {doc_type} prêt à être copié et envoyé.
 
@@ -7361,7 +7346,7 @@ Ce que Becks sait d'elle : {memory_context}
 
 RÈGLES IMPORTANTES :
 1. Sois clair, concis, professionnel
-2. Structure le document proprement (salutation, corps, conclusion, signature)
+2. Structure le document proprement
 3. Si c'est un email, ajoute un objet pertinent
 4. Si des informations manquent, laisse des placeholders [entre crochets]
 5. Retourne UNIQUEMENT du JSON valide avec cette structure :
@@ -7387,7 +7372,6 @@ Ne retourne que le JSON, rien d'autre."""
         result_text = result_text.replace("```json", "").replace("```", "").strip()
         generated = json.loads(result_text)
         
-        # Sauvegarder dans l'historique des drafts
         if supabase:
             supabase.table("drafts").insert({
                 "type": doc_type,
@@ -7402,7 +7386,6 @@ Ne retourne que le JSON, rien d'autre."""
     except Exception as e:
         logger.error(f"Erreur generation: {e}")
         return {"success": False, "error": str(e)}
-
 
 
 # =====================================================
@@ -7428,7 +7411,6 @@ async def compare_options(request: Dict[str, Any]):
     if not option_a or not option_b:
         return {"success": False, "error": "Deux options sont requises"}
     
-    # Récupérer le contexte utilisateur
     memory_context = await get_user_memory_context()
     profile_context = await get_profile_context()
     
@@ -7493,7 +7475,6 @@ Note : Pour chaque critère, note de 1 à 5. Le score total est la somme des not
         result_text = result_text.replace("```json", "").replace("```", "").strip()
         comparison = json.loads(result_text)
         
-        # Sauvegarder la décision dans la mémoire
         if supabase:
             supabase.table("user_memory").insert({
                 "category": "decisions",
