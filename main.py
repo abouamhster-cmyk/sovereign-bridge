@@ -7502,13 +7502,17 @@ Note : Pour chaque critère, note de 1 à 5. Le score total est la somme des not
 # TEXT-TO-SPEECH AVEC ELEVENLABS (NOUVELLE API)
 # =====================================================
 
+ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
+ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "uju3wxzG5OhpWcoi3SMy")  # Voix Bella
+
+
 # Voix recommandées pour une voix naturelle et chaleureuse
 VOICES = {
-    "bella": "EXAVITQu4vr4xnSDxMaL",      # Douce, chaleureuse
-    "rachel": "21m00Tcm4TlvDq8ikWAM",    # Naturelle, professionnelle
-    "grace": "ThT5KcUYPnA5D3oiFl7g",     # Élégante, claire
-    "domi": "AZnzlk1XvdvUeBnXmlld",      # Jeune, énergique
-    "antoni": "TxGEqnHWrfWFTfGW9XjX",    # Voix masculine douce
+    "bella": "uju3wxzG5OhpWcoi3SMy",      # Douce, chaleureuse
+    "rachel": "AeRdCCKzvd23BpJoofzx",    # Naturelle, professionnelle
+    "grace": "nzFihrBIvB34imQBuxub",     # Élégante, claire
+    "domi": "DODLEQrClDo8wCz460ld",      # Jeune, énergique
+    "antoni": "dXtC3XhB9GtPusIpNtQx",    # Voix masculine douce
 }
 DEFAULT_VOICE_ID = VOICES["bella"]
 
