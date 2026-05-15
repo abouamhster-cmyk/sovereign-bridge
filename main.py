@@ -6682,3 +6682,51 @@ Je suis là pour t'aider. Une chose à la fois. 👑"""
     except Exception as e:
         logger.error(f"Erreur morning_checkin: {e}")
         return {"success": False, "error": str(e)}
+
+
+@app.get("/api/morning-checkin/test")
+async def test_morning_checkin():
+    """Endpoint de test pour le check-in matinal (ignore la vérification d'envoi)"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        now = datetime.now()
+        today = now.date().isoformat()
+        
+        # Récupérer les données (sans vérifier si déjà envoyé)
+        yesterday = (now.date() - timedelta(days=1)).isoformat()
+        mood_result = supabase.table("mood_entries").select("mood").eq("date", yesterday).eq("user_id", "rebecca").execute()
+        yesterday_mood = mood_result.data[0]["mood"] if mood_result.data else None
+        
+        tasks_today = supabase.table("tasks").select("*").eq("due_date", today).neq("status", "done").execute()
+        overdue_docs = supabase.table("documents").select("*").lt("due_date", today).neq("status", "approved").execute()
+        wins_yesterday = supabase.table("wins").select("*").eq("date", yesterday).execute()
+        
+        greeting = "☀️ Bonjour" if now.hour < 12 else "👋 Bonjour"
+        
+        mood_message = ""
+        if yesterday_mood == "stressée":
+            mood_message = "Je sens que hier était stressant. Aujourd'hui, on y va doucement."
+        elif yesterday_mood == "fatiguée":
+            mood_message = "Tu étais fatiguée hier. Priorise ton énergie aujourd'hui."
+        else:
+            mood_message = "J'espère que tu as bien dormi."
+        
+        final_message = f"{greeting} Rebecca.\n\n{mood_message}\n\n📋 {len(tasks_today.data)} tâche(s) aujourd'hui.\n📄 {len(overdue_docs.data)} document(s) en retard.\n🏆 {len(wins_yesterday.data)} victoire(s) hier.\n\nJe suis là pour t'aider. 👑"
+        
+        return {
+            "success": True,
+            "test_message": final_message,
+            "stats": {
+                "tasks_today": len(tasks_today.data),
+                "overdue_docs": len(overdue_docs.data),
+                "wins_yesterday": len(wins_yesterday.data),
+                "yesterday_mood": yesterday_mood
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Erreur test_morning_checkin: {e}")
+        return {"success": False, "error": str(e)}
+
