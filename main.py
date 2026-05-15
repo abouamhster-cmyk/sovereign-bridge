@@ -6545,3 +6545,140 @@ async def get_notification_preferences():
     except Exception as e:
         logger.error(f"Erreur get_preferences: {e}")
         return {"success": False, "preferences": {}}
+
+
+# =====================================================
+# CHECK-IN PROACTIF MATINAL
+# =====================================================
+
+@app.post("/api/morning-checkin")
+async def send_morning_checkin():
+    """
+    Envoie une notification proactive le matin avec un message personnalisé.
+    À appeler via cron tous les matins entre 7h et 9h.
+    """
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        now = datetime.now()
+        hour = now.hour
+        today = now.date().isoformat()
+        
+        # Vérifier si déjà envoyé aujourd'hui
+        existing = supabase.table("notifications_log").select("*")\
+            .eq("type", "morning_checkin")\
+            .eq("date", today)\
+            .eq("user_id", "rebecca")\
+            .execute()
+        
+        if existing.data:
+            return {"success": True, "sent": False, "message": "Déjà envoyé aujourd'hui"}
+        
+        # 1. Récupérer l'humeur d'hier
+        yesterday = (now.date() - timedelta(days=1)).isoformat()
+        mood_result = supabase.table("mood_entries").select("mood").eq("date", yesterday).eq("user_id", "rebecca").execute()
+        yesterday_mood = mood_result.data[0]["mood"] if mood_result.data else None
+        
+        # 2. Récupérer les tâches d'aujourd'hui
+        tasks_today = supabase.table("tasks").select("*").eq("due_date", today).neq("status", "done").execute()
+        
+        # 3. Récupérer les documents en retard
+        overdue_docs = supabase.table("documents").select("*").lt("due_date", today).neq("status", "approved").execute()
+        
+        # 4. Récupérer les victoires d'hier
+        wins_yesterday = supabase.table("wins").select("*").eq("date", yesterday).execute()
+        
+        # 5. Générer un message personnalisé
+        greeting = "Bonjour"
+        if hour < 9:
+            greeting = "☀️ Bonjour"
+        elif hour < 12:
+            greeting = "🌤️ Bonjour"
+        else:
+            greeting = "👋 Bonjour"
+        
+        # Construire le message selon le contexte
+        if yesterday_mood == "stressée":
+            mood_message = "Je sens que hier était stressant. Aujourd'hui, on y va doucement."
+        elif yesterday_mood == "fatiguée":
+            mood_message = "Tu étais fatiguée hier. Priorise ton énergie aujourd'hui."
+        elif yesterday_mood == "excellent":
+            mood_message = "Tu étais en forme hier ! Continue sur cette lancée."
+        else:
+            mood_message = "J'espère que tu as bien dormi."
+        
+        # Message sur les tâches
+        if len(tasks_today.data) > 0:
+            task_message = f"Tu as {len(tasks_today.data)} tâche(s) aujourd'hui."
+            first_task = tasks_today.data[0].get("title", "")
+            if first_task:
+                task_message += f" La plus importante : {first_task}"
+        else:
+            task_message = "Aucune tâche planifiée. Une journée pour respirer ?"
+        
+        # Message sur les documents
+        if len(overdue_docs.data) > 0:
+            doc_message = f"⚠️ {len(overdue_docs.data)} document(s) en retard. On les regarde ?"
+        else:
+            doc_message = "✅ Aucun document en retard."
+        
+        # Message sur les victoires
+        if len(wins_yesterday.data) > 0:
+            win_message = f"🏆 Hier, tu as célébré {len(wins_yesterday.data)} victoire(s) !"
+        else:
+            win_message = "✨ N'oublie pas de célébrer tes victoires, même petites."
+        
+        # Message final personnalisé
+        final_message = f"""{greeting} Rebecca.
+
+{mood_message}
+
+📋 {task_message}
+{doc_message}
+{win_message}
+
+Je suis là pour t'aider. Une chose à la fois. 👑"""
+
+        # Envoyer la notification push
+        send_notification_sync({
+            "title": "🌅 Rebecca",
+            "body": final_message[:200],  # Limite de caractères pour la notification
+            "url": "/chat",
+            "type": "morning_checkin",
+            "sound": "/sounds/notification.mp3",
+            "vibrate": [200, 100, 200],
+            "requireInteraction": False,
+            "silent": False,
+            "tag": f"morning_checkin_{today}"
+        })
+        
+        # Logger l'envoi
+        supabase.table("notifications_log").insert({
+            "type": "morning_checkin",
+            "date": today,
+            "user_id": "rebecca",
+            "sent_at": now.isoformat(),
+            "metadata": {
+                "tasks_count": len(tasks_today.data),
+                "overdue_docs": len(overdue_docs.data),
+                "wins_yesterday": len(wins_yesterday.data),
+                "yesterday_mood": yesterday_mood
+            }
+        }).execute()
+        
+        return {
+            "success": True,
+            "sent": True,
+            "message": final_message,
+            "stats": {
+                "tasks_today": len(tasks_today.data),
+                "overdue_docs": len(overdue_docs.data),
+                "wins_yesterday": len(wins_yesterday.data),
+                "yesterday_mood": yesterday_mood
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Erreur morning_checkin: {e}")
+        return {"success": False, "error": str(e)}
