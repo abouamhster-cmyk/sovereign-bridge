@@ -4499,7 +4499,7 @@ async def clean_expired_subscriptions():
 # =====================================================
 
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
-ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")
+ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "EXAVITQu4vr4xnSDxMaL")
 
 @app.post("/api/voice/speak")
 async def speak_text(request: Dict[str, Any]):
@@ -7493,4 +7493,64 @@ Note : Pour chaque critère, note de 1 à 5. Le score total est la somme des not
         
     except Exception as e:
         logger.error(f"Erreur compare: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# =====================================================
+# TEXT-TO-SPEECH AVEC ELEVENLABS (VOIX NATURELLE)
+# =====================================================
+
+
+@app.post("/api/tts/speak")
+async def text_to_speech(request: Dict[str, Any]):
+    """Convertit un texte en audio avec ElevenLabs"""
+    text = request.get("text", "")
+    voice_id = request.get("voice_id", ELEVENLABS_VOICE_ID)
+    
+    if not text:
+        return {"success": False, "error": "Texte requis"}
+    
+    if not ELEVENLABS_API_KEY:
+        return {"success": False, "error": "ElevenLabs non configuré", "fallback": True}
+    
+    try:
+        import re
+        clean_text = re.sub(r'\[ACTION:[^\]]*\]', '', text)
+        clean_text = re.sub(r'\*\*.*?\*\*', '', clean_text)
+        clean_text = re.sub(r'[✅🎯✨⚠️📋🎉]', '', clean_text)
+        clean_text = ' '.join(clean_text.split())
+        
+        if len(clean_text) > 2500:
+            clean_text = clean_text[:2500]
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
+                headers={
+                    "xi-api-key": ELEVENLABS_API_KEY,
+                    "Content-Type": "application/json",
+                    "Accept": "audio/mpeg"
+                },
+                json={
+                    "text": clean_text,
+                    "model_id": "eleven_turbo_v2_5",
+                    "voice_settings": {
+                        "stability": 0.35,
+                        "similarity_boost": 0.75,
+                        "style": 0.2,
+                        "use_speaker_boost": True
+                    }
+                },
+                timeout=30.0
+            )
+            
+            if response.status_code == 200:
+                import base64
+                audio_base64 = base64.b64encode(response.content).decode('utf-8')
+                return {"success": True, "audio": audio_base64, "format": "mp3"}
+            else:
+                return {"success": False, "error": response.text}
+                
+    except Exception as e:
+        logger.error(f"Erreur TTS: {e}")
         return {"success": False, "error": str(e)}
