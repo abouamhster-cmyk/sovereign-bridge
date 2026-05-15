@@ -7051,3 +7051,247 @@ Retourne UNIQUEMENT du JSON : {"priorities": ["action 1", "action 2", "action 3"
         return {"success": False, "error": str(e)}
 
 
+# =====================================================
+# CONTENT CALENDAR - ENDPOINTS
+# =====================================================
+
+@app.get("/api/content/calendar")
+async def get_content_calendar(month: int = None, year: int = None):
+    """
+    Retourne le calendrier éditorial avec les contenus programmés.
+    """
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        now = datetime.now()
+        target_month = month if month else now.month
+        target_year = year if year else now.year
+        
+        start_date = datetime(target_year, target_month, 1).date()
+        if target_month == 12:
+            end_date = datetime(target_year + 1, 1, 1).date() - timedelta(days=1)
+        else:
+            end_date = datetime(target_year, target_month + 1, 1).date() - timedelta(days=1)
+        
+        # Récupérer les contenus du mois
+        contents = supabase.table("content").select("*")\
+            .gte("publish_date", start_date.isoformat())\
+            .lte("publish_date", end_date.isoformat())\
+            .execute()
+        
+        # Organisation par date
+        calendar_data = {}
+        for content in contents.data:
+            date = content.get("publish_date")
+            if date:
+                if date not in calendar_data:
+                    calendar_data[date] = []
+                calendar_data[date].append(content)
+        
+        # Générer des suggestions IA pour les trous dans le calendrier
+        suggestions = []
+        current_date = start_date
+        while current_date <= end_date:
+            date_str = current_date.isoformat()
+            if date_str not in calendar_data and current_date.weekday() < 5:  # Semaine seulement
+                suggestions.append({
+                    "date": date_str,
+                    "suggested_platform": "instagram",
+                    "suggested_type": "story",
+                    "suggested_theme": _suggest_content_theme()
+                })
+            current_date += timedelta(days=1)
+        
+        return {
+            "success": True,
+            "year": target_year,
+            "month": target_month,
+            "calendar": calendar_data,
+            "suggestions": suggestions[:10],  # Max 10 suggestions
+            "stats": {
+                "total": len(contents.data),
+                "scheduled": len([c for c in contents.data if c.get("status") == "scheduled"]),
+                "published": len([c for c in contents.data if c.get("status") == "posted"]),
+                "draft": len([c for c in contents.data if c.get("status") == "draft"])
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Erreur content_calendar: {e}")
+        return {"success": False, "error": str(e)}
+
+def _suggest_content_theme() -> str:
+    """Génère une suggestion de thème de contenu aléatoire mais pertinente"""
+    themes = [
+        "🌱 Vie à la ferme", "💪 Sport adapté", "👩‍👧‍👦 Vie de maman",
+        "💰 Opportunités business", "🌟 Victoire personnelle", "📚 Éducation",
+        "🏠 Relocalisation", "❤️ Santé et bien-être", "🎯 Objectif de la semaine",
+        "🙏 Gratitude", "🚀 Lancement à venir", "📖 Témoignage"
+    ]
+    import random
+    return random.choice(themes)
+
+@app.post("/api/content/generate-idea")
+async def generate_content_idea(request: Dict[str, Any]):
+    """
+    Génère une idée de contenu avec l'IA.
+    """
+    platform = request.get("platform", "instagram")
+    topic = request.get("topic", "")
+    audience = request.get("audience", "")
+    
+    try:
+        prompt = f"""Génère une idée de contenu pour {platform}.
+Sujet: {topic if topic else 'général'}
+Audience: {audience if audience else 'femmes entrepreneures, mamans'}
+
+Retourne UNIQUEMENT du JSON:
+{{
+  "title": "titre accrocheur",
+  "hook": "phrase d'accroche (max 100 caractères)",
+  "content_type": "story/reel/carousel/post",
+  "hashtags": ["#hashtag1", "#hashtag2"],
+  "best_time": "meilleur horaire de publication"
+}}"""
+
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=300,
+            temperature=0.8
+        )
+        
+        result_text = response.choices[0].message.content
+        result_text = result_text.replace("```json", "").replace("```", "").strip()
+        idea = json.loads(result_text)
+        
+        return {"success": True, "idea": idea}
+        
+    except Exception as e:
+        logger.error(f"Erreur generate_content_idea: {e}")
+        return {"success": False, "error": str(e)}
+
+
+
+# =====================================================
+# OPPORTUNITY SCANNER
+# =====================================================
+
+@app.post("/api/opportunities/scan")
+async def scan_opportunities():
+    """
+    Scan toutes les sources (inbox, notes, conversations) pour détecter des opportunités.
+    """
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        opportunities_found = []
+        
+        # 1. Scanner l'inbox (brain dump)
+        inbox_items = supabase.table("inbox").select("*").eq("needs_processing", False).limit(50).execute()
+        
+        # 2. Scanner les notes des missions
+        missions = supabase.table("missions").select("name, notes").execute()
+        
+        # 3. Scanner les conversations récentes
+        conversations = supabase.table("conversation_messages").select("content").limit(30).execute()
+        
+        # Texte complet à analyser
+        full_text = ""
+        for item in inbox_items.data:
+            full_text += item.get("content", "") + "\n"
+        for mission in missions.data:
+            full_text += mission.get("notes", "") + "\n"
+        for conv in conversations.data:
+            try:
+                parsed = json.loads(conv.get("content", "{}"))
+                full_text += parsed.get("content", "") + "\n"
+            except:
+                full_text += conv.get("content", "") + "\n"
+        
+        # Limiter la taille
+        full_text = full_text[:8000]
+        
+        # Appel IA pour détecter les opportunités
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": """Tu es Becks, l'opportunity scanner. Analyse le texte et détecte les opportunités.
+
+Une opportunité peut être :
+- Grant / subvention
+- Contrat public (DDA, eMMA, SAM.gov)
+- Partenariat
+- Client potentiel
+- Collaboration
+- Appel à projet
+- Événement important
+
+Retourne UNIQUEMENT du JSON avec cette structure :
+{
+  "opportunities": [
+    {
+      "title": "titre de l'opportunité",
+      "type": "grant/contract/partnership/client/collaboration/event",
+      "source": "d'où ça vient",
+      "deadline": "date si connue",
+      "value_estimate": "estimation en CFA",
+      "confidence": "high/medium/low",
+      "next_action": "action recommandée"
+    }
+  ]
+}
+
+Si aucune opportunité, retourne {"opportunities": []}"""},
+                    {"role": "user", "content": f"Analyse ce texte :\n\n{full_text}"}
+                ],
+                max_tokens=1000,
+                temperature=0.3
+            )
+            
+            result_text = response.choices[0].message.content
+            result_text = result_text.replace("```json", "").replace("```", "").strip()
+            result = json.loads(result_text)
+            
+            opportunities_found = result.get("opportunities", [])
+            
+            # Sauvegarder les opportunités trouvées
+            for opp in opportunities_found:
+                # Vérifier si elle n'existe pas déjà
+                existing = supabase.table("opportunities").select("*")\
+                    .ilike("title", f"%{opp.get('title', '')}%")\
+                    .execute()
+                
+                if not existing.data:
+                    supabase.table("opportunities").insert({
+                        "title": opp.get("title"),
+                        "type": opp.get("type"),
+                        "stage": "idea",
+                        "estimated_value": opp.get("value_estimate", 0),
+                        "probability": opp.get("confidence", "medium"),
+                        "notes": f"🔍 Détecté par scanner le {datetime.now().strftime('%d/%m/%Y')}\nSource: {opp.get('source', 'Inconnue')}\nAction recommandée: {opp.get('next_action', 'À définir')}",
+                        "next_action": opp.get("next_action"),
+                        "user_id": "rebecca"
+                    }).execute()
+            
+            return {
+                "success": True,
+                "opportunities_found": opportunities_found,
+                "count": len(opportunities_found),
+                "scanned_sources": {
+                    "inbox": len(inbox_items.data),
+                    "missions": len(missions.data),
+                    "conversations": len(conversations.data)
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Erreur scan IA: {e}")
+            return {"success": False, "error": str(e)}
+        
+    except Exception as e:
+        logger.error(f"Erreur scan_opportunities: {e}")
+        return {"success": False, "error": str(e)}
