@@ -122,3 +122,36 @@ def run_hourly_checks():
         # Notifications intelligentes toutes les 2 heures (heures paires)
         if current_hour % 2 == 0:
             send_intelligent_notifications()
+
+
+# scheduler.py - Ajouter ou modifier
+
+def send_morning_checkin():
+    """Envoie le check-in matinal proactif (une fois par jour entre 7h et 9h)"""
+    current_hour = datetime.now().hour
+    
+    # Entre 7h et 9h seulement
+    if 7 <= current_hour <= 9:
+        try:
+            response = requests.post(f"{BACKEND_URL}/api/morning-checkin", timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("sent"):
+                    print(f"[{datetime.now()}] 🌅 Check-in matinal envoyé: {data.get('stats', {})}")
+                else:
+                    print(f"[{datetime.now()}] 🌅 Check-in matinal déjà envoyé aujourd'hui")
+        except Exception as e:
+            print(f"[{datetime.now()}] ❌ Erreur check-in matinal: {e}")
+
+def run_hourly_checks():
+    current_minute = datetime.now().minute
+    current_hour = datetime.now().hour
+    
+    # Exécuter à la minute 0 de chaque heure
+    if current_minute == 0:
+        send_morning_checkin()  # ← AJOUTER CETTE LIGNE
+        run_all_reminders()
+        
+        # Notifications intelligentes toutes les 2 heures (heures paires)
+        if current_hour % 2 == 0:
+            send_intelligent_notifications()
