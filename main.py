@@ -7496,16 +7496,27 @@ Note : Pour chaque critère, note de 1 à 5. Le score total est la somme des not
         return {"success": False, "error": str(e)}
 
 
+
+
 # =====================================================
-# TEXT-TO-SPEECH AVEC ELEVENLABS (VOIX NATURELLE)
+# TEXT-TO-SPEECH AVEC ELEVENLABS (NOUVELLE API)
 # =====================================================
 
+# Voix recommandées pour une voix naturelle et chaleureuse
+VOICES = {
+    "bella": "EXAVITQu4vr4xnSDxMaL",      # Douce, chaleureuse
+    "rachel": "21m00Tcm4TlvDq8ikWAM",    # Naturelle, professionnelle
+    "grace": "ThT5KcUYPnA5D3oiFl7g",     # Élégante, claire
+    "domi": "AZnzlk1XvdvUeBnXmlld",      # Jeune, énergique
+    "antoni": "TxGEqnHWrfWFTfGW9XjX",    # Voix masculine douce
+}
+DEFAULT_VOICE_ID = VOICES["bella"]
 
 @app.post("/api/tts/speak")
 async def text_to_speech(request: Dict[str, Any]):
-    """Convertit un texte en audio avec ElevenLabs"""
+    """Convertit un texte en audio avec ElevenLabs (nouvelle API)"""
     text = request.get("text", "")
-    voice_id = request.get("voice_id", ELEVENLABS_VOICE_ID)
+    voice_id = request.get("voice_id", DEFAULT_VOICE_ID)
     
     if not text:
         return {"success": False, "error": "Texte requis"}
@@ -7515,15 +7526,18 @@ async def text_to_speech(request: Dict[str, Any]):
     
     try:
         import re
+        # Nettoyer le texte des balises et caractères spéciaux
         clean_text = re.sub(r'\[ACTION:[^\]]*\]', '', text)
         clean_text = re.sub(r'\*\*.*?\*\*', '', clean_text)
         clean_text = re.sub(r'[✅🎯✨⚠️📋🎉]', '', clean_text)
         clean_text = ' '.join(clean_text.split())
         
-        if len(clean_text) > 2500:
-            clean_text = clean_text[:2500]
+        # Limiter la longueur (10k caractères max pour le plan gratuit)
+        if len(clean_text) > 5000:
+            clean_text = clean_text[:5000]
         
-        async with httpx.AsyncClient() as client:
+        # Utiliser la nouvelle API ElevenLabs
+        async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
                 headers={
@@ -7533,24 +7547,63 @@ async def text_to_speech(request: Dict[str, Any]):
                 },
                 json={
                     "text": clean_text,
-                    "model_id": "eleven_turbo_v2_5",
+                    "model_id": "eleven_multilingual_v2",  # Meilleure qualité
                     "voice_settings": {
-                        "stability": 0.35,
+                        "stability": 0.35,      # Plus d'émotion
                         "similarity_boost": 0.75,
                         "style": 0.2,
                         "use_speaker_boost": True
                     }
-                },
-                timeout=30.0
+                }
             )
             
             if response.status_code == 200:
                 import base64
                 audio_base64 = base64.b64encode(response.content).decode('utf-8')
-                return {"success": True, "audio": audio_base64, "format": "mp3"}
+                return {
+                    "success": True, 
+                    "audio": audio_base64, 
+                    "format": "mp3",
+                    "voice_id": voice_id
+                }
             else:
-                return {"success": False, "error": response.text}
+                error_msg = response.text
+                logger.error(f"Erreur ElevenLabs: {error_msg}")
+                
+                # Si erreur de quota, fallback vers Edge TTS
+                if "quota" in error_msg.lower() or "unusual_activity" in error_msg.lower():
+                    return await edge_tts_fallback(clean_text)
+                
+                return {"success": False, "error": error_msg, "fallback": True}
                 
     except Exception as e:
-        logger.error(f"Erreur TTS: {e}")
-        return {"success": False, "error": str(e)}
+        logger.error(f"Erreur TTS ElevenLabs: {e}")
+        # Fallback vers Edge TTS
+        return await edge_tts_fallback(clean_text if 'clean_text' in locals() else text)
+
+async def edge_tts_fallback(text: str):
+    """Fallback vers Edge TTS (gratuit, illimité)"""
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # Encoder le texte pour l'URL
+            import urllib.parse
+            encoded_text = urllib.parse.quote(text)
+            
+            response = await client.get(
+                f"https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=6A5AA1D4EAFF4E9FB37E23D68491D6F4&Voice=fr-FR-DeniseNeural&Text={encoded_text}",
+                follow_redirects=True
+            )
+            
+            if response.status_code == 200:
+                import base64
+                audio_base64 = base64.b64encode(response.content).decode('utf-8')
+                return {
+                    "success": True,
+                    "audio": audio_base64,
+                    "format": "mp3",
+                    "fallback": True
+                }
+    except Exception as e:
+        logger.error(f"Erreur Edge TTS fallback: {e}")
+    
+    return {"success": False, "error": "Aucune voix disponible", "fallback": True}
