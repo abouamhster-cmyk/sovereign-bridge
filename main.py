@@ -7497,7 +7497,6 @@ Note : Pour chaque critère, note de 1 à 5. Le score total est la somme des not
 
 
 
-
 # =====================================================
 # TEXT-TO-SPEECH AVEC ELEVENLABS (NOUVELLE API)
 # =====================================================
@@ -7611,3 +7610,55 @@ async def edge_tts_fallback(text: str):
         logger.error(f"Erreur Edge TTS fallback: {e}")
     
     return {"success": False, "error": "Aucune voix disponible", "fallback": True}
+
+
+# =====================================================
+# TEXT-TO-SPEECH AVEC DEEPGRAM (Voix premium)
+# =====================================================
+
+DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY")
+
+@app.post("/api/tts/deepgram")
+async def deepgram_speak(request: Dict[str, Any]):
+    """Convertit un texte en audio avec Deepgram Aura (voix premium)"""
+    text = request.get("text", "")
+    voice = request.get("voice", "aura-asteria-en")  # Voix féminine naturelle
+    
+    if not text:
+        return {"success": False, "error": "Texte requis"}
+    
+    if not DEEPGRAM_API_KEY:
+        return {"success": False, "error": "Deepgram non configuré"}
+    
+    try:
+        # Nettoyer le texte
+        import re
+        clean_text = re.sub(r'\[ACTION:[^\]]*\]', '', text)
+        clean_text = re.sub(r'\*\*.*?\*\*', '', clean_text)
+        clean_text = re.sub(r'[✅🎯✨⚠️📋🎉]', '', clean_text)
+        clean_text = ' '.join(clean_text.split())
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                "https://api.deepgram.com/v1/speak",
+                headers={
+                    "Authorization": f"Token {DEEPGRAM_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "text": clean_text,
+                    "voice": voice,
+                    "model": "aura-asteria-en"
+                }
+            )
+            
+            if response.status_code == 200:
+                import base64
+                audio_base64 = base64.b64encode(response.content).decode('utf-8')
+                return {"success": True, "audio": audio_base64, "format": "mp3"}
+            else:
+                return {"success": False, "error": response.text}
+                
+    except Exception as e:
+        logger.error(f"Erreur Deepgram: {e}")
+        return {"success": False, "error": str(e)}
