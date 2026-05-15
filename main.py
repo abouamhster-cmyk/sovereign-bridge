@@ -7611,18 +7611,17 @@ async def edge_tts_fallback(text: str):
     
     return {"success": False, "error": "Aucune voix disponible", "fallback": True}
 
-
 # =====================================================
-# TEXT-TO-SPEECH AVEC DEEPGRAM (Voix premium)
+# TEXT-TO-SPEECH AVEC DEEPGRAM
 # =====================================================
 
 DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY")
 
 @app.post("/api/tts/deepgram")
 async def deepgram_speak(request: Dict[str, Any]):
-    """Convertit un texte en audio avec Deepgram Aura (voix premium)"""
+    """Convertit un texte en audio avec Deepgram (voix naturelle)"""
     text = request.get("text", "")
-    voice = request.get("voice", "aura-asteria-en")  # Voix féminine naturelle
+    voice = request.get("voice", "aura-2-athena-en")
     
     if not text:
         return {"success": False, "error": "Texte requis"}
@@ -7631,7 +7630,6 @@ async def deepgram_speak(request: Dict[str, Any]):
         return {"success": False, "error": "Deepgram non configuré"}
     
     try:
-        # Nettoyer le texte
         import re
         clean_text = re.sub(r'\[ACTION:[^\]]*\]', '', text)
         clean_text = re.sub(r'\*\*.*?\*\*', '', clean_text)
@@ -7647,8 +7645,7 @@ async def deepgram_speak(request: Dict[str, Any]):
                 },
                 json={
                     "text": clean_text,
-                    "voice": voice,
-                    "model": "aura-asteria-en"
+                    "voice": voice
                 }
             )
             
