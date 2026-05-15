@@ -6730,3 +6730,324 @@ async def test_morning_checkin():
         logger.error(f"Erreur test_morning_checkin: {e}")
         return {"success": False, "error": str(e)}
 
+
+# =====================================================
+# WEEKLY CEO VIEW - VERSION HUMAINE
+# =====================================================
+
+
+def _generate_human_weekly_insight(completion_rate: int, wins_count: int, balance: int, overdue_docs: int, tasks_completed: int, tasks_created: int, overdue_tasks: int) -> str:
+    """
+    Génère un insight humain et personnalisé basé sur les vraies données.
+    """
+    import random
+    
+    # Analyser la situation
+    has_progress = tasks_completed > 0 or wins_count > 0
+    has_stress = overdue_docs > 0 or overdue_tasks > 0
+    has_money_issue = balance < 0
+    is_low_energy = completion_rate < 30 and tasks_created > 0
+    
+    if has_stress and has_progress:
+        return f"🌿 {tasks_completed} tâche(s) faite(s), mais {overdue_docs} document(s) et {overdue_tasks} tâche(s) traînent. C'est normal. On les prend un par un cette semaine."
+    
+    if has_stress and not has_progress:
+        return f"😌 Cette semaine a été lourde. {overdue_docs} document(s) en retard, {overdue_tasks} tâche(s) qui attendent. Parfois, tenir le coup est déjà une victoire."
+    
+    if has_money_issue:
+        return f"💰 Le solde est négatif ({abs(balance):,.0f} CFA). Ce n'est qu'un chiffre. Une petite action cette semaine peut inverser la tendance. On regarde ça ensemble ?"
+    
+    if is_low_energy:
+        return f"🌙 Tu as créé {tasks_created} tâche(s) mais peu sont terminées. C'est peut-être un signe : tu as besoin de ralentir. Écoute-toi."
+    
+    if completion_rate >= 80 and wins_count >= 3:
+        return f"🎉 {tasks_completed} tâches terminées, {wins_count} victoires célébrées. Cette semaine, tu étais en feu. Garde cette énergie, elle te mènera loin."
+    
+    if completion_rate >= 60:
+        return f"✅ {completion_rate}% de tes tâches sont faites. {wins_count} victoire(s). Une semaine solide. Continue comme ça, une chose à la fois."
+    
+    if completion_rate >= 30:
+        if wins_count > 0:
+            return f"🟡 {completion_rate}% des tâches complétées, mais {wins_count} victoire(s) quand même. Chaque pas compte, même petit."
+        else:
+            return f"🟡 {completion_rate}% des tâches sont faites. Une progression modérée, mais une progression quand même. C'est bien."
+    
+    # Fallback avec une touche humaine
+    encouragements = [
+        f"🌿 {tasks_completed} tâche(s) terminée(s) cette semaine. Parfois, ralentir permet de mieux repartir.",
+        f"✨ {tasks_completed} tâche(s) accomplie(s). Chaque petite victoire construit ton empire.",
+        f"💪 Cette semaine, tu as fait ce que tu as pu. C'est suffisant. La semaine prochaine est une nouvelle page."
+    ]
+    
+    return random.choice(encouragements)
+
+
+@app.get("/api/weekly-ceo")
+async def get_weekly_ceo():
+    """
+    Retourne une vue stratégique hebdomadaire avec des messages humains.
+    """
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        now = datetime.now()
+        start_of_week = (now.date() - timedelta(days=now.weekday())).isoformat()
+        end_of_week = (now.date() + timedelta(days=6 - now.weekday())).isoformat()
+        
+        # 1. Tâches complétées cette semaine
+        completed_tasks = supabase.table("tasks").select("*")\
+            .gte("updated_at", start_of_week)\
+            .eq("status", "done")\
+            .execute()
+        
+        # 2. Tâches créées cette semaine
+        new_tasks = supabase.table("tasks").select("*")\
+            .gte("created_at", start_of_week)\
+            .execute()
+        
+        # 3. Missions actives
+        active_missions = supabase.table("missions").select("*").eq("status", "active").execute()
+        
+        # 4. Missions avec le plus haut potentiel de revenu
+        missions_by_revenue = supabase.table("missions").select("*")\
+            .order("revenue_potential", desc=True)\
+            .limit(5)\
+            .execute()
+        
+        # 5. Documents en attente ou en retard
+        pending_docs = supabase.table("documents").select("*")\
+            .neq("status", "approved")\
+            .execute()
+        
+        overdue_docs = supabase.table("documents").select("*")\
+            .lt("due_date", now.date().isoformat())\
+            .neq("status", "approved")\
+            .execute()
+        
+        # 6. Victoires cette semaine
+        wins_this_week = supabase.table("wins").select("*")\
+            .gte("date", start_of_week)\
+            .execute()
+        
+        # 7. Dépenses cette semaine
+        spending_this_week = supabase.table("spending").select("amount")\
+            .gte("date", start_of_week)\
+            .execute()
+        total_spending = sum(s.get("amount", 0) for s in spending_this_week.data)
+        
+        # 8. Revenus cette semaine
+        revenue_this_week = supabase.table("revenue").select("amount")\
+            .gte("date", start_of_week)\
+            .execute()
+        total_revenue = sum(r.get("amount", 0) for r in revenue_this_week.data)
+        
+        # 9. Humeurs de la semaine
+        moods_this_week = supabase.table("mood_entries").select("mood, date")\
+            .gte("date", start_of_week)\
+            .execute()
+        
+        # Calculer la mission la plus proche du cash
+        closest_to_cash = None
+        for mission in missions_by_revenue.data:
+            if mission.get("status") == "active" and mission.get("revenue_potential", 0) > 3:
+                closest_to_cash = mission.get("name")
+                break
+        
+        # 10. Tâches en retard
+        overdue_tasks = supabase.table("tasks").select("*")\
+            .lt("due_date", now.date().isoformat())\
+            .neq("status", "done")\
+            .execute()
+        
+        # Calcul du taux de complétion
+        completion_rate = 0
+        if len(new_tasks.data) > 0:
+            completion_rate = int((len(completed_tasks.data) / len(new_tasks.data)) * 100)
+        
+        # ========== GÉNÉRATION DES MESSAGES HUMAINS ==========
+        
+        # Message "what_moved" - version humaine
+        if len(completed_tasks.data) == 0 and len(wins_this_week.data) == 0:
+            what_moved_message = "Pas de mouvement enregistré cette semaine. Parfois, tenir le coup est déjà une victoire."
+        elif len(completed_tasks.data) == 0:
+            what_moved_message = f"Cette semaine, tu as célébré {len(wins_this_week.data)} victoire(s). Même sans tâches cochées, tu avances."
+        elif len(wins_this_week.data) == 0:
+            what_moved_message = f"Tu as terminé {len(completed_tasks.data)} tâche(s). C'est bien. N'oublie pas de célébrer, même les petites choses."
+        else:
+            what_moved_message = f"{len(completed_tasks.data)} tâche(s) accomplie(s) et {len(wins_this_week.data)} victoire(s). Une belle semaine."
+        
+        # Message "what_stalled" - version humaine
+        stalled_parts = []
+        if len(overdue_docs.data) > 0:
+            if len(overdue_docs.data) == 1:
+                stalled_parts.append(f"un document traîne : {overdue_docs.data[0]['name'][:30]}")
+            else:
+                doc_names = ", ".join([d["name"][:20] for d in overdue_docs.data[:2]])
+                if len(overdue_docs.data) > 2:
+                    doc_names += f" et {len(overdue_docs.data)-2} autre(s)"
+                stalled_parts.append(f"{len(overdue_docs.data)} documents en retard : {doc_names}")
+        
+        if len(overdue_tasks.data) > 0:
+            if len(overdue_tasks.data) == 1:
+                stalled_parts.append(f"une tâche en retard : {overdue_tasks.data[0]['title'][:30]}")
+            else:
+                stalled_parts.append(f"{len(overdue_tasks.data)} tâches en retard")
+        
+        # Missions inactives
+        stalled_missions = []
+        for m in active_missions.data:
+            if not m.get("updated_at") or m["updated_at"] < (datetime.now() - timedelta(days=14)).isoformat():
+                stalled_missions.append(m["name"])
+        
+        if stalled_missions:
+            if len(stalled_missions) == 1:
+                stalled_parts.append(f"une mission n'a pas bougé depuis 2 semaines : {stalled_missions[0]}")
+            else:
+                stalled_parts.append(f"{len(stalled_missions)} missions n'ont pas avancé récemment")
+        
+        if stalled_parts:
+            what_stalled_message = "⚠️ " + ". ".join(stalled_parts) + "."
+        else:
+            what_stalled_message = "✅ Rien de bloqué cette semaine. Tout roule."
+        
+        # Message "pending_documents_summary" - version humaine
+        if len(overdue_docs.data) == 0:
+            if len(pending_docs.data) == 0:
+                pending_summary = "📄 Aucun document en attente. Tu es à jour."
+            elif len(pending_docs.data) == 1:
+                pending_summary = f"📄 Un document en attente : {pending_docs.data[0]['name'][:30]}. Rien d'urgent."
+            else:
+                pending_summary = f"📄 {len(pending_docs.data)} documents en attente. À garder dans un coin de ta tête."
+        elif len(overdue_docs.data) == 1:
+            pending_summary = f"⚠️ Un document est en retard : {overdue_docs.data[0]['name'][:40]}. On s'en occupe cette semaine ?"
+        else:
+            doc_names = ", ".join([d["name"][:25] for d in overdue_docs.data[:2]])
+            if len(overdue_docs.data) > 2:
+                doc_names += f" et {len(overdue_docs.data)-2} autre(s)"
+            pending_summary = f"📋 {len(overdue_docs.data)} documents en retard : {doc_names}. Un par un, ça va le faire."
+        
+        # Message "closest_to_cash" - version humaine
+        if closest_to_cash:
+            closest_summary = f"💰 {closest_to_cash} — c'est ta mission la plus proche de générer du cash. Une petite action cette semaine peut débloquer des choses."
+        else:
+            # Chercher une mission avec du potentiel même si pas active
+            potential_mission = None
+            for mission in missions_by_revenue.data:
+                if mission.get("revenue_potential", 0) > 3:
+                    potential_mission = mission.get("name")
+                    break
+            
+            if potential_mission:
+                closest_summary = f"💭 {potential_mission} a du potentiel mais n'est pas active. Et si tu lui consacrais une petite heure cette semaine ?"
+            else:
+                closest_summary = "💭 Aucune mission n'est proche du cash pour l'instant. C'est le moment d'en identifier une. Veux-tu qu'on en parle ?"
+        
+        # ========== GÉNÉRATION DES PRIORITÉS PAR IA ==========
+        try:
+            # Contexte pour l'IA
+            context_for_ai = f"""Rebecca cette semaine :
+- {len(completed_tasks.data)} tâches terminées sur {len(new_tasks.data)} créées
+- {len(wins_this_week.data)} victoire(s) célébrée(s)
+- {len(pending_docs.data)} documents en attente, dont {len(overdue_docs.data)} en retard
+- {len(overdue_tasks.data)} tâches en retard
+- {len(active_missions.data)} missions actives
+- Solde financier : {total_revenue - total_spending:,.0f} CFA
+
+Sois naturelle, humaine, pratique. Génère 3 priorités pour la semaine prochaine."""
+
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": """Tu es Becks, la stratège personnelle de Rebecca. Tu connais sa vie : 
+- Maman de 4 filles (Neriah, Nylah, Norah, Sheyi)
+- Projets : Ifè Farm, Love & Fire Sport, Santé Plus, Bénin Relocation
+- Elle est souvent surchargée et a besoin de simplicité
+
+Génère 3 priorités pour la semaine prochaine. Sois PRATIQUE, HUMAINE et CONCRÈTE.
+Pas de jargon. Des vraies actions faisables.
+
+Retourne UNIQUEMENT du JSON : {"priorities": ["action 1", "action 2", "action 3"]}"""},
+                    {"role": "user", "content": context_for_ai}
+                ],
+                max_tokens=300,
+                temperature=0.7
+            )
+            result_text = response.choices[0].message.content
+            result_text = result_text.replace("```json", "").replace("```", "").strip()
+            priorities_result = json.loads(result_text)
+            next_week_priorities = priorities_result.get("priorities", [])
+            
+            # Nettoyer et s'assurer qu'on a 3 priorités
+            next_week_priorities = [p.strip() for p in next_week_priorities if p and len(p) > 5]
+            if len(next_week_priorities) < 3:
+                fallbacks = [
+                    "Prendre 10 minutes pour toi chaque jour",
+                    "Vider ta tête dans le Brain Dump une fois",
+                    f"Avancer sur {closest_to_cash or 'une mission qui te tient à cœur'}"
+                ]
+                for fb in fallbacks:
+                    if fb not in next_week_priorities and len(next_week_priorities) < 3:
+                        next_week_priorities.append(fb)
+                        
+        except Exception as e:
+            logger.error(f"Erreur génération priorités: {e}")
+            next_week_priorities = [
+                "Prendre une pause quand tu en ressens le besoin",
+                "Faire une seule chose importante chaque jour",
+                f"Regarder ce qui traîne du côté de {closest_to_cash or 'tes projets actifs'}"
+            ]
+        
+        # ========== INSIGHT GLOBAL ==========
+        insight = _generate_human_weekly_insight(
+            completion_rate, 
+            len(wins_this_week.data), 
+            total_revenue - total_spending, 
+            len(overdue_docs.data),
+            len(completed_tasks.data),
+            len(new_tasks.data),
+            len(overdue_tasks.data)
+        )
+        
+        return {
+            "success": True,
+            "week_range": {
+                "start": start_of_week,
+                "end": end_of_week
+            },
+            "summary": {
+                "tasks_completed": len(completed_tasks.data),
+                "tasks_created": len(new_tasks.data),
+                "completion_rate": completion_rate,
+                "wins": len(wins_this_week.data),
+                "total_spending": total_spending,
+                "total_revenue": total_revenue,
+                "net_balance": total_revenue - total_spending
+            },
+            "what_moved": {
+                "message": what_moved_message,
+                "completed_tasks": [{"title": t["title"], "project": t.get("project", "Général")} for t in completed_tasks.data[:5]],
+                "wins": [{"title": w["title"], "celebration_emoji": w.get("celebration_emoji", "🎉")} for w in wins_this_week.data[:5]]
+            },
+            "what_stalled": {
+                "message": what_stalled_message,
+                "overdue_docs": [{"name": d["name"], "due_date": d["due_date"]} for d in overdue_docs.data[:5]],
+                "overdue_tasks_count": len(overdue_tasks.data),
+                "pending_docs_count": len(pending_docs.data),
+                "stalled_missions": [{"name": m["name"]} for m in active_missions.data if not m.get("updated_at") or m["updated_at"] < (datetime.now() - timedelta(days=14)).isoformat()][:3]
+            },
+            "closest_to_cash": {
+                "name": closest_to_cash or "Aucune pour l'instant",
+                "message": closest_summary
+            },
+            "pending_documents_summary": pending_summary,
+            "next_week_priorities": next_week_priorities,
+            "mood_summary": [{"date": m["date"], "mood": m["mood"]} for m in moods_this_week.data],
+            "insight": insight
+        }
+        
+    except Exception as e:
+        logger.error(f"Erreur weekly_ceo: {e}")
+        return {"success": False, "error": str(e)}
+
+
