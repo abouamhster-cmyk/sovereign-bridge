@@ -7295,3 +7295,221 @@ Si aucune opportunité, retourne {"opportunities": []}"""},
     except Exception as e:
         logger.error(f"Erreur scan_opportunities: {e}")
         return {"success": False, "error": str(e)}
+
+
+
+# =====================================================
+# READY-TO-SEND GENERATION
+# =====================================================
+
+@app.post("/api/generate/ready-to-send")
+async def generate_ready_to_send(request: Dict[str, Any]):
+    """
+    Génère un document prêt à être copié/envoyé (email, lettre, proposition, etc.)
+    """
+    doc_type = request.get("type", "email")  # email, letter, proposal, social, reminder
+    context = request.get("context", "")
+    tone = request.get("tone", "professional")  # professional, warm, direct, persuasive
+    recipient = request.get("recipient", "")
+    sender = request.get("sender", "Rebecca")
+    
+    if not context:
+        return {"success": False, "error": "Contexte requis"}
+    
+    # Récupérer la mémoire utilisateur pour personnaliser
+    memory_context = await get_user_memory_context()
+    profile_context = await get_profile_context()
+    
+    # Templates de base selon le type
+    templates = {
+        "email": {
+            "subject": "Sujet de l'email",
+            "body": "Corps de l'email",
+            "signature": f"\n\nCordialement,\n{sender}"
+        },
+        "letter": {
+            "subject": None,
+            "body": "Corps de la lettre",
+            "signature": f"\n\nRespectueusement,\n{sender}"
+        },
+        "proposal": {
+            "subject": "Proposition - {title}",
+            "body": "Contenu de la proposition",
+            "signature": f"\n\nDans l'attente de votre retour,\n{sender}"
+        },
+        "social": {
+            "subject": None,
+            "body": "Contenu du post",
+            "signature": ""
+        },
+        "reminder": {
+            "subject": "Rappel : {title}",
+            "body": "Message de rappel",
+            "signature": f"\n\n{sender}"
+        }
+    }
+    
+    prompt = f"""Tu es Becks, l'assistante de Rebecca. Génère un {doc_type} prêt à être copié et envoyé.
+
+Contexte : {context}
+Ton : {tone}
+Destinataire : {recipient if recipient else 'Non spécifié'}
+Expéditeur : {sender}
+
+Informations sur Rebecca : {profile_context}
+Ce que Becks sait d'elle : {memory_context}
+
+RÈGLES IMPORTANTES :
+1. Sois clair, concis, professionnel
+2. Structure le document proprement (salutation, corps, conclusion, signature)
+3. Si c'est un email, ajoute un objet pertinent
+4. Si des informations manquent, laisse des placeholders [entre crochets]
+5. Retourne UNIQUEMENT du JSON valide avec cette structure :
+
+{{
+  "subject": "objet (si applicable)",
+  "body": "corps du message",
+  "signature": "signature",
+  "full_text": "texte complet prêt à copier"
+}}
+
+Ne retourne que le JSON, rien d'autre."""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=800,
+            temperature=0.5
+        )
+        
+        result_text = response.choices[0].message.content
+        result_text = result_text.replace("```json", "").replace("```", "").strip()
+        generated = json.loads(result_text)
+        
+        # Sauvegarder dans l'historique des drafts
+        if supabase:
+            supabase.table("drafts").insert({
+                "type": doc_type,
+                "content": generated.get("full_text", generated.get("body", "")),
+                "context": context,
+                "user_id": "rebecca",
+                "created_at": datetime.now().isoformat()
+            }).execute()
+        
+        return {"success": True, "generated": generated}
+        
+    except Exception as e:
+        logger.error(f"Erreur generation: {e}")
+        return {"success": False, "error": str(e)}
+
+
+
+# =====================================================
+# DECISION MODE
+# =====================================================
+
+@app.post("/api/decide/compare")
+async def compare_options(request: Dict[str, Any]):
+    """
+    Compare deux options (A vs B) et aide à prendre une décision.
+    """
+    option_a = request.get("option_a", "")
+    option_b = request.get("option_b", "")
+    context = request.get("context", "")
+    criteria_weights = request.get("criteria_weights", {
+        "revenue_speed": 5,
+        "strategic_value": 4,
+        "effort": 3,
+        "emotional_cost": 3,
+        "urgency": 4
+    })
+    
+    if not option_a or not option_b:
+        return {"success": False, "error": "Deux options sont requises"}
+    
+    # Récupérer le contexte utilisateur
+    memory_context = await get_user_memory_context()
+    profile_context = await get_profile_context()
+    
+    prompt = f"""Tu es Becks, conseillère stratégique. Aide Rebecca à choisir entre deux options.
+
+Option A : {option_a}
+Option B : {option_b}
+Contexte : {context if context else "Aucun contexte spécifique"}
+
+Critères de décision (poids de 1 à 5) :
+- Revenu potentiel (rapidité) : {criteria_weights.get('revenue_speed', 5)}/5
+- Valeur stratégique long terme : {criteria_weights.get('strategic_value', 4)}/5
+- Effort / difficulté : {criteria_weights.get('effort', 3)}/5 (plus bas = mieux)
+- Coût émotionnel : {criteria_weights.get('emotional_cost', 3)}/5 (plus bas = mieux)
+- Urgence : {criteria_weights.get('urgency', 4)}/5
+
+Retourne UNIQUEMENT du JSON avec cette structure :
+
+{{
+  "analysis": {{
+    "option_a": {{
+      "pros": ["avantage 1", "avantage 2"],
+      "cons": ["inconvénient 1", "inconvénient 2"],
+      "score": 0,
+      "scores_detail": {{
+        "revenue_speed": 0,
+        "strategic_value": 0,
+        "effort": 0,
+        "emotional_cost": 0,
+        "urgency": 0
+      }}
+    }},
+    "option_b": {{
+      "pros": ["avantage 1", "avantage 2"],
+      "cons": ["inconvénient 1", "inconvénient 2"],
+      "score": 0,
+      "scores_detail": {{
+        "revenue_speed": 0,
+        "strategic_value": 0,
+        "effort": 0,
+        "emotional_cost": 0,
+        "urgency": 0
+      }}
+    }}
+  }},
+  "recommendation": "option_a" ou "option_b",
+  "recommendation_reason": "Pourquoi cette option est meilleure",
+  "next_action": "Action concrète à prendre maintenant"
+}}
+
+Note : Pour chaque critère, note de 1 à 5. Le score total est la somme des notes pondérées par les poids."""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1000,
+            temperature=0.3
+        )
+        
+        result_text = response.choices[0].message.content
+        result_text = result_text.replace("```json", "").replace("```", "").strip()
+        comparison = json.loads(result_text)
+        
+        # Sauvegarder la décision dans la mémoire
+        if supabase:
+            supabase.table("user_memory").insert({
+                "category": "decisions",
+                "key": f"decision_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                "value": json.dumps({
+                    "option_a": option_a,
+                    "option_b": option_b,
+                    "recommendation": comparison.get("recommendation"),
+                    "context": context
+                }),
+                "user_id": "rebecca",
+                "created_at": datetime.now().isoformat()
+            }).execute()
+        
+        return {"success": True, "comparison": comparison}
+        
+    except Exception as e:
+        logger.error(f"Erreur compare: {e}")
+        return {"success": False, "error": str(e)}
