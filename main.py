@@ -6105,46 +6105,28 @@ async def send_morning_notification():
         return {"success": False, "error": str(e)}
 
 
-@app.put("/api/profile/projects")
-async def update_projects(request: Dict[str, Any]):
-    """Met à jour uniquement les projets"""
-    if not supabase:
-        return {"success": False, "error": "Supabase non configuré"}
-    
-    try:
-        projects = request.get("projects", [])
-        
-        logger.info(f"📥 Mise à jour des projets: {len(projects)} projets")
-        
-        # Mettre à jour uniquement le champ projects
-        result = supabase.table("user_profile").update({
-            "projects": projects,
-            "updated_at": datetime.now().isoformat()
-        }).eq("user_id", "rebecca").execute()
-        
-        # Récupérer le profil complet
-        profile_result = supabase.table("user_profile").select("*").eq("user_id", "rebecca").execute()
-        
-        return {"success": True, "profile": profile_result.data[0] if profile_result.data else {}}
-        
-    except Exception as e:
-        logger.error(f"❌ Erreur update_projects: {e}")
-        return {"success": False, "error": str(e)}
-
-
 
 @app.put("/api/profile/identity")
-async def update_identity(request: Dict[str, Any]):
+async def update_identity(request: Request):
     """Met à jour uniquement l'identité (preferred_name, full_name, birthday)"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
+        # Récupérer le user_id depuis les query params
+        user_id = request.query_params.get("user_id")
+        
+        if not user_id:
+            return {"success": False, "error": "user_id requis"}
+        
+        # Récupérer le body
+        body = await request.json()
+        
         # Champs autorisés pour l'identité
         identity_fields = ["preferred_name", "full_name", "birthday"]
         
         clean_data = {}
-        for key, value in request.items():
+        for key, value in body.items():
             if key in identity_fields and value is not None:
                 clean_data[key] = value
         
@@ -6153,9 +6135,11 @@ async def update_identity(request: Dict[str, Any]):
         
         clean_data["updated_at"] = datetime.now().isoformat()
         
-        result = supabase.table("user_profile").update(clean_data).eq("user_id", "rebecca").execute()
+        # Mettre à jour avec user_id dynamique
+        supabase.table("user_profile").update(clean_data).eq("user_id", user_id).execute()
         
-        profile_result = supabase.table("user_profile").select("*").eq("user_id", "rebecca").execute()
+        # Récupérer le profil mis à jour
+        profile_result = supabase.table("user_profile").select("*").eq("user_id", user_id).execute()
         
         return {"success": True, "profile": profile_result.data[0] if profile_result.data else {}}
         
@@ -6163,22 +6147,31 @@ async def update_identity(request: Dict[str, Any]):
         logger.error(f"Erreur update_identity: {e}")
         return {"success": False, "error": str(e)}
 
-
 @app.put("/api/profile/children")
-async def update_children(request: Dict[str, Any]):
+async def update_children(request: Request):
     """Met à jour uniquement les enfants"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
-        children = request.get("children", [])
+        # Récupérer le user_id depuis les query params
+        user_id = request.query_params.get("user_id")
         
-        result = supabase.table("user_profile").update({
+        if not user_id:
+            return {"success": False, "error": "user_id requis"}
+        
+        # Récupérer le body
+        body = await request.json()
+        children = body.get("children", [])
+        
+        # Mettre à jour avec user_id dynamique
+        supabase.table("user_profile").update({
             "children": children,
             "updated_at": datetime.now().isoformat()
-        }).eq("user_id", "rebecca").execute()
+        }).eq("user_id", user_id).execute()
         
-        profile_result = supabase.table("user_profile").select("*").eq("user_id", "rebecca").execute()
+        # Récupérer le profil mis à jour
+        profile_result = supabase.table("user_profile").select("*").eq("user_id", user_id).execute()
         
         return {"success": True, "profile": profile_result.data[0] if profile_result.data else {}}
         
@@ -6187,21 +6180,66 @@ async def update_children(request: Dict[str, Any]):
         return {"success": False, "error": str(e)}
 
 
+        @app.put("/api/profile/projects")
+async def update_projects(request: Request):
+    """Met à jour uniquement les projets"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        # Récupérer le user_id depuis les query params
+        user_id = request.query_params.get("user_id")
+        
+        if not user_id:
+            return {"success": False, "error": "user_id requis"}
+        
+        # Récupérer le body
+        body = await request.json()
+        projects = body.get("projects", [])
+        
+        logger.info(f"📥 Mise à jour des projets pour {user_id}: {len(projects)} projets")
+        
+        # Mettre à jour avec user_id dynamique
+        supabase.table("user_profile").update({
+            "projects": projects,
+            "updated_at": datetime.now().isoformat()
+        }).eq("user_id", user_id).execute()
+        
+        # Récupérer le profil mis à jour
+        profile_result = supabase.table("user_profile").select("*").eq("user_id", user_id).execute()
+        
+        return {"success": True, "profile": profile_result.data[0] if profile_result.data else {}}
+        
+    except Exception as e:
+        logger.error(f"❌ Erreur update_projects: {e}")
+        return {"success": False, "error": str(e)}
+
+
 @app.put("/api/profile/goals")
-async def update_goals(request: Dict[str, Any]):
+async def update_goals(request: Request):
     """Met à jour uniquement les objectifs"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
-        goals = request.get("current_goals", [])
+        # Récupérer le user_id depuis les query params
+        user_id = request.query_params.get("user_id")
         
-        result = supabase.table("user_profile").update({
+        if not user_id:
+            return {"success": False, "error": "user_id requis"}
+        
+        # Récupérer le body
+        body = await request.json()
+        goals = body.get("current_goals", [])
+        
+        # Mettre à jour avec user_id dynamique
+        supabase.table("user_profile").update({
             "current_goals": goals,
             "updated_at": datetime.now().isoformat()
-        }).eq("user_id", "rebecca").execute()
+        }).eq("user_id", user_id).execute()
         
-        profile_result = supabase.table("user_profile").select("*").eq("user_id", "rebecca").execute()
+        # Récupérer le profil mis à jour
+        profile_result = supabase.table("user_profile").select("*").eq("user_id", user_id).execute()
         
         return {"success": True, "profile": profile_result.data[0] if profile_result.data else {}}
         
