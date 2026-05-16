@@ -2990,17 +2990,16 @@ async def chat_endpoint(request: ChatRequest):
                 elif not body:
                     content = "❌ Le corps de l'email est vide. Que veux-tu dire dans ce message ?"
                 else:
-                    result = await send_email(EmailRequest(
+                    email_result = await send_email(EmailRequest(
                         to=to,
                         subject=subject,
                         body=body
                     ))
-                    if result.get("success"):
-                    content = f"✅ Email envoyé avec succès à {to}\n\n📧 **Récapitulatif :**\n- Destinataire : {to}\n- Sujet : {subject}\n\n[ACTION:{{\"type\":\"confirm_email_sent\",\"params\":{{\"to\":\"{to}\",\"subject\":\"{subject}\"}},\"label\":\"✅ Confirmer\"}}]"                  
+                    if email_result.get("success"):
+                        content = f"✅ Email envoyé avec succès à {to}\n\n📧 **Récapitulatif :**\n- Destinataire : {to}\n- Sujet : {subject}"
                     else:
-                        content = f"❌ Erreur d'envoi: {result.get('error')}. Vérifie l'adresse email et réessaie."
-                logger.info(f"📧 Envoi email: {to} - {result.get('success') if 'result' in locals() else False}")
-            
+                        content = f"❌ Erreur d'envoi: {email_result.get('error')}. Vérifie l'adresse email et réessaie."
+                logger.info(f"📧 Envoi email: {to}")
             
             elif name == "create_task":
                 result = await create_task_from_conversation(ExecuteTaskRequest(
@@ -3050,54 +3049,53 @@ async def chat_endpoint(request: ChatRequest):
         
         logger.info(f"📨 Réponse envoyée")
         return {"reply": clean_response}
+    
+    except Exception as e:
+        logger.error(f"❌ Erreur chat: {e}")
+        error_str = str(e)
         
-        except Exception as e:
-            logger.error(f"❌ Erreur chat: {e}")
-            error_str = str(e)
-            
-            # Analyser le type d'erreur
-            if "email" in error_str.lower() or "EmailRequest" in error_str:
-                # Erreur liée à l'email
-                reply = """❌ L'adresse email n'est pas valide ou il manque des informations.
-        
-        Pour envoyer un email, j'ai besoin de :
-        1. L'adresse email du destinataire (exemple: jean@email.com)
-        2. Le sujet du message
-        3. Le contenu du message
-        
-        Peux-tu me donner ces informations ? Je préparerai l'email pour toi."""
-        
-            elif "rate limit" in error_str.lower() or "429" in error_str:
-                # Limite d'API dépassée
-                reply = """⏳ L'IA est momentanément surchargée.
-        
-        Attends 30 secondes, puis réécris-moi ta demande. Je garde ton message en mémoire."""
-        
-            elif "timeout" in error_str.lower() or "timed out" in error_str:
-                # Délai d'attente dépassé
-                reply = """🌐 Le serveur met trop de temps à répondre.
-        
-        Peux-tu reformuler ta demande plus simplement ? Ou attends 1 minute avant de réessayer."""
-        
-            elif "validation" in error_str.lower():
-                # Erreur de validation (champ manquant)
-                reply = """❌ Il manque des informations pour traiter ta demande.
-        
-        Dis-moi précisément ce que tu veux faire, et je te guiderai étape par étape."""
-        
-            else:
-                # Erreur générique
-                reply = """❌ Je rencontre un problème technique.
-        
-        Peux-tu me dire exactement ce que tu voulais faire ? Je vais t'aider autrement.
-        
-        Par exemple :
-        - "Envoie un email à Jean pour le devis"
-        - "Crée une tâche pour la ferme"
-        - "Ajoute une dépense de 5000 CFA" """
-        
-            return {"reply": reply, "error_type": type(e).__name__, "error_message": error_str[:200]}
+        # Analyser le type d'erreur
+        if "email" in error_str.lower() or "EmailRequest" in error_str:
+            # Erreur liée à l'email
+            reply = """❌ L'adresse email n'est pas valide ou il manque des informations.
 
+Pour envoyer un email, j'ai besoin de :
+1. L'adresse email du destinataire (exemple: jean@email.com)
+2. Le sujet du message
+3. Le contenu du message
+
+Peux-tu me donner ces informations ? Je préparerai l'email pour toi."""
+
+        elif "rate limit" in error_str.lower() or "429" in error_str:
+            # Limite d'API dépassée
+            reply = """⏳ L'IA est momentanément surchargée.
+
+Attends 30 secondes, puis réécris-moi ta demande. Je garde ton message en mémoire."""
+
+        elif "timeout" in error_str.lower() or "timed out" in error_str:
+            # Délai d'attente dépassé
+            reply = """🌐 Le serveur met trop de temps à répondre.
+
+Peux-tu reformuler ta demande plus simplement ? Ou attends 1 minute avant de réessayer."""
+
+        elif "validation" in error_str.lower():
+            # Erreur de validation (champ manquant)
+            reply = """❌ Il manque des informations pour traiter ta demande.
+
+Dis-moi précisément ce que tu veux faire, et je te guiderai étape par étape."""
+
+        else:
+            # Erreur générique
+            reply = """❌ Je rencontre un problème technique.
+
+Peux-tu me dire exactement ce que tu voulais faire ? Je vais t'aider autrement.
+
+Par exemple :
+- "Envoie un email à Jean pour le devis"
+- "Crée une tâche pour la ferme"
+- "Ajoute une dépense de 5000 CFA" """
+
+        return {"reply": reply, "error_type": type(e).__name__, "error_message": error_str[:200]}
 # =====================================================
 # API ROUTES - SPECIALIZED (EXISTANT)
 # =====================================================
