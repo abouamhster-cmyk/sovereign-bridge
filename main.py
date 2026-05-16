@@ -4559,92 +4559,154 @@ async def edge_speak_text(request: Dict[str, Any]):
 # =====================================================
 # PROACTIF - RÉSUMÉ MATINAL
 # =====================================================
-
 @app.post("/api/proactive/morning-brief")
 async def send_morning_brief():
     """
-    Envoie un résumé matinal par email et notification push.
-    À appeler par cron-job.org tous les jours à 7h.
+    Envoie un résumé matinal personnalisé par email et notification push.
     """
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
         today = datetime.now().date().isoformat()
+        now = datetime.now()
+        hour = now.hour
         
-        # Récupérer les tâches du jour
+        # ========== RÉCUPÉRER LES VRAIES DONNÉES ==========
+        
+        # 1. Tâches du jour
         tasks_today = supabase.table("tasks").select("*").eq("due_date", today).neq("status", "done").execute()
+        tasks_count = len(tasks_today.data)
         
-        # Récupérer les tâches en retard
+        # 2. Tâches en retard
         overdue_tasks = supabase.table("tasks").select("*").lt("due_date", today).neq("status", "done").execute()
+        overdue_count = len(overdue_tasks.data)
         
-        # Récupérer les documents proches de l'échéance
+        # 3. Documents proches de l'échéance (7 jours)
         next_week = (datetime.now().date() + timedelta(days=7)).isoformat()
         expiring_docs = supabase.table("documents").select("*").gte("due_date", today).lte("due_date", next_week).neq("status", "approved").execute()
+        expiring_docs_count = len(expiring_docs.data)
         
-        # Récupérer les victoires récentes (7 derniers jours)
+        # 4. Victoires récentes (7 derniers jours)
         week_ago = (datetime.now().date() - timedelta(days=7)).isoformat()
         recent_wins = supabase.table("wins").select("*").gte("date", week_ago).execute()
+        wins_count = len(recent_wins.data)
         
-        # Récupérer les missions actives
+        # 5. Missions actives
         active_missions = supabase.table("missions").select("*").eq("status", "active").execute()
+        missions_count = len(active_missions.data)
         
-        # Construire le message
-        message = f"""🌅 **Bonjour Rebecca ! Voici ton résumé matinal**
+        # 6. Humeur d'hier
+        yesterday = (datetime.now().date() - timedelta(days=1)).isoformat()
+        yesterday_mood = supabase.table("mood_entries").select("mood").eq("date", yesterday).eq("user_id", "rebecca").execute()
+        yesterday_mood_value = yesterday_mood.data[0]["mood"] if yesterday_mood.data else None
+        
+        # 7. Récupérer le nom de l'utilisateur
+        profile = supabase.table("user_profile").select("preferred_name").eq("user_id", "rebecca").execute()
+        user_name = profile.data[0].get("preferred_name", "Rebecca") if profile.data else "Rebecca"
+        
+        # ========== CONSTRUIRE LE MESSAGE PERSONNALISÉ ==========
+        
+        # Salutation selon l'heure
+        if 5 <= hour < 12:
+            greeting = "☀️ Bonjour"
+        elif 12 <= hour < 18:
+            greeting = "🌤️ Bon après-midi"
+        else:
+            greeting = "🌙 Bonsoir"
+        
+        # Message d'humeur personnalisé
+        mood_message = ""
+        if yesterday_mood_value == "fatiguée":
+            mood_message = "Tu étais fatiguée hier. J'espère que tu as bien dormi. 🌙"
+        elif yesterday_mood_value == "stressée":
+            mood_message = "Hier était stressant. Aujourd'hui, on y va doucement. 🌿"
+        elif yesterday_mood_value == "excellent":
+            mood_message = "Tu étais en forme hier ! Continue sur cette lancée. 🔥"
+        elif yesterday_mood_value == "bien":
+            mood_message = "Content de voir que tu vas bien. 😊"
+        else:
+            mood_message = "J'espère que tu as passé une bonne nuit. ✨"
+        
+        # Message sur les tâches
+        if overdue_count > 0:
+            task_message = f"⚠️ Tu as {overdue_count} tâche(s) en retard. On les regarde ensemble ?"
+        elif tasks_count > 0:
+            task_message = f"📋 Tu as {tasks_count} tâche(s) aujourd'hui."
+        else:
+            task_message = "📋 Aucune tâche planifiée. Une journée pour respirer ? 🌿"
+        
+        # Message sur les documents
+        if expiring_docs_count > 0:
+            doc_message = f"📄 {expiring_docs_count} document(s) approchent de leur échéance."
+        else:
+            doc_message = "📄 Aucun document imminent. ✅"
+        
+        # Message sur les victoires
+        if wins_count > 0:
+            win_message = f"🏆 Cette semaine, tu as célébré {wins_count} victoire(s) !"
+        else:
+            win_message = "✨ N'oublie pas de célébrer tes victoires, même petites."
+        
+        # Message sur les missions
+        if missions_count > 0:
+            mission_message = f"🎯 {missions_count} mission(s) active(s) en cours."
+        else:
+            mission_message = "🎯 Aucune mission active pour le moment."
+        
+        # Message d'encouragement personnalisé selon la charge
+        if overdue_count > 0 or expiring_docs_count > 0:
+            encouragement = "Une chose à la fois. Tu n'as pas besoin de tout gérer d'un coup. 👑"
+        elif tasks_count > 3:
+            encouragement = "Respire. Priorise l'essentiel, le reste attendra. 🌿"
+        elif wins_count > 0:
+            encouragement = "Tu as déjà des victoires cette semaine. Continue comme ça ! 💪"
+        else:
+            encouragement = "Aujourd'hui est une nouvelle page. Qu'as-tu envie d'écrire ? ✨"
+        
+        # Construire le message final
+        message = f"""{greeting} {user_name}.
 
-📅 **{datetime.now().strftime('%A %d %B %Y')}**
+{mood_message}
 
----
+{task_message}
+{doc_message}
+{mission_message}
+{win_message}
 
-📋 **Tâches du jour** : {len(tasks_today.data)}
-{chr(10).join([f'• {t["title"]}' for t in tasks_today.data[:5]]) if tasks_today.data else '• Aucune tâche planifiée'}
+💡 **Becks te conseille** : {encouragement}
 
-⚠️ **Tâches en retard** : {len(overdue_tasks.data)}
-{chr(10).join([f'• {t["title"]}' for t in overdue_tasks.data[:3]]) if overdue_tasks.data else '• Aucune tâche en retard'}
-
-📄 **Documents à venir** : {len(expiring_docs.data)}
-{chr(10).join([f'• {d["name"]} ({d["due_date"]})' for d in expiring_docs.data[:3]]) if expiring_docs.data else '• Aucun document imminent'}
-
-🎯 **Missions actives** : {len(active_missions.data)}
-{chr(10).join([f'• {m["name"]}' for m in active_missions.data[:3]]) if active_missions.data else '• Aucune mission active'}
-
-🏆 **Victoires récentes** : {len(recent_wins.data)} cette semaine
-
----
-
-💡 **Becks te conseille** : Concentre-toi sur les tâches prioritaires du jour. Une chose à la fois. Tu gères ! 👑
+Passe une excellente journée. Je suis là si tu as besoin. 💖
 """
         
-        # Envoyer un email (si Brevo configuré)
+        # ========== ENVOI DE L'EMAIL ==========
         email_sent = False
         if BREVO_API_KEY:
             try:
-                # Récupérer l'email de l'utilisateur (à adapter)
-                user_email = "jbillcataria@gmail.com" 
-                
+                user_email = "jbillcataria@gmail.com"
                 email_body = message.replace("\n", "<br>")
                 await send_email(EmailRequest(
                     to=user_email,
-                    subject=f"🌅 Sovereign - Résumé matinal du {datetime.now().strftime('%d/%m/%Y')}",
+                    subject=f"🌅 {greeting} {user_name} - Résumé du {datetime.now().strftime('%d/%m/%Y')}",
                     body=email_body
                 ))
                 email_sent = True
-                logger.info("📧 Résumé matinal envoyé par email")
+                logger.info("📧 Email matinal personnalisé envoyé")
             except Exception as e:
                 logger.error(f"Erreur envoi email résumé: {e}")
         
-        # Envoyer une notification push
+        # ========== ENVOI DE LA NOTIFICATION PUSH ==========
         push_sent = False
         try:
             send_notification_sync({
-                "title": "🌅 Bonjour Rebecca",
-                "body": f"{len(tasks_today.data)} tâches aujourd'hui, {len(overdue_tasks.data)} en retard",
-                "url": "/tasks",
+                "title": f"{greeting} {user_name}",
+                "body": f"{tasks_count} tâche(s) aujourd'hui • {missions_count} mission(s) active(s)",
+                "url": "/",
                 "type": "brief",
                 "requireInteraction": False
             })
             push_sent = True
-            logger.info("🔔 Notification push résumé envoyée")
+            logger.info("🔔 Notification push matinale envoyée")
         except Exception as e:
             logger.error(f"Erreur envoi push résumé: {e}")
         
@@ -4652,11 +4714,12 @@ async def send_morning_brief():
             "success": True,
             "message": "Résumé matinal envoyé",
             "stats": {
-                "tasks_today": len(tasks_today.data),
-                "overdue_tasks": len(overdue_tasks.data),
-                "expiring_docs": len(expiring_docs.data),
-                "active_missions": len(active_missions.data),
-                "recent_wins": len(recent_wins.data)
+                "tasks_today": tasks_count,
+                "overdue_tasks": overdue_count,
+                "expiring_docs": expiring_docs_count,
+                "active_missions": missions_count,
+                "recent_wins": wins_count,
+                "yesterday_mood": yesterday_mood_value
             },
             "email_sent": email_sent,
             "push_sent": push_sent
@@ -4665,8 +4728,6 @@ async def send_morning_brief():
     except Exception as e:
         logger.error(f"Erreur résumé matinal: {e}")
         return {"success": False, "error": str(e)}
-
-
 
 # =====================================================
 # PROACTIF - VEILLE SUR PROJETS INACTIFS
