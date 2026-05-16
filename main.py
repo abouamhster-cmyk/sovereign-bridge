@@ -555,6 +555,7 @@ GREENAPI_ID_INSTANCE = os.environ.get("GREENAPI_ID_INSTANCE")
 GREENAPI_API_TOKEN = os.environ.get("GREENAPI_API_TOKEN")
 GREENAPI_BASE_URL = f"https://api.green-api.com/waInstance{GREENAPI_ID_INSTANCE}" if GREENAPI_ID_INSTANCE else None
 
+
 if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY manquante")
 
@@ -566,6 +567,8 @@ if SUPABASE_URL and SUPABASE_SERVICE_KEY:
     logger.info("✅ Supabase connecté")
 else:
     logger.warning("⚠️ Supabase non configuré")
+
+
 
 
 # =====================================================
@@ -2963,36 +2966,7 @@ def tasks_priority(limit: int = 10):
     return {"tasks": get_priority_tasks(limit)}
 
 
-# =====================================================
-# API ROUTES - GENERIC CRUD (EXISTANT)
-# =====================================================
 
-@app.get("/{table}")
-def get_table(table: str, limit: int = 100):
-    if table not in AVAILABLE_TABLES:
-        raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
-    return db_query(table, limit=limit)
-
-
-@app.post("/{table}")
-async def create_item(table: str, request: WriteRequest):
-    if table not in AVAILABLE_TABLES:
-        raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
-    result = await db_insert(table, request.data)
-    return result
-
-@app.put("/{table}/{item_id}")
-def update_item(table: str, item_id: str, request: UpdateRequest):
-    if table not in AVAILABLE_TABLES:
-        raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
-    return db_update(table, item_id, request.data)
-
-
-@app.delete("/{table}/{item_id}")
-def delete_item(table: str, item_id: str):
-    if table not in AVAILABLE_TABLES:
-        raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
-    return db_delete(table, item_id)
 
 
 # =====================================================
@@ -7659,3 +7633,36 @@ async def deepgram_speak(request: Dict[str, Any]):
     except Exception as e:
         logger.error(f"Erreur Deepgram: {e}")
         return {"success": False, "error": str(e)}
+
+
+
+
+# =====================================================
+# API ROUTES - GENERIC CRUD (EXISTANT)
+# =====================================================
+@app.get("/{table}")
+def get_table(table: str, limit: int = 100):
+    if table not in AVAILABLE_TABLES:
+        raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
+    return db_query(table, limit=limit)
+
+
+@app.post("/{table}")
+async def create_item(table: str, request: WriteRequest):
+    if table not in AVAILABLE_TABLES:
+        raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
+    result = await db_insert(table, request.data)
+    return result
+
+@app.put("/{table}/{item_id}")
+def update_item(table: str, item_id: str, request: UpdateRequest):
+    if table not in AVAILABLE_TABLES:
+        raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
+    return db_update(table, item_id, request.data)
+
+
+@app.delete("/{table}/{item_id}")
+def delete_item(table: str, item_id: str):
+    if table not in AVAILABLE_TABLES:
+        raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
+    return db_delete(table, item_id)
