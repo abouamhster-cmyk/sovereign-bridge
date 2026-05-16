@@ -7588,7 +7588,7 @@ async def edge_tts_fallback(text: str):
 # TEXT-TO-SPEECH AVEC DEEPGRAM
 # =====================================================
 
-DEEPGRAM_API_KEY = "4b3c5602d2b913f302043ee46a9ed481bf486097"
+DEEPGRAM_API_KEY = "6efd4d07821d11d4a017c89a9a6ba4d4e79218e0"
 
 @app.post("/api/tts/deepgram")
 async def deepgram_speak(request: Dict[str, Any]):
@@ -7604,29 +7604,36 @@ async def deepgram_speak(request: Dict[str, Any]):
     
     try:
         import re
+        # Nettoyer le texte des balises et caractères spéciaux
         clean_text = re.sub(r'\[ACTION:[^\]]*\]', '', text)
         clean_text = re.sub(r'\*\*.*?\*\*', '', clean_text)
         clean_text = re.sub(r'[✅🎯✨⚠️📋🎉]', '', clean_text)
         clean_text = ' '.join(clean_text.split())
         
+        # Deepgram API v1/speak avec modèle dans l'URL
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
-                "https://api.deepgram.com/v1/speak",
+                f"https://api.deepgram.com/v1/speak?model={voice}",
                 headers={
                     "Authorization": f"Token {DEEPGRAM_API_KEY}",
                     "Content-Type": "application/json"
                 },
                 json={
-                    "text": clean_text,
-                    "voice": voice
+                    "text": clean_text
                 }
             )
             
             if response.status_code == 200:
                 import base64
                 audio_base64 = base64.b64encode(response.content).decode('utf-8')
-                return {"success": True, "audio": audio_base64, "format": "mp3"}
+                return {
+                    "success": True, 
+                    "audio": audio_base64, 
+                    "format": "mp3",
+                    "voice": voice
+                }
             else:
+                logger.error(f"Erreur Deepgram: {response.text}")
                 return {"success": False, "error": response.text}
                 
     except Exception as e:
