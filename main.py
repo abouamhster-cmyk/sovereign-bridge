@@ -8309,7 +8309,7 @@ async def generate_welcome_message(request: Dict[str, Any]):
     elif last_visit_days <= 3:
         visit_context = f"content de te revoir après {last_visit_days} jours"
     else:
-        visit_context = f "ravi de te revoir ! Cela faisait {last_visit_days} jours"
+        visit_context = f"ravi de te revoir ! Cela faisait {last_visit_days} jours"
     
     prompt = f"""Génère un message de bienvenue court et chaleureux pour Rebecca.
 
