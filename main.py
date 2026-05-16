@@ -7589,7 +7589,7 @@ async def edge_tts_fallback(text: str):
 # TEXT-TO-SPEECH AVEC DEEPGRAM
 # =====================================================
 
-DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY")
+DEEPGRAM_API_KEY = "4b3c5602d2b913f302043ee46a9ed481bf486097"
 
 @app.post("/api/tts/deepgram")
 async def deepgram_speak(request: Dict[str, Any]):
