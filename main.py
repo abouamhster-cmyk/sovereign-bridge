@@ -4471,8 +4471,7 @@ async def clean_expired_subscriptions():
 # =====================================================
 # VOIX LIVE AVEC ELEVENLABS
 # =====================================================
-
-ELEVENLABS_API_KEY = "sk_5d0df2799f016e346b4d5e7a7d1e1d66e027e32afa26d0ba"
+ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
 ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "EXAVITQu4vr4xnSDxMaL")
 
 @app.post("/api/voice/speak")
@@ -4523,7 +4522,7 @@ async def speak_text(request: Dict[str, Any]):
 # MICROSOFT EDGE TTS (gratuit, sans carte bancaire)
 # =====================================================
 
-EDGE_TTS_TOKEN = "6A5AA1D4EAFF4E9FB37E23D68491D6F4"
+EDGE_TTS_TOKEN = os.environ.get("EDGE_TTS_TOKEN", "")
 
 @app.post("/api/voice/edge-speak")
 async def edge_speak_text(request: Dict[str, Any]):
