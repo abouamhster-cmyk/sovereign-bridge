@@ -2996,7 +2996,7 @@ async def chat_endpoint(request: ChatRequest):
                         body=body
                     ))
                     if result.get("success"):
-                        content = f"✅ Email envoyé avec succès à {to}\n\n📧 **Récapitulatif :**\n- Destinataire : {to}\n- Sujet : {subject}\n\n[ACTION:{\"type\":\"confirm_email_sent\",\"params\":{{\"to\":\"{to}\",\"subject\":\"{subject}\"}},\"label\":\"✅ Confirmer\"}]"
+                    content = f"✅ Email envoyé avec succès à {to}\n\n📧 **Récapitulatif :**\n- Destinataire : {to}\n- Sujet : {subject}\n\n[ACTION:{{\"type\":\"confirm_email_sent\",\"params\":{{\"to\":\"{to}\",\"subject\":\"{subject}\"}},\"label\":\"✅ Confirmer\"}}]"                  
                     else:
                         content = f"❌ Erreur d'envoi: {result.get('error')}. Vérifie l'adresse email et réessaie."
                 logger.info(f"📧 Envoi email: {to} - {result.get('success') if 'result' in locals() else False}")
