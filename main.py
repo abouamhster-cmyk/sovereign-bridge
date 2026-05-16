@@ -6180,8 +6180,8 @@ async def update_children(request: Request):
         return {"success": False, "error": str(e)}
 
 
-        @app.put("/api/profile/projects")
-async def update_projects(request: Request):
+ @app.put("/api/profile/projects")
+ async def update_projects(request: Request):
     """Met à jour uniquement les projets"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
