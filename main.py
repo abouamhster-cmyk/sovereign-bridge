@@ -4563,6 +4563,7 @@ async def edge_speak_text(request: Dict[str, Any]):
 async def send_morning_brief():
     """
     Envoie un résumé matinal personnalisé par email et notification push.
+    Tous les messages sont générés dynamiquement par GPT-4o.
     """
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
@@ -4572,114 +4573,135 @@ async def send_morning_brief():
         now = datetime.now()
         hour = now.hour
         
-        # ========== RÉCUPÉRER LES VRAIES DONNÉES ==========
+        # ========== RÉCUPÉRER LES DONNÉES CONTEXTUELLES ==========
         
         # 1. Tâches du jour
         tasks_today = supabase.table("tasks").select("*").eq("due_date", today).neq("status", "done").execute()
-        tasks_count = len(tasks_today.data)
+        tasks_today_list = tasks_today.data
+        tasks_count = len(tasks_today_list)
         
         # 2. Tâches en retard
         overdue_tasks = supabase.table("tasks").select("*").lt("due_date", today).neq("status", "done").execute()
         overdue_count = len(overdue_tasks.data)
+        overdue_tasks_list = overdue_tasks.data[:3]  # Les 3 plus urgentes
         
         # 3. Documents proches de l'échéance (7 jours)
         next_week = (datetime.now().date() + timedelta(days=7)).isoformat()
         expiring_docs = supabase.table("documents").select("*").gte("due_date", today).lte("due_date", next_week).neq("status", "approved").execute()
-        expiring_docs_count = len(expiring_docs.data)
+        expiring_docs_list = expiring_docs.data[:3]
         
-        # 4. Victoires récentes (7 derniers jours)
+        # 4. Victoires récentes (7 jours)
         week_ago = (datetime.now().date() - timedelta(days=7)).isoformat()
         recent_wins = supabase.table("wins").select("*").gte("date", week_ago).execute()
         wins_count = len(recent_wins.data)
+        recent_wins_list = recent_wins.data[:3]
         
         # 5. Missions actives
         active_missions = supabase.table("missions").select("*").eq("status", "active").execute()
         missions_count = len(active_missions.data)
+        missions_list = [{"name": m["name"], "priority": m.get("priority", "normal")} for m in active_missions.data[:3]]
         
         # 6. Humeur d'hier
         yesterday = (datetime.now().date() - timedelta(days=1)).isoformat()
         yesterday_mood = supabase.table("mood_entries").select("mood").eq("date", yesterday).eq("user_id", "rebecca").execute()
         yesterday_mood_value = yesterday_mood.data[0]["mood"] if yesterday_mood.data else None
         
-        # 7. Récupérer le nom de l'utilisateur
-        profile = supabase.table("user_profile").select("preferred_name").eq("user_id", "rebecca").execute()
+        # 7. Prochain événement familial
+        next_family_event = supabase.table("family_events").select("*").gte("date", today).neq("status", "done").order("date", ascending=True).limit(1).execute()
+        
+        # 8. Récupérer le nom et les enfants
+        profile = supabase.table("user_profile").select("preferred_name, children").eq("user_id", "rebecca").execute()
         user_name = profile.data[0].get("preferred_name", "Rebecca") if profile.data else "Rebecca"
+        children = profile.data[0].get("children", []) if profile.data else []
         
-        # ========== CONSTRUIRE LE MESSAGE PERSONNALISÉ ==========
+        # 9. Vérifier les anniversaires
+        today_md = datetime.now().strftime("%m-%d")
+        birthday_today = None
+        for child in children:
+            if child.get("birthday"):
+                birthday_md = child["birthday"][5:] if len(child["birthday"]) > 5 else None
+                if birthday_md == today_md:
+                    birthday_today = child["name"]
         
-        # Salutation selon l'heure
-        if 5 <= hour < 12:
-            greeting = "☀️ Bonjour"
-        elif 12 <= hour < 18:
-            greeting = "🌤️ Bon après-midi"
-        else:
-            greeting = "🌙 Bonsoir"
+        # 10. Mission à plus fort potentiel
+        top_mission = supabase.table("missions").select("*").eq("status", "active").order("revenue_potential", ascending=False).limit(1).execute()
         
-        # Message d'humeur personnalisé
-        mood_message = ""
-        if yesterday_mood_value == "fatiguée":
-            mood_message = "Tu étais fatiguée hier. J'espère que tu as bien dormi. 🌙"
-        elif yesterday_mood_value == "stressée":
-            mood_message = "Hier était stressant. Aujourd'hui, on y va doucement. 🌿"
-        elif yesterday_mood_value == "excellent":
-            mood_message = "Tu étais en forme hier ! Continue sur cette lancée. 🔥"
-        elif yesterday_mood_value == "bien":
-            mood_message = "Content de voir que tu vas bien. 😊"
-        else:
-            mood_message = "J'espère que tu as passé une bonne nuit. ✨"
+        # 11. Budget restant
+        total_revenue = supabase.table("revenue").select("amount").execute()
+        total_spending = supabase.table("spending").select("amount").execute()
+        revenue_sum = sum(r.get("amount", 0) for r in total_revenue.data)
+        spending_sum = sum(s.get("amount", 0) for s in total_spending.data)
+        balance = revenue_sum - spending_sum
         
-        # Message sur les tâches
-        if overdue_count > 0:
-            task_message = f"⚠️ Tu as {overdue_count} tâche(s) en retard. On les regarde ensemble ?"
-        elif tasks_count > 0:
-            task_message = f"📋 Tu as {tasks_count} tâche(s) aujourd'hui."
-        else:
-            task_message = "📋 Aucune tâche planifiée. Une journée pour respirer ? 🌿"
+        # ========== GÉNÉRATION PAR IA ==========
         
-        # Message sur les documents
-        if expiring_docs_count > 0:
-            doc_message = f"📄 {expiring_docs_count} document(s) approchent de leur échéance."
-        else:
-            doc_message = "📄 Aucun document imminent. ✅"
-        
-        # Message sur les victoires
-        if wins_count > 0:
-            win_message = f"🏆 Cette semaine, tu as célébré {wins_count} victoire(s) !"
-        else:
-            win_message = "✨ N'oublie pas de célébrer tes victoires, même petites."
-        
-        # Message sur les missions
-        if missions_count > 0:
-            mission_message = f"🎯 {missions_count} mission(s) active(s) en cours."
-        else:
-            mission_message = "🎯 Aucune mission active pour le moment."
-        
-        # Message d'encouragement personnalisé selon la charge
-        if overdue_count > 0 or expiring_docs_count > 0:
-            encouragement = "Une chose à la fois. Tu n'as pas besoin de tout gérer d'un coup. 👑"
-        elif tasks_count > 3:
-            encouragement = "Respire. Priorise l'essentiel, le reste attendra. 🌿"
-        elif wins_count > 0:
-            encouragement = "Tu as déjà des victoires cette semaine. Continue comme ça ! 💪"
-        else:
-            encouragement = "Aujourd'hui est une nouvelle page. Qu'as-tu envie d'écrire ? ✨"
-        
-        # Construire le message final
-        message = f"""{greeting} {user_name}.
+        prompt = f"""Tu es Becks, l'assistante personnelle de Rebecca. Génère un message matinal personnalisé et chaleureux.
 
-{mood_message}
+CONTEXTE DU JOUR :
+- Date : {datetime.now().strftime('%A %d %B %Y')}
+- Heure : {hour}h
+- Prénom de l'utilisatrice : {user_name}
+- Humeur hier : {yesterday_mood_value or "Non renseignée"}
+- Tâches aujourd'hui : {tasks_count} tâche(s) ({[t["title"] for t in tasks_today_list[:3]]})
+- Tâches en retard : {overdue_count} ({[t["title"] for t in overdue_tasks_list]})
+- Documents imminents : {len(expiring_docs_list)} ({[d["name"] for d in expiring_docs_list]})
+- Victoires récentes : {wins_count} ({[w["title"] for w in recent_wins_list]})
+- Missions actives : {missions_count} ({[m["name"] for m in missions_list]})
+- Mission prioritaire : {top_mission.data[0]["name"] if top_mission.data else "Aucune"}
+- Événement familial : {next_family_event.data[0]["title"] if next_family_event.data else "Aucun"}
+- Anniversaire aujourd'hui : {birthday_today if birthday_today else "Non"}
+- Solde financier : {balance:,.0f} CFA
 
-{task_message}
-{doc_message}
-{mission_message}
-{win_message}
+Génère un message structuré avec :
 
-💡 **Becks te conseille** : {encouragement}
+1. Une salutation adaptée à l'heure (naturelle, pas "Bonjour" systématique)
+2. Une phrase sur son état de la veille (bienveillante)
+3. Un résumé des priorités du jour (basé sur les tâches et missions)
+4. Un conseil ou une citation inspirante qui a du SENS avec sa situation (pas générique)
+5. Une question ouverte pour l'engager
 
-Passe une excellente journée. Je suis là si tu as besoin. 💖
-"""
+STYLE : Chaleureux, personnel, court (max 150 mots), comme une amie qui parle.
+Ne liste pas les données brut, reformule naturellement.
+
+Retourne UNIQUEMENT du JSON :
+{{"greeting": "...", "mood_message": "...", "priorities_summary": "...", "wisdom": "...", "question": "..."}}"""
+
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.8,
+            max_tokens=500
+        )
         
-        # ========== ENVOI DE L'EMAIL ==========
+        result_text = response.choices[0].message.content
+        result_text = result_text.replace("```json", "").replace("```", "").strip()
+        ai_content = json.loads(result_text)
+        
+        # ========== CONSTRUIRE LE MESSAGE FINAL ==========
+        
+        # Message spécifique pour anniversaire
+        birthday_message = f"\n\n🎂 {birthday_today} fête son anniversaire aujourd'hui ! 🎉" if birthday_today else ""
+        
+        # Message financier si besoin
+        financial_message = ""
+        if balance < 0:
+            financial_message = f"\n\n💰 Solde négatif de {abs(balance):,.0f} CFA. Une petite action aujourd'hui peut inverser la tendance."
+        
+        message = f"""{ai_content.get("greeting")} {user_name}.
+
+{ai_content.get("mood_message")}
+
+{ai_content.get("priorities_summary")}
+{birthday_message}
+{financial_message}
+
+💡 {ai_content.get("wisdom")}
+
+❓ {ai_content.get("question")}
+
+Je suis là. 💖"""
+        
+        # ========== ENVOI ==========
         email_sent = False
         if BREVO_API_KEY:
             try:
@@ -4687,39 +4709,35 @@ Passe une excellente journée. Je suis là si tu as besoin. 💖
                 email_body = message.replace("\n", "<br>")
                 await send_email(EmailRequest(
                     to=user_email,
-                    subject=f"🌅 {greeting} {user_name} - Résumé du {datetime.now().strftime('%d/%m/%Y')}",
+                    subject=f"🌅 {user_name} - {datetime.now().strftime('%d/%m/%Y')}",
                     body=email_body
                 ))
                 email_sent = True
-                logger.info("📧 Email matinal personnalisé envoyé")
+                logger.info("📧 Email matinal IA envoyé")
             except Exception as e:
-                logger.error(f"Erreur envoi email résumé: {e}")
+                logger.error(f"Erreur envoi email: {e}")
         
-        # ========== ENVOI DE LA NOTIFICATION PUSH ==========
         push_sent = False
         try:
             send_notification_sync({
-                "title": f"{greeting} {user_name}",
-                "body": f"{tasks_count} tâche(s) aujourd'hui • {missions_count} mission(s) active(s)",
+                "title": f"🌅 {user_name}",
+                "body": ai_content.get("priorities_summary", "Bonne journée !")[:80],
                 "url": "/",
-                "type": "brief",
-                "requireInteraction": False
+                "type": "brief"
             })
             push_sent = True
-            logger.info("🔔 Notification push matinale envoyée")
         except Exception as e:
-            logger.error(f"Erreur envoi push résumé: {e}")
+            logger.error(f"Erreur envoi push: {e}")
         
         return {
             "success": True,
-            "message": "Résumé matinal envoyé",
+            "message": message,
             "stats": {
                 "tasks_today": tasks_count,
                 "overdue_tasks": overdue_count,
-                "expiring_docs": expiring_docs_count,
                 "active_missions": missions_count,
                 "recent_wins": wins_count,
-                "yesterday_mood": yesterday_mood_value
+                "balance": balance
             },
             "email_sent": email_sent,
             "push_sent": push_sent
@@ -5206,129 +5224,122 @@ async def execute_batch_actions(actions: List[ExecutorAction], auto_confirm: boo
     return {"success": True, "results": results}
 
 
-
-
 @app.post("/api/proactive/evening-summary")
 async def send_evening_summary():
     """
-    Envoie un résumé de la journée le soir (vers 19h).
-    Inclut : tâches complétées, tâches restantes, victoires, conseil.
+    Envoie un résumé de fin de journée personnalisé par IA.
     """
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
         today = datetime.now().date().isoformat()
+        now = datetime.now()
+        
+        # ========== RÉCUPÉRER LES DONNÉES ==========
         
         # Tâches complétées aujourd'hui
         completed_tasks = supabase.table("tasks").select("*").eq("status", "done").gte("updated_at", today).execute()
+        completed_count = len(completed_tasks.data)
+        completed_list = [t["title"] for t in completed_tasks.data[:3]]
         
-        # Tâches créées aujourd'hui non terminées
-        pending_tasks = supabase.table("tasks").select("*").gte("created_at", today).neq("status", "done").execute()
+        # Tâches restantes (non terminées)
+        pending_tasks = supabase.table("tasks").select("*").neq("status", "done").execute()
+        pending_count = len(pending_tasks.data)
         
         # Tâches en retard
         overdue_tasks = supabase.table("tasks").select("*").lt("due_date", today).neq("status", "done").execute()
+        overdue_count = len(overdue_tasks.data)
         
-        # Victoires d'aujourd'hui
+        # Victoires du jour
         wins_today = supabase.table("wins").select("*").gte("date", today).execute()
+        wins_count = len(wins_today.data)
+        wins_list = [w["title"] for w in wins_today.data[:3]]
         
         # Humeur du jour
-        mood_today = supabase.table("mood_entries").select("*").eq("date", today).execute()
+        mood_today = supabase.table("mood_entries").select("mood").eq("date", today).eq("user_id", "rebecca").execute()
+        current_mood = mood_today.data[0]["mood"] if mood_today.data else None
         
-        # Construire le message
-        completed_list = ""
-        if completed_tasks.data:
-            for t in completed_tasks.data[:5]:
-                completed_list += f"\n• {t['title']}"
-        else:
-            completed_list = "\n• Rien de terminé aujourd'hui"
+        # Récupérer le nom
+        profile = supabase.table("user_profile").select("preferred_name").eq("user_id", "rebecca").execute()
+        user_name = profile.data[0].get("preferred_name", "Rebecca") if profile.data else "Rebecca"
         
-        pending_list = ""
-        if pending_tasks.data:
-            for t in pending_tasks.data[:3]:
-                pending_list += f"\n• {t['title']}"
-        else:
-            pending_list = "\n• Tout est fait !"
+        # ========== GÉNÉRATION IA ==========
         
-        overdue_list = ""
-        if overdue_tasks.data:
-            for t in overdue_tasks.data[:3]:
-                overdue_list += f"\n• {t['title']}"
-        else:
-            overdue_list = "\n• Aucune tâche en retard"
+        prompt = f"""Rebecca a terminé sa journée. Voici son bilan :
+- Tâches faites : {completed_count} ({', '.join(completed_list) if completed_list else 'rien'})
+- Tâches restantes : {pending_count}
+- Tâches en retard : {overdue_count}
+- Victoires du jour : {wins_count} ({', '.join(wins_list) if wins_list else 'aucune'})
+- Humeur : {current_mood or 'non renseignée'}
+
+Génère un message de fin de journée (max 60 mots) :
+1. Reconnais ce qu'elle a accompli (ou non)
+2. Un conseil court pour demain si nécessaire
+3. Une phrase apaisante pour la nuit
+
+Style : chaleureux, pas de bla-bla, direct mais doux.
+
+Retourne UNIQUEMENT du JSON : {{"message": "..."}}"""
+
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=200
+        )
         
-        wins_list = ""
-        if wins_today.data:
-            for w in wins_today.data[:3]:
-                wins_list += f"\n• {w['title']} {w.get('celebration_emoji', '🎉')}"
-        else:
-            wins_list = "\n• Aucune victoire enregistrée"
+        result_text = response.choices[0].message.content
+        result_text = result_text.replace("```json", "").replace("```", "").strip()
+        ai_content = json.loads(result_text)
         
-        # Message d'humeur
-        mood_text = ""
-        if mood_today.data and mood_today.data[0].get("mood"):
-            mood_map = {
-                "excellent": "🌟 Excellente",
-                "bien": "😊 Bonne",
-                "neutre": "😐 Neutre",
-                "fatiguée": "😴 Fatiguée",
-                "stressée": "😰 Stressée"
-            }
-            mood_text = f"\n\n😊 **Humeur du jour** : {mood_map.get(mood_today.data[0]['mood'], mood_today.data[0]['mood'])}"
+        message = f"🌙 Bonsoir {user_name}.\n\n{ai_content.get('message')}\n\nRepose-toi bien. Demain est un nouveau jour. 👑"
         
-        # Construire le message final
-        message = f"""🌙 **Bonsoir Rebecca ! Voici ton résumé de la journée**
-
-📅 **{datetime.now().strftime('%A %d %B %Y')}**{mood_text}
-
----
-
-✅ **Ce que tu as accompli aujourd'hui** : {len(completed_tasks.data)}{completed_list}
-
-📋 **Tâches restantes** : {len(pending_tasks.data)}{pending_list}
-
-⚠️ **Tâches en retard** : {len(overdue_tasks.data)}{overdue_list}
-
-🏆 **Victoires du jour** : {len(wins_today.data)}{wins_list}
-
----
-
-💡 **Conseil de Becks** : 
-{_get_evening_advice(len(completed_tasks.data), len(pending_tasks.data), len(overdue_tasks.data))}
-
-Passe une bonne soirée, repose-toi bien. Demain est un nouveau jour. 👑
-"""
-
-        # Envoyer notification push
+        # ========== ENVOI ==========
         push_sent = False
         try:
             send_notification_sync({
-                "title": "🌙 Résumé de ta journée",
-                "body": f"{len(completed_tasks.data)} tâches accomplies, {len(wins_today.data)} victoires",
-                "url": "/tasks",
-                "type": "brief",
-                "requireInteraction": False
+                "title": "🌙 Fin de journée",
+                "body": f"{completed_count} tâche(s) accomplie(s) • {wins_count} victoire(s)",
+                "url": "/",
+                "type": "brief"
             })
             push_sent = True
-            logger.info("🔔 Notification push résumé soir envoyée")
         except Exception as e:
-            logger.error(f"Erreur envoi push résumé soir: {e}")
+            logger.error(f"Erreur envoi push soir: {e}")
+        
+        # Email optionnel (1x par jour max)
+        email_sent = False
+        if BREVO_API_KEY and completed_count > 0:
+            try:
+                email_body = message.replace("\n", "<br>")
+                await send_email(EmailRequest(
+                    to="jbillcataria@gmail.com",
+                    subject=f"🌙 Résumé du {datetime.now().strftime('%d/%m/%Y')}",
+                    body=email_body
+                ))
+                email_sent = True
+            except Exception as e:
+                logger.error(f"Erreur envoi email soir: {e}")
         
         return {
             "success": True,
-            "message": "Résumé de la journée envoyé",
+            "message": message,
             "stats": {
-                "completed_tasks": len(completed_tasks.data),
-                "pending_tasks": len(pending_tasks.data),
-                "overdue_tasks": len(overdue_tasks.data),
-                "wins_today": len(wins_today.data)
+                "completed": completed_count,
+                "pending": pending_count,
+                "overdue": overdue_count,
+                "wins": wins_count,
+                "mood": current_mood
             },
-            "push_sent": push_sent
+            "push_sent": push_sent,
+            "email_sent": email_sent
         }
         
     except Exception as e:
         logger.error(f"Erreur résumé soir: {e}")
         return {"success": False, "error": str(e)}
+        
 
 def _get_evening_advice(completed: int, pending: int, overdue: int) -> str:
     """Génère un conseil personnalisé pour le soir"""
@@ -6229,6 +6240,7 @@ async def detect_memory_patterns(request: Dict[str, Any]):
 # RESCUE MODE - DÉTECTION AUTOMATIQUE DE SURCHARGE
 # =====================================================
 
+
 @app.post("/api/rescue/detect-overload")
 async def detect_overload():
     """
@@ -6305,16 +6317,40 @@ async def detect_overload():
         # Déterminer le niveau
         if overload_score >= 60:
             level = "critical"
-            message = "⚠️ Tu es en surcharge sévère. Active le Rescue Mode immédiatement."
         elif overload_score >= 35:
             level = "high"
-            message = "🟡 Charge élevée. Ralentis et priorise l'essentiel."
         elif overload_score >= 15:
             level = "moderate"
-            message = "🟢 Charge modérée. Reste focus."
         else:
             level = "low"
-            message = "🌿 Tout va bien. Profite de ce calme."
+        
+        # ========== GÉNÉRER LE MESSAGE D'ENCOURAGEMENT PAR IA ==========
+        encouragement_message = None
+        try:
+            # Appel à l'endpoint de génération d'encouragement
+            ai_response = await generate_rescue_encouragement({
+                "overload_score": overload_score,
+                "level": level,
+                "reasons": reasons,
+                "current_mood": current_mood,
+                "urgent_tasks": len(urgent_tasks.data),
+                "overdue_tasks": len(overdue_tasks.data)
+            })
+            if ai_response.get("success"):
+                encouragement_message = ai_response.get("encouragement")
+        except Exception as e:
+            logger.error(f"Erreur génération encouragement IA: {e}")
+        
+        # Fallback si l'IA a échoué
+        if not encouragement_message:
+            if overload_score >= 60:
+                encouragement_message = "⚠️ Tu es en surcharge sévère. Active le Rescue Mode immédiatement."
+            elif overload_score >= 35:
+                encouragement_message = "🟡 Charge élevée. Ralentis et priorise l'essentiel."
+            elif overload_score >= 15:
+                encouragement_message = "🟢 Charge modérée. Reste focus."
+            else:
+                encouragement_message = "🌿 Tout va bien. Profite de ce calme."
         
         # Générer des actions de secours
         rescue_actions = []
@@ -6356,7 +6392,7 @@ async def detect_overload():
             "success": True,
             "overload_score": overload_score,
             "level": level,
-            "message": message,
+            "message": encouragement_message,
             "reasons": reasons,
             "rescue_actions": rescue_actions[:4],  # Max 4 actions
             "stats": {
@@ -6374,6 +6410,68 @@ async def detect_overload():
         return {"success": False, "error": str(e)}
 
 
+@app.post("/api/rescue/encouragement")
+async def generate_rescue_encouragement(request: Dict[str, Any]):
+    """
+    Génère un message d'encouragement personnalisé pour le Rescue Mode.
+    """
+    overload_score = request.get("overload_score", 0)
+    level = request.get("level", "medium")
+    reasons = request.get("reasons", [])
+    current_mood = request.get("current_mood")
+    urgent_tasks = request.get("urgent_tasks", 0)
+    overdue_tasks = request.get("overdue_tasks", 0)
+    
+    # Déterminer le niveau d'urgence pour le prompt
+    if level == "critical":
+        urgency_prompt = "La situation est CRITIQUE. Elle est en surcharge sévère."
+    elif level == "high":
+        urgency_prompt = "La situation est tendue. Elle a beaucoup de choses à gérer."
+    else:
+        urgency_prompt = "La situation est modérée, mais elle a besoin de recentrage."
+    
+    # Construire le prompt
+    prompt = f"""Génère un message d'encouragement court et réconfortant pour Rebecca.
+
+CONTEXTE :
+- Niveau de surcharge : {level} (score: {overload_score}/100)
+- Humeur actuelle : {current_mood if current_mood else "non renseignée"}
+- Tâches urgentes : {urgent_tasks}
+- Tâches en retard : {overdue_tasks}
+- Raisons identifiées : {', '.join(reasons) if reasons else "Aucune raison spécifique"}
+
+RÈGLES :
+- Sois très douce et bienveillante
+- Maximum 30 mots
+- Ne propose PAS d'action (juste du réconfort)
+- Si c'est critique → "Respire. Ralentis. Rien n'est aussi urgent."
+- Si humeur stressée → "Je suis là. On va y aller doucement."
+- Si humeur fatiguée → "Repose-toi d'abord. Le reste attendra."
+
+Retourne UNIQUEMENT le message, rien d'autre."""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=80
+        )
+        
+        message = response.choices[0].message.content.strip()
+        
+        return {"success": True, "encouragement": message}
+        
+    except Exception as e:
+        logger.error(f"Erreur génération encouragement: {e}")
+        # Fallback humain
+        fallbacks = {
+            "critical": "🌿 Respire profondément. Rien n'est aussi urgent qu'il n'y paraît. Je suis là.",
+            "high": "💖 Une chose à la fois. Tu n'es pas seule dans cette tempête.",
+            "moderate": "✨ Ralentis. Priorise l'essentiel. Le reste attendra.",
+            "low": "🌸 Tout va bien. Tu gères. Prends soin de toi."
+        }
+        return {"success": True, "encouragement": fallbacks.get(level, fallbacks["moderate"])}
 # =====================================================
 # NOTIFICATIONS PROACTIVES INTELLIGENTES
 # =====================================================
@@ -7722,3 +7820,636 @@ def delete_item(table: str, item_id: str):
     if table not in AVAILABLE_TABLES:
         raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
     return db_delete(table, item_id)
+
+
+@app.post("/api/generate-greeting")
+async def generate_greeting(request: Dict[str, Any]):
+    """
+    Génère un message d'accueil personnalisé pour le dashboard.
+    """
+    tasks_count = request.get("tasks_count", 0)
+    overdue_count = request.get("overdue_count", 0)
+    wins_count = request.get("wins_count", 0)
+    missions_count = request.get("missions_count", 0)
+    mood = request.get("mood")
+    hour = request.get("hour", 12)
+    
+    # Déterminer le moment de la journée
+    if hour < 12:
+        time_context = "matin"
+    elif hour < 18:
+        time_context = "après-midi"
+    else:
+        time_context = "soir"
+    
+    # Construire le prompt pour l'IA
+    prompt = f"""Génère un message d'accueil chaleureux et personnalisé pour Rebecca.
+
+Contexte :
+- Moment de la journée : {time_context}
+- Tâches à faire aujourd'hui : {tasks_count}
+- Tâches en retard : {overdue_count}
+- Victoires récentes : {wins_count}
+- Missions actives : {missions_count}
+- Humeur détectée : {mood if mood else "non renseignée"}
+
+RÈGLES :
+- Sois naturelle, comme une amie
+- Maximum 25 mots
+- Pas de liste, pas d'énumération
+- Si elle a des tâches en retard → mentionne-le avec bienveillance
+- Si elle est fatiguée ou stressée → propose d'aller doucement
+- Si rien d'urgent → message détendu
+
+Exemples :
+- "Salut Rebecca. Tu as 2 tâches en retard. On y va doucement ?"
+- "Bonjour ! Rien d'urgent aujourd'hui. Profites-en pour souffler."
+- "Coucou. 3 victoires récentes, bien joué ! Continue comme ça."
+
+Retourne UNIQUEMENT le message, rien d'autre."""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=100
+        )
+        
+        greeting = response.choices[0].message.content.strip()
+        
+        return {"success": True, "greeting": greeting}
+        
+    except Exception as e:
+        logger.error(f"Erreur génération greeting: {e}")
+        return {"success": False, "error": str(e)}
+
+
+
+@app.post("/api/weekly-summary")
+async def send_weekly_summary():
+    """
+    Envoie un résumé hebdomadaire personnalisé par email et notification push.
+    À appeler par cron-job.org tous les dimanches à 19h.
+    """
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    # Vérifier si on est dimanche (optionnel, la cron s'en charge)
+    if datetime.now().weekday() != 6:
+        return {"success": True, "sent": False, "message": "Pas dimanche, résumé non envoyé"}
+    
+    try:
+        now = datetime.now()
+        start_of_week = (now.date() - timedelta(days=now.weekday())).isoformat()
+        end_of_week = now.date().isoformat()
+        
+        # ========== RÉCUPÉRER LES DONNÉES DE LA SEMAINE ==========
+        
+        # 1. Tâches complétées
+        completed_tasks = supabase.table("tasks").select("*")\
+            .gte("updated_at", start_of_week)\
+            .eq("status", "done")\
+            .execute()
+        completed_count = len(completed_tasks.data)
+        completed_list = [t["title"] for t in completed_tasks.data[:5]]
+        
+        # 2. Tâches créées
+        new_tasks = supabase.table("tasks").select("*")\
+            .gte("created_at", start_of_week)\
+            .execute()
+        new_count = len(new_tasks.data)
+        
+        # 3. Taux de complétion
+        completion_rate = int((completed_count / new_count) * 100) if new_count > 0 else 0
+        
+        # 4. Tâches en retard
+        overdue_tasks = supabase.table("tasks").select("*")\
+            .lt("due_date", now.date().isoformat())\
+            .neq("status", "done")\
+            .execute()
+        overdue_count = len(overdue_tasks.data)
+        
+        # 5. Victoires de la semaine
+        wins = supabase.table("wins").select("*")\
+            .gte("date", start_of_week)\
+            .execute()
+        wins_count = len(wins.data)
+        wins_list = [w["title"] for w in wins.data[:3]]
+        
+        # 6. Dépenses et revenus
+        spending = supabase.table("spending").select("amount")\
+            .gte("date", start_of_week)\
+            .execute()
+        total_spending = sum(s.get("amount", 0) for s in spending.data)
+        
+        revenue = supabase.table("revenue").select("amount")\
+            .gte("date", start_of_week)\
+            .execute()
+        total_revenue = sum(r.get("amount", 0) for r in revenue.data)
+        balance = total_revenue - total_spending
+        
+        # 7. Humeurs de la semaine
+        moods = supabase.table("mood_entries").select("mood")\
+            .gte("date", start_of_week)\
+            .execute()
+        mood_counts = {}
+        for m in moods.data:
+            mood_counts[m["mood"]] = mood_counts.get(m["mood"], 0) + 1
+        
+        # 8. Missions actives
+        active_missions = supabase.table("missions").select("*").eq("status", "active").execute()
+        
+        # 9. Récupérer le nom
+        profile = supabase.table("user_profile").select("preferred_name").eq("user_id", "rebecca").execute()
+        user_name = profile.data[0].get("preferred_name", "Rebecca") if profile.data else "Rebecca"
+        
+        # ========== GÉNÉRATION IA ==========
+        
+        prompt = f"""Génère un résumé hebdomadaire chaleureux et encourageant pour Rebecca.
+
+DONNÉES DE LA SEMAINE :
+- Tâches terminées : {completed_count}
+- Tâches créées : {new_count}
+- Taux de complétion : {completion_rate}%
+- Tâches en retard : {overdue_count}
+- Victoires célébrées : {wins_count}
+- Dépenses : {total_spending:,.0f} CFA
+- Revenus : {total_revenue:,.0f} CFA
+- Solde : {balance:,.0f} CFA
+- Humeurs : {mood_counts}
+- Missions actives : {len(active_missions.data)}
+
+RÈGLES :
+- Maximum 100 mots
+- Commence par "Bonsoir {user_name},"
+- Mentionne les points forts (ce qu'elle a accompli)
+- Mentionne doucement ce qui peut être amélioré
+- Termine par un encouragement pour la semaine à venir
+- Soit naturelle, pas corporate
+
+Retourne UNIQUEMENT le message, rien d'autre."""
+
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.7,
+                max_tokens=300
+            )
+            message = response.choices[0].message.content.strip()
+        except Exception as e:
+            logger.error(f"Erreur IA weekly summary: {e}")
+            # Fallback humain
+            message = f"""Bonsoir {user_name},
+
+Cette semaine, tu as terminé {completed_count} tâche(s) sur {new_count} créées ({completion_rate}%).
+Tu as célébré {wins_count} victoire(s) ! 👑
+
+💰 Finances : {total_revenue:,.0f} CFA de revenus, {total_spending:,.0f} CFA de dépenses.
+
+{len(active_missions.data)} mission(s) active(s) en cours.
+
+La semaine prochaine, concentre-toi sur l'essentiel. Une chose à la fois. Tu as tout ce qu'il faut. 👑
+
+Passe une bonne soirée et repose-toi bien. 💖"""
+        
+        # ========== ENVOI ==========
+        
+        # Notification push
+        push_sent = False
+        try:
+            send_notification_sync({
+                "title": "📊 Bilan de la semaine",
+                "body": f"{completed_count} tâches faites • {wins_count} victoires",
+                "url": "/vision-strategy?tab=weekly",
+                "type": "report"
+            })
+            push_sent = True
+        except Exception as e:
+            logger.error(f"Erreur envoi push weekly: {e}")
+        
+        # Email
+        email_sent = False
+        if BREVO_API_KEY:
+            try:
+                email_body = message.replace("\n", "<br>")
+                await send_email(EmailRequest(
+                    to="jbillcataria@gmail.com",
+                    subject=f"📊 Bilan hebdomadaire - {now.strftime('%d/%m')} au {end_of_week}",
+                    body=email_body
+                ))
+                email_sent = True
+                logger.info("📧 Email bilan hebdomadaire envoyé")
+            except Exception as e:
+                logger.error(f"Erreur envoi email weekly: {e}")
+        
+        # Sauvegarder dans la base pour historique
+        try:
+            supabase.table("weekly_summaries").insert({
+                "week_start": start_of_week,
+                "week_end": end_of_week,
+                "tasks_completed": completed_count,
+                "tasks_created": new_count,
+                "completion_rate": completion_rate,
+                "wins_count": wins_count,
+                "total_spending": total_spending,
+                "total_revenue": total_revenue,
+                "message": message,
+                "sent_at": now.isoformat()
+            }).execute()
+        except Exception as e:
+            logger.error(f"Erreur sauvegarde weekly summary: {e}")
+        
+        return {
+            "success": True,
+            "message": message,
+            "stats": {
+                "tasks_completed": completed_count,
+                "tasks_created": new_count,
+                "completion_rate": completion_rate,
+                "overdue_tasks": overdue_count,
+                "wins_count": wins_count,
+                "total_spending": total_spending,
+                "total_revenue": total_revenue,
+                "balance": balance
+            },
+            "push_sent": push_sent,
+            "email_sent": email_sent
+        }
+        
+    except Exception as e:
+        logger.error(f"Erreur weekly summary: {e}")
+        return {"success": False, "error": str(e)}
+
+
+
+@app.post("/api/chat/generate-title")
+async def generate_chat_title(request: Dict[str, Any]):
+    """
+    Génère un titre dynamique pour une conversation à partir du premier message.
+    """
+    first_message = request.get("first_message", "")
+    
+    if not first_message or len(first_message) < 5:
+        return {"success": True, "title": f"Conversation du {datetime.now().strftime('%d/%m/%Y')}"}
+    
+    prompt = f"""Génère un titre COURT (max 6 mots) pour cette conversation.
+
+Message : "{first_message}"
+
+RÈGLES :
+- Soit descriptif et pertinent
+- Pas de date dans le titre
+- Pas de "Nouvelle conversation"
+- Exemples : "Planning ferme", "Dossier relocation", "Budget mois", "Idées content"
+
+Retourne UNIQUEMENT le titre, rien d'autre."""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.5,
+            max_tokens=30
+        )
+        
+        title = response.choices[0].message.content.strip()
+        # Nettoyer les guillemets éventuels
+        title = title.replace('"', '').replace("'", "")
+        
+        return {"success": True, "title": title}
+        
+    except Exception as e:
+        logger.error(f"Erreur génération titre: {e}")
+        # Fallback
+        return {"success": True, "title": f"Conversation du {datetime.now().strftime('%d/%m/%Y')}"}
+
+
+
+@app.post("/api/notifications/smart-group")
+async def send_smart_notifications():
+    """
+    Analyse les notifications en attente et les regroupe intelligemment.
+    À appeler par cron-job.org toutes les heures.
+    """
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        today = datetime.now().date().isoformat()
+        now = datetime.now()
+        
+        # Vérifier si déjà envoyé dans la dernière heure
+        last_check = supabase.table("notifications_log").select("sent_at")\
+            .eq("type", "smart_group")\
+            .eq("user_id", "rebecca")\
+            .order("sent_at", desc=True)\
+            .limit(1)\
+            .execute()
+        
+        if last_check.data:
+            last_sent = datetime.fromisoformat(last_check.data[0]["sent_at"])
+            if (now - last_sent).total_seconds() < 3600:  # 1 heure
+                return {"success": True, "sent": False, "message": "Déjà envoyé récemment"}
+        
+        # ========== RÉCUPÉRER LES NOTIFICATIONS POTENTIELLES ==========
+        
+        # 1. Tâches du jour
+        tasks_today = supabase.table("tasks").select("*").eq("due_date", today).neq("status", "done").execute()
+        tasks_today_count = len(tasks_today.data)
+        tasks_today_list = [t["title"] for t in tasks_today.data[:3]]
+        
+        # 2. Tâches en retard
+        overdue_tasks = supabase.table("tasks").select("*").lt("due_date", today).neq("status", "done").execute()
+        overdue_count = len(overdue_tasks.data)
+        
+        # 3. Documents en retard ou proches
+        overdue_docs = supabase.table("documents").select("*").lt("due_date", today).neq("status", "approved").execute()
+        expiring_docs = supabase.table("documents").select("*").gte("due_date", today).lte("due_date", (datetime.now().date() + timedelta(days=3)).isoformat()).neq("status", "approved").execute()
+        
+        # 4. Missions inactives (5+ jours)
+        five_days_ago = (datetime.now() - timedelta(days=5)).isoformat()
+        stale_missions = supabase.table("missions").select("*").eq("status", "active").lt("updated_at", five_days_ago).execute()
+        
+        # 5. Victoires récentes (7 jours)
+        week_ago = (datetime.now().date() - timedelta(days=7)).isoformat()
+        recent_wins = supabase.table("wins").select("*").gte("date", week_ago).execute()
+        
+        # 6. Événements familiaux aujourd'hui
+        family_today = supabase.table("family_events").select("*").eq("date", today).neq("status", "done").execute()
+        
+        # ========== CONSTRUIRE LE MESSAGE REGROUPÉ ==========
+        
+        notifications = []
+        
+        # Tâches
+        if overdue_count > 0:
+            notifications.append(f"⚠️ {overdue_count} tâche(s) en retard")
+        elif tasks_today_count > 0:
+            task_list = ", ".join(tasks_today_list[:2])
+            if len(tasks_today_list) > 2:
+                task_list += f" et {tasks_today_count - 2} autre(s)"
+            notifications.append(f"📋 {tasks_today_count} tâche(s) aujourd'hui : {task_list}")
+        
+        # Documents
+        if len(overdue_docs.data) > 0:
+            notifications.append(f"📄 {len(overdue_docs.data)} document(s) en retard")
+        elif len(expiring_docs.data) > 0:
+            notifications.append(f"📄 {len(expiring_docs.data)} document(s) bientôt dû(s)")
+        
+        # Missions
+        if len(stale_missions.data) > 0:
+            missions_names = ", ".join([m["name"] for m in stale_missions.data[:2]])
+            if len(stale_missions.data) > 2:
+                missions_names += f" et {len(stale_missions.data) - 2} autre(s)"
+            notifications.append(f"🎯 {len(stale_missions.data)} mission(s) sans activité récente : {missions_names}")
+        
+        # Victoires
+        if len(recent_wins.data) == 0:
+            notifications.append(f"🏆 Pas de victoire cette semaine. C'est le moment d'en célébrer une !")
+        elif len(recent_wins.data) > 0:
+            notifications.append(f"🏆 {len(recent_wins.data)} victoire(s) récente(s) ! Continue comme ça.")
+        
+        # Famille
+        if len(family_today.data) > 0:
+            events_names = ", ".join([e["title"] for e in family_today.data[:2]])
+            notifications.append(f"👨‍👩‍👧‍👦 Aujourd'hui : {events_names}")
+        
+        # Si rien à signaler
+        if not notifications:
+            return {"success": True, "sent": False, "message": "Rien à signaler"}
+        
+        # ========== CRÉER LE MESSAGE FINAL ==========
+        
+        # Récupérer le nom
+        profile = supabase.table("user_profile").select("preferred_name").eq("user_id", "rebecca").execute()
+        user_name = profile.data[0].get("preferred_name", "Rebecca") if profile.data else "Rebecca"
+        
+        # Heure pour la salutation
+        hour = now.hour
+        if hour < 12:
+            greeting = "☀️ Bonjour"
+        elif hour < 18:
+            greeting = "🌤️ Bon après-midi"
+        else:
+            greeting = "🌙 Bonsoir"
+        
+        body = "\n".join(notifications)
+        
+        message = f"""{greeting} {user_name},
+
+Voici ce qui t'attend :
+
+{body}
+
+Becks est là si tu as besoin. 👑"""
+        
+        # ========== ENVOI D'UNE SEULE NOTIFICATION ==========
+        
+        # Envoyer une seule notification push
+        send_notification_sync({
+            "title": f"📋 {len(notifications)} point(s) important(s)",
+            "body": notifications[0] + (" • ..." if len(notifications) > 1 else ""),
+            "url": "/",
+            "type": "smart_group"
+        })
+        
+        # Logger l'envoi
+        supabase.table("notifications_log").insert({
+            "type": "smart_group",
+            "date": today,
+            "user_id": "rebecca",
+            "sent_at": now.isoformat(),
+            "metadata": {
+                "notifications_count": len(notifications),
+                "categories": [n.split(" ")[0] for n in notifications]
+            }
+        }).execute()
+        
+        return {
+            "success": True,
+            "sent": True,
+            "message": message,
+            "notifications_count": len(notifications),
+            "details": notifications
+        }
+        
+    except Exception as e:
+        logger.error(f"Erreur smart group notifications: {e}")
+        return {"success": False, "error": str(e)}
+
+
+
+@app.post("/api/welcome-message")
+async def generate_welcome_message(request: Dict[str, Any]):
+    """
+    Génère un message de bienvenue personnalisé après connexion.
+    """
+    user_name = request.get("user_name", "Rebecca")
+    hour = request.get("hour", datetime.now().hour)
+    last_visit_days = request.get("last_visit_days", 0)
+    
+    # Déterminer le moment de la journée
+    if hour < 12:
+        time_greeting = "Bonjour"
+        emoji = "☀️"
+    elif hour < 18:
+        time_greeting = "Bon après-midi"
+        emoji = "🌤️"
+    else:
+        time_greeting = "Bonsoir"
+        emoji = "🌙"
+    
+    # Message selon la dernière visite
+    if last_visit_days == 0:
+        visit_context = "contenu de revenir"
+    elif last_visit_days == 1:
+        visit_context = "ravi de te revoir aujourd'hui"
+    elif last_visit_days <= 3:
+        visit_context = f "content de te revoir après {last_visit_days} jours"
+    else:
+        visit_context = f "ravi de te revoir ! Cela faisait {last_visit_days} jours"
+    
+    prompt = f"""Génère un message de bienvenue court et chaleureux pour Rebecca.
+
+Contexte :
+- Prénom : {user_name}
+- Moment : {time_greeting} ({emoji})
+- Dernière visite : {visit_context}
+
+RÈGLES :
+- Maximum 20 mots
+- Pas de données chiffrées
+- Soit naturelle et encourageante
+- Pas de "je suis désolée" ou "pardon"
+
+Exemples :
+- "Bonjour Rebecca ! Ravie de te revoir. Prête pour une belle journée ? ✨"
+- "Bonsoir Rebecca. Content de te retrouver. Une petite victoire à célébrer ? 🌙"
+- "Bon après-midi Rebecca ! J'espère que tu vas bien. Je suis là. 💖"
+
+Retourne UNIQUEMENT le message, rien d'autre."""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=60
+        )
+        
+        message = response.choices[0].message.content.strip()
+        # Nettoyer les guillemets
+        message = message.replace('"', '').replace("'", "")
+        
+        return {"success": True, "message": message}
+        
+    except Exception as e:
+        logger.error(f"Erreur génération message bienvenue: {e}")
+        # Fallback
+        fallbacks = [
+            f"{emoji} {time_greeting} {user_name}. Ravie de te revoir. 💖",
+            f"{emoji} {time_greeting} {user_name}. Je suis là si tu as besoin. 👑",
+            f"{emoji} Content de te voir, {user_name}. Prête pour avancer ? ✨"
+        ]
+        import random
+        return {"success": True, "message": random.choice(fallbacks)}
+
+
+@app.post("/api/suggest-next-action")
+async def suggest_next_action(request: Dict[str, Any]):
+    """
+    Suggère une action proactive basée sur l'historique et le contexte.
+    """
+    current_page = request.get("current_page", "dashboard")
+    last_completed_task = request.get("last_completed_task")
+    recent_tasks = request.get("recent_tasks", [])
+    active_missions = request.get("active_missions", [])
+    hour = request.get("hour", datetime.now().hour)
+    last_area = request.get("last_area")  # farm, money, family, etc.
+    
+    # Contexte supplémentaire depuis la base
+    if not active_missions and supabase:
+        missions = supabase.table("missions").select("name").eq("status", "active").limit(3).execute()
+        active_missions = [m["name"] for m in missions.data]
+    
+    # Déterminer la zone par défaut selon la page
+    page_to_area = {
+        "dashboard": "général",
+        "farm": "ferme",
+        "money-opportunities": "finances",
+        "family": "famille",
+        "agenda": "organisation",
+        "missions-business": "business",
+        "relocation": "relocalisation",
+        "inbox": "brain dump",
+        "chat": "conversation"
+    }
+    area = page_to_area.get(current_page, "général")
+    
+    # Si une tâche vient d'être terminée, l'utiliser
+    recent_context = ""
+    if last_completed_task:
+        recent_context = f"Elle vient de terminer : '{last_completed_task}'"
+    elif recent_tasks:
+        recent_context = f"Ses dernières tâches : {', '.join(recent_tasks[:2])}"
+    
+    # Heure pour adapter la suggestion
+    if hour < 12:
+        time_context = "c'est le matin, elle a de l'énergie"
+    elif hour < 18:
+        time_context = "c'est l'après-midi, elle peut avancer sur une tâche moyenne"
+    else:
+        time_context = "c'est le soir, une petite tâche rapide ou une pause serait bien"
+    
+    prompt = f"""Suggère une action proactive pour Rebecca.
+
+CONTEXTE :
+- Page actuelle : {current_page}
+- Zone : {area}
+- Dernière activité : {recent_context if recent_context else "Aucune récente"}
+- Missions actives : {', '.join(active_missions) if active_missions else 'Aucune'}
+- Moment : {time_context}
+
+RÈGLES :
+- Maximum 15 mots
+- Une seule suggestion
+- Pas de question fermée (oui/non)
+- Propose une action CONCRÈTE et RAPIDE (max 10 min)
+- Sois naturelle, pas corporate
+
+EXEMPLES :
+- "On continue sur le dossier de la ferme ?"
+- "Tu veux qu'on avance sur le budget du mois ?"
+- "Ajouter une victoire ? Ça fait toujours du bien."
+- "Faire le point sur les tâches du jour ?"
+- "Prendre 5 minutes pour respirer ?"
+
+Retourne UNIQUEMENT la suggestion, rien d'autre."""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=50
+        )
+        
+        suggestion = response.choices[0].message.content.strip()
+        suggestion = suggestion.replace('"', '').replace("'", "")
+        
+        return {"success": True, "suggestion": suggestion}
+        
+    except Exception as e:
+        logger.error(f"Erreur génération suggestion: {e}")
+        # Fallback
+        fallbacks = [
+            "On avance sur une tâche ?",
+            "Une petite victoire à célébrer ?",
+            "Faire le point sur la journée ?",
+            "Prendre une pause ?",
+            "Vider ta tête dans le Brain Dump ?"
+        ]
+        import random
+        return {"success": True, "suggestion": random.choice(fallbacks)}
