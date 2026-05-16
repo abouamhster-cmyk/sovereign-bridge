@@ -77,7 +77,7 @@ async def whatsapp_webhook(request: Request):
     except:
         data = {}
     
-    # Ignorer les statuts d'envoi et les erreurs de quota
+    # Ignorer les statuts d'envoi
     if data.get("typeWebhook") in ["outgoingMessageStatus", "outgoingAPIMessageReceived", "quotaExceeded"]:
         return {"status": "ok"}
     
@@ -91,19 +91,27 @@ async def whatsapp_webhook(request: Request):
         sender_name = sender_data.get("senderName", "Inconnu")
         chat_id = sender_data.get("chatId", sender)
         
-        text_message = ""
+        # ========== IGNORER LES GROUPES ==========
+        # Si le chat_id contient "@g.us" ou que c'est un groupe
+        if "@g.us" in chat_id or sender.endswith("@g.us") or chat_id.endswith("@g.us"):
+            print(f"⏭️ Message de groupe ignoré: {chat_id}")
+            return {"status": "ok"}
         
         # Ignorer les réactions
         if message_type == "reactionMessage":
             print(f"⏭️ Réaction ignorée de {sender_name}")
             return {"status": "ok"}
         
-        # TEXTE
+        text_message = ""
+        attachment_url = None
+        attachment_type = None
+        
+        # ========== TEXTE ==========
         if message_type == "textMessage":
             text_message = message_data.get("textMessageData", {}).get("textMessage", "")
             print(f"💬 [{sender_name}]: {text_message}")
         
-        # AUDIO (Message vocal)
+        # ========== AUDIO (Message vocal) ==========
         elif message_type == "audioMessage":
             audio_data = message_data.get("audioMessageData", {})
             audio_url = audio_data.get("url")
@@ -134,34 +142,67 @@ async def whatsapp_webhook(request: Request):
                     print(f"❌ Erreur transcription: {e}")
                     text_message = "🎤 [Message vocal non transcrit]"
         
-        # IMAGE
+        # ========== IMAGE ==========
         elif message_type == "imageMessage":
             image_data = message_data.get("imageMessageData", {})
             caption = image_data.get("caption", "")
-            text_message = f"🖼️ [IMAGE] {caption if caption else 'Pas de légende'}"
+            image_url = image_data.get("url", "")
+            text_message = f"🖼️ [IMAGE] {caption if caption else 'Image sans légende'}"
+            attachment_url = image_url
+            attachment_type = "image"
             print(f"🖼️ Image de {sender_name}: {caption}")
         
-        # AUTRES
-        else:
-            text_message = f"📎 [{message_type}]"
-            print(f"📎 Autre type: {message_type}")
+        # ========== DOCUMENT ==========
+        elif message_type == "documentMessage":
+            doc_data = message_data.get("documentMessageData", {})
+            file_name = doc_data.get("fileName", "Document")
+            doc_url = doc_data.get("url", "")
+            text_message = f"📎 [DOCUMENT] {file_name}"
+            attachment_url = doc_url
+            attachment_type = "document"
+            print(f"📎 Document de {sender_name}: {file_name}")
         
-        # Sauvegarde en base
+        # ========== VIDEO ==========
+        elif message_type == "videoMessage":
+            video_data = message_data.get("videoMessageData", {})
+            caption = video_data.get("caption", "")
+            video_url = video_data.get("url", "")
+            text_message = f"🎥 [VIDEO] {caption if caption else 'Vidéo sans légende'}"
+            attachment_url = video_url
+            attachment_type = "video"
+            print(f"🎥 Vidéo de {sender_name}")
+        
+        # ========== AUTRES ==========
+        else:
+            text_message = f"📎 [{message_type}] non supporté"
+            print(f"📎 Autre type non supporté: {message_type}")
+            # Ne pas sauvegarder les types non supportés
+            return {"status": "ok"}
+        
+        # ========== SAUVEGARDE EN BASE ==========
         if text_message and supabase:
             try:
-                supabase.table("whatsapp_messages").insert({
+                # Sauvegarder avec les métadonnées du fichier si présent
+                message_data_to_save = {
                     "from": sender,
                     "from_name": sender_name,
                     "message": text_message,
                     "status": "pending",
                     "created_at": datetime.now().isoformat()
-                }).execute()
+                }
+                
+                if attachment_url:
+                    message_data_to_save["attachment_url"] = attachment_url
+                    message_data_to_save["attachment_type"] = attachment_type
+                
+                supabase.table("whatsapp_messages").insert(message_data_to_save).execute()
                 print(f"✅ Message sauvegardé")
             except Exception as e:
                 print(f"❌ Erreur sauvegarde: {e}")
         
-        # Analyse avec Becks pour réponse auto
-        if text_message and not text_message.startswith("🖼️") and not text_message.startswith("📎"):
+        # ========== ANALYSE POUR RÉPONSE AUTO ==========
+        # Ne pas analyser les messages avec fichiers (sauf audio transcrit)
+        if text_message and not text_message.startswith("🖼️") and not text_message.startswith("📎") and not text_message.startswith("🎥"):
             try:
                 analysis_prompt = f"""Message WhatsApp de {sender_name}: "{text_message}"
 Réponds UNIQUEMENT avec ce format JSON:
@@ -228,7 +269,6 @@ ou
                             supabase.table("whatsapp_messages").update({
                                 "status": "auto_sent"
                             }).eq("id", msg_id).execute()
-
                     
                     asyncio.create_task(delayed_reply())
                 
@@ -237,7 +277,7 @@ ou
                     send_notification_sync({
                         "title": f"📱 WhatsApp - {sender_name}",
                         "body": text_message[:100],
-                        "url": "/whatsapp",
+                        "url": "/communications?tab=whatsapp",
                         "type": "whatsapp"
                     })
                     
@@ -246,14 +286,15 @@ ou
                 send_notification_sync({
                     "title": f"📱 WhatsApp - {sender_name}",
                     "body": text_message[:100],
-                    "url": "/whatsapp",
+                    "url": "/communications?tab=whatsapp",
                     "type": "whatsapp"
                 })
         elif text_message:
+            # Message avec fichier (image, document, vidéo) → notification humaine
             send_notification_sync({
                 "title": f"📱 WhatsApp - {sender_name}",
                 "body": text_message[:100],
-                "url": "/whatsapp",
+                "url": "/communications?tab=whatsapp",
                 "type": "whatsapp"
             })
     
@@ -285,7 +326,7 @@ async def whatsapp_send_message(to: str, message: str):
 # ========== ENDPOINTS API ==========
 @app.get("/api/whatsapp/conversations")
 async def get_whatsapp_conversations(days: int = 30):
-    """Récupère les conversations WhatsApp du mois"""
+    """Récupère les conversations WhatsApp du mois (hors groupes)"""
     if not supabase:
         return {"conversations": []}
     
@@ -295,7 +336,9 @@ async def get_whatsapp_conversations(days: int = 30):
     conversations = {}
     for msg in result.data:
         sender = msg.get("from", "")
-        if sender.endswith("@g.us") or len(sender) < 10:
+        
+        # ========== EXCLURE LES GROUPES ==========
+        if "@g.us" in sender or sender.endswith("@g.us") or "g.us" in sender:
             continue
         
         from_name = msg.get("from_name", "Inconnu")
@@ -315,11 +358,23 @@ async def get_whatsapp_conversations(days: int = 30):
         if len(message_text) > 150:
             message_text = message_text[:150] + "..."
         
+        # Ajouter l'aperçu du fichier si présent
+        if msg.get("attachment_url"):
+            attachment_type = msg.get("attachment_type", "file")
+            if attachment_type == "image":
+                message_text = f"🖼️ [Image] {message_text}"
+            elif attachment_type == "document":
+                message_text = f"📎 [Document] {message_text}"
+            elif attachment_type == "video":
+                message_text = f"🎥 [Vidéo] {message_text}"
+        
         conversations[sender]["messages"].append({
             "id": msg.get("id"),
             "message": message_text,
             "status": msg.get("status", "pending"),
-            "created_at": msg.get("created_at")
+            "created_at": msg.get("created_at"),
+            "attachment_url": msg.get("attachment_url"),
+            "attachment_type": msg.get("attachment_type")
         })
         
         if msg.get("status") == "pending":
@@ -2062,6 +2117,43 @@ RÈGLES :
 - label est obligatoire
 
 # ================================================================
+# RÈGLE POUR LES EMAILS
+# ================================================================
+
+Quand Rebecca demande d'envoyer un email, tu dois d'abord lui demander les informations nécessaires :
+
+1. L'adresse email du destinataire (si non fournie)
+2. Le sujet exact (si non fourni)
+3. Le contenu du message (si non fourni)
+
+Ne propose PAS le bouton [ACTION:{"type":"send_email"...}] tant que toutes les informations ne sont pas disponibles.
+
+Exemple de bonne réponse :
+"Bien sûr Rebecca. Pour envoyer cet email, j'ai besoin de :
+- L'adresse email du destinataire
+- Le sujet exact
+- Ce que tu veux dire dans le message
+
+Tu peux me donner ces infos ?"
+
+# Règle pour les emails
+Quand Rebecca demande d'envoyer un email, tu NE DOIS PAS envoyer l'email directement.
+
+À la place :
+1. Demande l'adresse email complète du destinataire (si non fournie)
+2. Demande le sujet exact
+3. Demande le contenu du message
+4. Propose un aperçu
+5. Ensuite seulement, propose le bouton [ACTION:{"type":"send_email"...}]
+
+Exemple de réponse :
+"D'accord Rebecca. Pour envoyer l'email à Jean, peux-tu me donner :
+- Son adresse email complète (exemple: jean@entreprise.com)
+- Le sujet exact
+- Ce que tu veux dire dans le message
+
+Je préparerai l'email pour toi après.
+# ================================================================
 # TA PERSONNALITÉ
 # ================================================================
 
@@ -2886,16 +2978,28 @@ async def chat_endpoint(request: ChatRequest):
                 logger.info(f"💾 Save memory: {args['key']} -> {args['value']}")
 
             elif name == "send_email":
-                result = await send_email(EmailRequest(
-                    to=args.get("to"),
-                    subject=args.get("subject"),
-                    body=args.get("body")
-                ))
-                if result.get("success"):
-                    content = f"✅ Email envoyé avec succès à {args.get('to')}"
+                to = args.get("to", "")
+                subject = args.get("subject", "")
+                body = args.get("body", "")
+                
+                # Valider avant d'envoyer
+                if not to or "@" not in to:
+                    content = "❌ Je n'ai pas pu envoyer l'email car l'adresse du destinataire n'est pas valide. Peux-tu me donner l'adresse email complète (exemple: nom@domaine.com) ?"
+                elif not subject:
+                    content = "❌ Le sujet de l'email est manquant. Quel sujet souhaites-tu mettre ?"
+                elif not body:
+                    content = "❌ Le corps de l'email est vide. Que veux-tu dire dans ce message ?"
                 else:
-                    content = f"❌ Erreur d'envoi: {result.get('error')}"
-                logger.info(f"📧 Envoi email: {args.get('to')} - {result.get('success')}")
+                    result = await send_email(EmailRequest(
+                        to=to,
+                        subject=subject,
+                        body=body
+                    ))
+                    if result.get("success"):
+                        content = f"✅ Email envoyé avec succès à {to}\n\n📧 **Récapitulatif :**\n- Destinataire : {to}\n- Sujet : {subject}\n\n[ACTION:{\"type\":\"confirm_email_sent\",\"params\":{{\"to\":\"{to}\",\"subject\":\"{subject}\"}},\"label\":\"✅ Confirmer\"}]"
+                    else:
+                        content = f"❌ Erreur d'envoi: {result.get('error')}. Vérifie l'adresse email et réessaie."
+                logger.info(f"📧 Envoi email: {to} - {result.get('success') if 'result' in locals() else False}")
             
             
             elif name == "create_task":
@@ -2947,10 +3051,52 @@ async def chat_endpoint(request: ChatRequest):
         logger.info(f"📨 Réponse envoyée")
         return {"reply": clean_response}
         
-    except Exception as e:
-        logger.error(f"❌ Erreur chat: {e}")
-        return {"reply": "Désolée Rebecca, un souci technique survient. Je reviens vers toi dans un instant."}
-
+        except Exception as e:
+            logger.error(f"❌ Erreur chat: {e}")
+            error_str = str(e)
+            
+            # Analyser le type d'erreur
+            if "email" in error_str.lower() or "EmailRequest" in error_str:
+                # Erreur liée à l'email
+                reply = """❌ L'adresse email n'est pas valide ou il manque des informations.
+        
+        Pour envoyer un email, j'ai besoin de :
+        1. L'adresse email du destinataire (exemple: jean@email.com)
+        2. Le sujet du message
+        3. Le contenu du message
+        
+        Peux-tu me donner ces informations ? Je préparerai l'email pour toi."""
+        
+            elif "rate limit" in error_str.lower() or "429" in error_str:
+                # Limite d'API dépassée
+                reply = """⏳ L'IA est momentanément surchargée.
+        
+        Attends 30 secondes, puis réécris-moi ta demande. Je garde ton message en mémoire."""
+        
+            elif "timeout" in error_str.lower() or "timed out" in error_str:
+                # Délai d'attente dépassé
+                reply = """🌐 Le serveur met trop de temps à répondre.
+        
+        Peux-tu reformuler ta demande plus simplement ? Ou attends 1 minute avant de réessayer."""
+        
+            elif "validation" in error_str.lower():
+                # Erreur de validation (champ manquant)
+                reply = """❌ Il manque des informations pour traiter ta demande.
+        
+        Dis-moi précisément ce que tu veux faire, et je te guiderai étape par étape."""
+        
+            else:
+                # Erreur générique
+                reply = """❌ Je rencontre un problème technique.
+        
+        Peux-tu me dire exactement ce que tu voulais faire ? Je vais t'aider autrement.
+        
+        Par exemple :
+        - "Envoie un email à Jean pour le devis"
+        - "Crée une tâche pour la ferme"
+        - "Ajoute une dépense de 5000 CFA" """
+        
+            return {"reply": reply, "error_type": type(e).__name__, "error_message": error_str[:200]}
 
 # =====================================================
 # API ROUTES - SPECIALIZED (EXISTANT)
@@ -4143,12 +4289,27 @@ class EmailRequest(BaseModel):
     to_name: Optional[str] = None
 
 @app.post("/api/email/send")
-async def send_email(request: EmailRequest):
-    """Envoie un email via Brevo"""
-    if not BREVO_API_KEY:
-        return {"success": False, "error": "BREVO_API_KEY non configurée"}
-    
+async def send_email(request: Request):
+    """Envoie un email via Brevo avec meilleure validation"""
     try:
+        body = await request.json()
+        to = body.get("to", "")
+        subject = body.get("subject", "")
+        body_content = body.get("body", "")
+        
+        # Validation stricte de l'email
+        if not to or "@" not in to or "." not in to:
+            return {"success": False, "error": "Adresse email invalide. Veuillez fournir une adresse valide (exemple: nom@domaine.com)"}
+        
+        if not subject:
+            return {"success": False, "error": "Le sujet de l'email est requis"}
+        
+        if not body_content:
+            return {"success": False, "error": "Le corps de l'email est requis"}
+        
+        if not BREVO_API_KEY:
+            return {"success": False, "error": "Service email non configuré"}
+        
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 "https://api.brevo.com/v3/smtp/email",
@@ -4163,18 +4324,18 @@ async def send_email(request: EmailRequest):
                         "email": BREVO_SENDER_EMAIL
                     },
                     "to": [{
-                        "email": request.to,
-                        "name": request.to_name or request.to.split("@")[0]
+                        "email": to,
+                        "name": to.split("@")[0]
                     }],
-                    "subject": request.subject,
-                    "htmlContent": request.body,
+                    "subject": subject,
+                    "htmlContent": body_content,
                 },
                 timeout=30.0
             )
             
             if response.status_code == 201:
-                logger.info(f"📧 Email envoyé à {request.to}")
-                return {"success": True, "message": "Email envoyé"}
+                logger.info(f"📧 Email envoyé à {to}")
+                return {"success": True, "message": "Email envoyé", "to": to}
             else:
                 logger.error(f"Erreur Brevo: {response.text}")
                 return {"success": False, "error": response.text}
