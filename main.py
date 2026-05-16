@@ -4472,7 +4472,7 @@ async def clean_expired_subscriptions():
 # VOIX LIVE AVEC ELEVENLABS
 # =====================================================
 
-ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
+ELEVENLABS_API_KEY = "sk_5d0df2799f016e346b4d5e7a7d1e1d66e027e32afa26d0ba"
 ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "EXAVITQu4vr4xnSDxMaL")
 
 @app.post("/api/voice/speak")
@@ -7475,7 +7475,6 @@ Note : Pour chaque critère, note de 1 à 5. Le score total est la somme des not
 # TEXT-TO-SPEECH AVEC ELEVENLABS (NOUVELLE API)
 # =====================================================
 
-ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
 ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "uju3wxzG5OhpWcoi3SMy")  # Voix Bella
 
 
