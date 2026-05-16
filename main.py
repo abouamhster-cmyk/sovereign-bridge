@@ -6105,7 +6105,6 @@ async def send_morning_notification():
         return {"success": False, "error": str(e)}
 
 
-
 @app.put("/api/profile/identity")
 async def update_identity(request: Request):
     """Met à jour uniquement l'identité (preferred_name, full_name, birthday)"""
@@ -6147,6 +6146,7 @@ async def update_identity(request: Request):
         logger.error(f"Erreur update_identity: {e}")
         return {"success": False, "error": str(e)}
 
+
 @app.put("/api/profile/children")
 async def update_children(request: Request):
     """Met à jour uniquement les enfants"""
@@ -6180,8 +6180,8 @@ async def update_children(request: Request):
         return {"success": False, "error": str(e)}
 
 
- @app.put("/api/profile/projects")
- async def update_projects(request: Request):
+@app.put("/api/profile/projects")
+async def update_projects(request: Request):
     """Met à jour uniquement les projets"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
@@ -6246,8 +6246,6 @@ async def update_goals(request: Request):
     except Exception as e:
         logger.error(f"Erreur update_goals: {e}")
         return {"success": False, "error": str(e)}
-
-
 # =====================================================
 # EXECUTION GUIDE - STEP BY STEP
 # =====================================================
