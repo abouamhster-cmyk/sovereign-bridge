@@ -7604,13 +7604,13 @@ async def deepgram_speak(request: Dict[str, Any]):
     
     try:
         import re
-        # Nettoyer le texte des balises et caractères spéciaux
+        # Nettoyer le texte
         clean_text = re.sub(r'\[ACTION:[^\]]*\]', '', text)
         clean_text = re.sub(r'\*\*.*?\*\*', '', clean_text)
         clean_text = re.sub(r'[✅🎯✨⚠️📋🎉]', '', clean_text)
         clean_text = ' '.join(clean_text.split())
         
-        # Deepgram API v1/speak avec modèle dans l'URL
+        # CORRECTION CRITIQUE : modèle dans l'URL, pas dans le body
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 f"https://api.deepgram.com/v1/speak?model={voice}",
@@ -7626,12 +7626,7 @@ async def deepgram_speak(request: Dict[str, Any]):
             if response.status_code == 200:
                 import base64
                 audio_base64 = base64.b64encode(response.content).decode('utf-8')
-                return {
-                    "success": True, 
-                    "audio": audio_base64, 
-                    "format": "mp3",
-                    "voice": voice
-                }
+                return {"success": True, "audio": audio_base64, "format": "mp3", "voice": voice}
             else:
                 logger.error(f"Erreur Deepgram: {response.text}")
                 return {"success": False, "error": response.text}
@@ -7639,8 +7634,6 @@ async def deepgram_speak(request: Dict[str, Any]):
     except Exception as e:
         logger.error(f"Erreur Deepgram: {e}")
         return {"success": False, "error": str(e)}
-
-
 
 
 # =====================================================
