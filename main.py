@@ -8307,7 +8307,7 @@ async def generate_welcome_message(request: Dict[str, Any]):
     elif last_visit_days == 1:
         visit_context = "ravi de te revoir aujourd'hui"
     elif last_visit_days <= 3:
-        visit_context = f "content de te revoir après {last_visit_days} jours"
+        visit_context = f"content de te revoir après {last_visit_days} jours"
     else:
         visit_context = f "ravi de te revoir ! Cela faisait {last_visit_days} jours"
     
