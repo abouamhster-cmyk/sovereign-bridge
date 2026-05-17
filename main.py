@@ -27,7 +27,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://sovereignallmighty.netlify.app",
-        "http://localhost:3000"
+        "http://localhost:3000",
+        "https://sovereign-app-ashen.vercel.app", 
+        "https://*.vercel.app"
     ],
     allow_credentials=True,
     allow_methods=["*"],
