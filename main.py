@@ -21,16 +21,18 @@ import httpx
 # =====================================================
 # FASTAPI INITIALIZATION
 # =====================================================
-
 app = FastAPI()
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://sovereignallmighty.netlify.app", "http://localhost:3000", "*"],
+    allow_origins=[
+        "https://sovereignallmighty.netlify.app",
+        "http://localhost:3000"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 # =====================================================
 # WHATSAPP WEBHOOK - PLACÉ ICI APRÈS CORS
 # =====================================================
@@ -289,14 +291,6 @@ ou
                     "url": "/communications?tab=whatsapp",
                     "type": "whatsapp"
                 })
-        elif text_message:
-            # Message avec fichier (image, document, vidéo) → notification humaine
-            send_notification_sync({
-                "title": f"📱 WhatsApp - {sender_name}",
-                "body": text_message[:100],
-                "url": "/communications?tab=whatsapp",
-                "type": "whatsapp"
-            })
     
     return {"status": "ok"}
 
@@ -610,6 +604,28 @@ GREENAPI_ID_INSTANCE = os.environ.get("GREENAPI_ID_INSTANCE")
 GREENAPI_API_TOKEN = os.environ.get("GREENAPI_API_TOKEN")
 GREENAPI_BASE_URL = f"https://api.green-api.com/waInstance{GREENAPI_ID_INSTANCE}" if GREENAPI_ID_INSTANCE else None
 
+# =====================================================
+# USER CONTEXT
+# =====================================================
+
+DEFAULT_USER_ID = os.environ.get("DEFAULT_USER_ID", "rebecca")
+
+def get_request_user_id(request_data: Dict[str, Any] = None) -> str:
+    """
+    Récupère le user_id envoyé par le frontend.
+    Si aucun user_id n'est fourni, on garde DEFAULT_USER_ID pour ne pas casser l'app actuelle.
+    """
+    if request_data and request_data.get("user_id"):
+        return request_data.get("user_id")
+    return DEFAULT_USER_ID
+
+def normalize_user_id(user_id: Optional[str] = None) -> str:
+    """
+    Retourne un user_id propre.
+    Si rien n'est fourni, utilise DEFAULT_USER_ID.
+    """
+    return user_id or DEFAULT_USER_ID
+
 
 if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY manquante")
@@ -640,22 +656,22 @@ AVAILABLE_TABLES = [
 ]
 
 ALLOWED_FIELDS = {
-    "spending": ["title", "amount", "category", "date", "notes", "verified", "mission_id", "project", "beneficiary"],
-    "tasks": ["title", "status", "due_date", "estimated_time", "mission_id", "project", "notes", "sync_calendar", "calendar_event_id", "calendar_synced", "calendar_link"],
-    "wins": ["title", "category", "date", "notes", "celebration_emoji"],
-    "family_events": ["title", "child_name", "category", "date", "notes"],
-    "missions": ["name", "category", "status", "priority", "deadline", "owner", "revenue_potential", "strategic_value", "energy_cost"],
-    "revenue": ["source", "amount", "date", "notes", "mission_id", "project"],
-    "documents": ["name", "type", "status", "due_date", "url", "missing_pieces", "notes", "mission_id"],
-    "content": ["title", "hook", "platform", "content_type", "status", "publish_date", "cta", "mission_id"],
-    "relocation_tasks": ["title", "category", "status", "due_date", "notes"],
-    "farm_infrastructure": ["name", "type", "status", "location_on_site", "completed_date", "responsible_person", "notes"],
-    "farm_production_units": ["name", "category", "status", "current_capacity", "start_date", "expected_first_revenue", "technical_lead", "notes"],
-    "farm_spending": ["title", "amount", "category", "project_area", "verified", "notes"],
-    "farm_team": ["name", "role", "area", "status", "phone", "notes"],
+    "spending": ["title", "amount", "category", "date", "notes", "verified", "mission_id", "project", "beneficiary", "user_id"],
+    "tasks": ["title", "status", "due_date", "estimated_time", "mission_id", "project", "notes", "sync_calendar", "calendar_event_id", "calendar_synced", "calendar_link", "user_id"],
+    "wins": ["title", "category", "date", "notes", "celebration_emoji", "user_id"],
+    "family_events": ["title", "child_name", "category", "date", "notes", "user_id"],
+    "missions": ["name", "category", "status", "priority", "deadline", "owner", "revenue_potential", "strategic_value", "energy_cost", "user_id"],
+    "revenue": ["source", "amount", "date", "notes", "mission_id", "project", "user_id"],
+    "documents": ["name", "type", "status", "due_date", "url", "missing_pieces", "notes", "mission_id", "user_id"],
+    "content": ["title", "hook", "platform", "content_type", "status", "publish_date", "cta", "mission_id", "user_id"],
+    "relocation_tasks": ["title", "category", "status", "due_date", "notes", "user_id"],
+    "farm_infrastructure": ["name", "type", "status", "location_on_site", "completed_date", "responsible_person", "notes", "user_id"],
+    "farm_production_units": ["name", "category", "status", "current_capacity", "start_date", "expected_first_revenue", "technical_lead", "notes", "user_id"],
+    "farm_spending": ["title", "amount", "category", "project_area", "verified", "notes", "user_id"],
+    "farm_team": ["name", "role", "area", "status", "phone", "notes", "user_id"],
     "user_memory": ["category", "key", "value", "user_id"],
     "mood_entries": ["mood", "date", "user_id"],
-    "user_profile": ["user_id", "full_name", "preferred_name", "birthday", "children", "projects", "communication_preferences", "current_goals", "upcoming_milestones", "key_contacts"],
+    "user_profile": ["user_id", "full_name", "preferred_name", "birthday", "children", "projects", "communication_preferences", "current_goals", "upcoming_milestones", "key_contacts", "user_id"],
     "brain_dump_analyses": ["content", "analysis", "user_id"],
     "checklists": ["title", "steps", "completed_steps", "progress", "user_id"],
     "drafts": ["type", "content", "context", "user_id"],
@@ -883,12 +899,14 @@ class MemorySaveRequest(BaseModel):
     category: str
     key: str
     value: str
+    user_id: Optional[str] = None
 
 
 class ExecuteTaskRequest(BaseModel):
     title: str
     due_date: Optional[str] = None
     priority: str = "normal"
+    user_id: Optional[str] = None
 
 
 # =====================================================
@@ -901,6 +919,7 @@ def send_notification_sync(notification_data: Dict[str, Any]) -> List[Dict]:
         logger.error("Supabase non configuré")
         return []
     
+    user_id = notification_data.get("user_id", DEFAULT_USER_ID)
     notif_type = notification_data.get("type", "default")
     today = datetime.now().date().isoformat()
     
@@ -913,7 +932,7 @@ def send_notification_sync(notification_data: Dict[str, Any]) -> List[Dict]:
             existing = supabase.table("notifications_log").select("*")\
                 .eq("type", notif_type)\
                 .eq("date", today)\
-                .eq("user_id", "rebecca")\
+                .eq("user_id", user_id)\
                 .execute()
             
             if existing.data and len(existing.data) > 0:
@@ -931,7 +950,7 @@ def send_notification_sync(notification_data: Dict[str, Any]) -> List[Dict]:
             "body": notification_data.get("body", ""),
             "type": notif_type,
             "url": notification_data.get("url", "/"),
-            "user_id": "rebecca",
+            "user_id": user_id,
             "created_at": datetime.now().isoformat(),
             "read": False
         }
@@ -1010,14 +1029,14 @@ def send_notification_sync(notification_data: Dict[str, Any]) -> List[Dict]:
             existing_log = supabase.table("notifications_log").select("*")\
                 .eq("type", notif_type)\
                 .eq("date", today)\
-                .eq("user_id", "rebecca")\
+                .eq("user_id", user_id)\
                 .execute()
             
             if not existing_log.data:
                 supabase.table("notifications_log").insert({
                     "type": notif_type,
                     "date": today,
-                    "user_id": "rebecca",
+                    "user_id": user_id,
                     "sent_at": datetime.now().isoformat(),
                     "metadata": {
                         "title": notification_data.get("title"),
@@ -1043,7 +1062,12 @@ def get_days_late(date_str: str) -> int:
 
 
 
-def store_chat_session(user_message: str, assistant_response: str, tools_used: List[str] = None):
+def store_chat_session(
+    user_message: str,
+    assistant_response: str,
+    tools_used: List[str] = None,
+    user_id: str = DEFAULT_USER_ID
+):
     """Stocke la session de chat dans Supabase"""
     if not supabase:
         return
@@ -1053,7 +1077,7 @@ def store_chat_session(user_message: str, assistant_response: str, tools_used: L
             "user_message": user_message[:500],
             "assistant_response": assistant_response[:1000],
             "tools_used": tools_used or [],
-            "user_id": "rebecca",
+            "user_id": user_id,
             "created_at": datetime.now().isoformat()
         }).execute()
         logger.info("💾 Conversation stockée")
@@ -1063,7 +1087,7 @@ def store_chat_session(user_message: str, assistant_response: str, tools_used: L
 # FONCTIONS POUR LA MÉMOIRE UTILISATEUR
 # =====================================================
 
-async def get_user_memory_context(user_id: str = "rebecca") -> str:
+async def get_user_memory_context(user_id: str = DEFAULT_USER_ID) -> str:
     """Récupère la mémoire utilisateur"""
     if not supabase:
         return ""
@@ -1097,7 +1121,7 @@ async def get_user_memory_context(user_id: str = "rebecca") -> str:
         return ""
 
 
-async def save_user_memory(category: str, key: str, value: str, user_id: str = "rebecca"):
+async def save_user_memory(category: str, key: str, value: str, user_id: str = DEFAULT_USER_ID):
     """Sauvegarde une information dans la mémoire utilisateur"""
     if not supabase:
         return False
@@ -1134,7 +1158,7 @@ async def save_user_memory(category: str, key: str, value: str, user_id: str = "
 # GESTION DES CONTACTS
 # =====================================================
 
-async def get_contact_number(contact_name: str, user_id: str = "rebecca") -> dict:
+async def get_contact_number(contact_name: str, user_id: str = DEFAULT_USER_ID) -> dict:
     """Cherche un numéro de téléphone pour un contact.
     Retourne: {"found": bool, "phone": str, "source": str}
     """
@@ -1184,7 +1208,7 @@ def extract_phone_from_text(text: str) -> str:
     return None
 
 
-async def save_contact_memory(contact_name: str, phone: str, user_id: str = "rebecca"):
+async def save_contact_memory(contact_name: str, phone: str, user_id: str = DEFAULT_USER_ID):
     """Sauvegarde un contact dans la mémoire rapide"""
     if not supabase:
         return False
@@ -1357,15 +1381,29 @@ def db_delete(table: str, id: str) -> Dict:
         return {"success": False, "error": str(e)}
 
 
-def get_financial_summary() -> Dict:
+def get_financial_summary(user_id: str = DEFAULT_USER_ID) -> Dict:
     if not supabase:
         return {"total_revenue": 0, "total_spending": 0, "net_balance": 0}
     
     try:
-        rev_result = supabase.table("revenue").select("amount").execute()
+        user_id = normalize_user_id(user_id)
+
+        rev_result = (
+            supabase.table("revenue")
+            .select("amount")
+            .eq("user_id", user_id)
+            .execute()
+        )
+
         total_revenue = sum(r.get("amount", 0) for r in rev_result.data)
         
-        spend_result = supabase.table("spending").select("amount").execute()
+        spend_result = (
+            supabase.table("spending")
+            .select("amount")
+            .eq("user_id", user_id)
+            .execute()
+        )
+
         total_spending = sum(s.get("amount", 0) for s in spend_result.data)
         
         return {
@@ -1378,13 +1416,22 @@ def get_financial_summary() -> Dict:
         logger.error(f"Erreur financial_summary: {e}")
         return {"total_revenue": 0, "total_spending": 0, "net_balance": 0}
 
-
-def get_priority_tasks(limit: int = 10) -> List[Dict]:
+def get_priority_tasks(limit: int = 10, user_id: str = DEFAULT_USER_ID) -> List[Dict]:
     if not supabase:
         return []
     
     try:
-        result = supabase.table("tasks").select("*").eq("status", "in_progress").limit(limit).execute()
+        user_id = normalize_user_id(user_id)
+
+        result = (
+            supabase.table("tasks")
+            .select("*")
+            .eq("user_id", user_id)
+            .eq("status", "in_progress")
+            .limit(limit)
+            .execute()
+        )
+
         return result.data if result.data else []
     except Exception as e:
         logger.error(f"Erreur priority_tasks: {e}")
@@ -1397,21 +1444,26 @@ def get_priority_tasks(limit: int = 10) -> List[Dict]:
 async def save_memory(request: MemorySaveRequest):
     """Sauvegarde une information dans la mémoire utilisateur"""
     try:
-        result = await save_user_memory(request.category, request.key, request.value)
+        user_id = request.user_id or DEFAULT_USER_ID
+        result = await save_user_memory(
+            request.category,
+            request.key,
+            request.value,
+            user_id=user_id
+        )
         return {"success": result, "message": "Mémoire sauvegardée" if result else "Erreur"}
     except Exception as e:
         logger.error(f"Erreur save_memory: {e}")
         return {"success": False, "error": str(e)}
 
-
 @app.get("/api/memory/get")
-async def get_memory(category: str = None, key: str = None):
+async def get_memory(category: str = None, key: str = None, user_id: str = DEFAULT_USER_ID):
     """Récupère les informations de la mémoire utilisateur"""
     if not supabase:
         return {"success": False, "data": []}
     
     try:
-        query = supabase.table("user_memory").select("*").eq("user_id", "rebecca")
+        query = supabase.table("user_memory").select("*").eq("user_id", user_id)
         if category:
             query = query.eq("category", category)
         if key:
@@ -1423,7 +1475,6 @@ async def get_memory(category: str = None, key: str = None):
         logger.error(f"Erreur get_memory: {e}")
         return {"success": False, "error": str(e)}
 
-
 @app.post("/api/execute/create-task")
 async def create_task_from_conversation(request: ExecuteTaskRequest):
     """Crée une tâche à partir d'une conversation (mode exécution)"""
@@ -1431,30 +1482,32 @@ async def create_task_from_conversation(request: ExecuteTaskRequest):
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
+        user_id = request.user_id or DEFAULT_USER_ID
+        
         result = supabase.table("tasks").insert({
             "title": request.title,
             "status": "today",
             "priority": request.priority,
             "due_date": request.due_date,
+            "user_id": user_id,
             "created_at": datetime.now().isoformat()
         }).execute()
         
-        # Envoyer une notification
         send_notification_sync({
             "title": "📋 Nouvelle tâche créée",
             "body": f"'{request.title}' a été ajoutée à vos tâches",
             "url": "/tasks",
-            "type": "task"
+            "type": "task",
+            "user_id": user_id
         })
         
-         # Déclencher le webhook
         if result.data and len(result.data) > 0:
             asyncio.create_task(trigger_webhook("task.created", {
                 "task": result.data[0],
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
+                "user_id": user_id
             }))
             logger.info(f"🔗 Webhook déclenché pour task.created: {request.title}")
-        # ========================================
         
         return {"success": True, "task": result.data[0] if result.data else None}
     except Exception as e:
@@ -1471,20 +1524,28 @@ async def save_mood(request: Dict[str, Any]):
     try:
         today = datetime.now().date().isoformat()
         mood = request.get("mood")
+        user_id = get_request_user_id(request)
         
-        # Vérifier si une entrée existe déjà aujourd'hui
-        existing = supabase.table("mood_entries").select("*").eq("date", today).execute()
+        existing = (
+            supabase
+            .table("mood_entries")
+            .select("*")
+            .eq("date", today)
+            .eq("user_id", user_id)
+            .execute()
+        )
         
         if existing.data:
-            supabase.table("mood_entries").update({"mood": mood}).eq("id", existing.data[0]["id"]).execute()
+            supabase.table("mood_entries").update({
+                "mood": mood
+            }).eq("id", existing.data[0]["id"]).execute()
         else:
             supabase.table("mood_entries").insert({
                 "mood": mood,
                 "date": today,
-                "user_id": "rebecca"
+                "user_id": user_id
             }).execute()
         
-        # Message d'encouragement basé sur l'humeur
         encouragement = ""
         if mood == "fatiguée":
             encouragement = "Prends soin de toi aujourd'hui. Une petite chose à la fois."
@@ -1500,14 +1561,25 @@ async def save_mood(request: Dict[str, Any]):
 
 
 @app.get("/api/mood/history")
-async def get_mood_history(days: int = 30):
+async def get_mood_history(days: int = 30, user_id: str = DEFAULT_USER_ID):
     """Récupère l'historique des humeurs"""
     if not supabase:
         return {"success": False, "data": []}
     
     try:
+        user_id = normalize_user_id(user_id)
         start_date = (datetime.now().date() - timedelta(days=days)).isoformat()
-        result = supabase.table("mood_entries").select("*").gte("date", start_date).order("date", desc=True).execute()
+
+        result = (
+            supabase
+            .table("mood_entries")
+            .select("*")
+            .eq("user_id", user_id)
+            .gte("date", start_date)
+            .order("date", desc=True)
+            .execute()
+        )
+
         return {"success": True, "data": result.data}
     except Exception as e:
         logger.error(f"Erreur get_mood_history: {e}")
@@ -1519,18 +1591,19 @@ async def get_mood_history(days: int = 30):
 # =====================================================
 
 @app.post("/api/check-task-reminders")
-async def check_task_reminders():
+async def check_task_reminders(request: Dict[str, Any] = None):
     """Vérifie les tâches et envoie des rappels (1x par jour max)"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
     today = datetime.now().date().isoformat()
+    user_id = get_request_user_id(request or {})
     
     # Vérifier si déjà envoyé aujourd'hui
     existing = supabase.table("notifications_log").select("*")\
         .eq("type", "task_reminder")\
         .eq("date", today)\
-        .eq("user_id", "rebecca")\
+        .eq("user_id", user_id)\
         .execute()
     
     if existing.data:
@@ -1539,8 +1612,23 @@ async def check_task_reminders():
     notifications_sent = []
     
     try:
-        tasks_today = supabase.table("tasks").select("*").eq("due_date", today).neq("status", "done").execute()
-        overdue_tasks = supabase.table("tasks").select("*").lt("due_date", today).neq("status", "done").execute()
+        tasks_today = (
+        supabase.table("tasks")
+        .select("*")
+        .eq("user_id", user_id)
+        .eq("due_date", today)
+        .neq("status", "done")
+        .execute()
+        )
+        
+        overdue_tasks = (
+            supabase.table("tasks")
+            .select("*")
+            .eq("user_id", user_id)
+            .lt("due_date", today)
+            .neq("status", "done")
+            .execute()
+        )
         
         # Un seul message regroupé, pas un par tâche
         if overdue_tasks.data:
@@ -1549,7 +1637,8 @@ async def check_task_reminders():
                 "title": "📋 Tâches en retard",
                 "body": body,
                 "url": "/tasks",
-                "type": "task"
+                "type": "task",
+                "user_id": user_id
             })
             notifications_sent.append("overdue_tasks")
         elif tasks_today.data:
@@ -1558,7 +1647,8 @@ async def check_task_reminders():
                 "title": "📋 Tâches du jour",
                 "body": body,
                 "url": "/tasks",
-                "type": "task"
+                "type": "task",
+                "user_id": user_id
             })
             notifications_sent.append("tasks_today")
         
@@ -1567,7 +1657,7 @@ async def check_task_reminders():
             supabase.table("notifications_log").insert({
                 "type": "task_reminder",
                 "date": today,
-                "user_id": "rebecca",
+                "user_id": user_id,
                 "sent_at": datetime.now().isoformat()
             }).execute()
         
@@ -1579,17 +1669,19 @@ async def check_task_reminders():
 
 
 @app.post("/api/mission-reminders")
-async def mission_reminders():
+async def mission_reminders(request: Dict[str, Any] = None):
     """Rappel pour les missions inactives (1x par semaine max)"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
+
+    user_id = get_request_user_id(request or {})
     
     # Vérifier si déjà envoyé cette semaine
     week_ago = (datetime.now() - timedelta(days=7)).isoformat()
     existing = supabase.table("notifications_log").select("*")\
         .eq("type", "mission_reminder")\
         .gte("sent_at", week_ago)\
-        .eq("user_id", "rebecca")\
+        .eq("user_id", user_id)\
         .execute()
     
     if existing.data:
@@ -1599,8 +1691,14 @@ async def mission_reminders():
     
     try:
         five_days_ago = (datetime.now() - timedelta(days=5)).isoformat()
-        stale_missions = supabase.table("missions").select("*").eq("status", "active").lt("updated_at", five_days_ago).execute()
-        
+        stale_missions = (
+            supabase.table("missions")
+            .select("*")
+            .eq("user_id", user_id)
+            .eq("status", "active")
+            .lt("updated_at", five_days_ago)
+            .execute()
+        )
         if stale_missions.data:
             mission_names = ", ".join([m["name"] for m in stale_missions.data[:3]])
             if len(stale_missions.data) > 3:
@@ -1610,7 +1708,8 @@ async def mission_reminders():
                 "title": "🎯 Missions inactives",
                 "body": f"{len(stale_missions.data)} mission(s) sans activité : {mission_names}",
                 "url": "/missions",
-                "type": "mission"
+                "type": "mission",
+                "user_id": user_id
             })
             notifications_sent = [m["id"] for m in stale_missions.data]
             
@@ -1618,7 +1717,7 @@ async def mission_reminders():
             supabase.table("notifications_log").insert({
                 "type": "mission_reminder",
                 "date": datetime.now().date().isoformat(),
-                "user_id": "rebecca",
+                "user_id": user_id,
                 "sent_at": datetime.now().isoformat()
             }).execute()
         
@@ -1630,10 +1729,12 @@ async def mission_reminders():
 
 
 @app.post("/api/document-reminders")
-async def document_reminders():
+async def document_reminders(request: Dict[str, Any] = None):
     """Rappel pour les documents proches de l'échéance (1x par jour max)"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
+
+    user_id = get_request_user_id(request or {})
     
     today = datetime.now().date().isoformat()
     
@@ -1641,7 +1742,7 @@ async def document_reminders():
     existing = supabase.table("notifications_log").select("*")\
         .eq("type", "document_reminder")\
         .eq("date", today)\
-        .eq("user_id", "rebecca")\
+        .eq("user_id", user_id)\
         .execute()
     
     if existing.data:
@@ -1652,9 +1753,23 @@ async def document_reminders():
     try:
         next_week = (datetime.now().date() + timedelta(days=7)).isoformat()
         
-        expiring_docs = supabase.table("documents").select("*").gte("due_date", today).lte("due_date", next_week).neq("status", "approved").execute()
-        overdue_docs = supabase.table("documents").select("*").lt("due_date", today).neq("status", "approved").execute()
-        
+        expiring_docs = (
+            supabase.table("documents")
+            .select("*")
+            .eq("user_id", user_id)
+            .gte("due_date", today)
+            .lte("due_date", next_week)
+            .neq("status", "approved")
+            .execute()
+        )
+        overdue_docs = (
+            supabase.table("documents")
+            .select("*")
+            .eq("user_id", user_id)
+            .lt("due_date", today)
+            .neq("status", "approved")
+            .execute()
+        )        
         # Priorité aux documents en retard
         if overdue_docs.data:
             doc_names = ", ".join([d["name"] for d in overdue_docs.data[:3]])
@@ -1662,7 +1777,8 @@ async def document_reminders():
                 "title": "⚠️ Documents en retard",
                 "body": f"{len(overdue_docs.data)} document(s) en retard : {doc_names}",
                 "url": "/documents",
-                "type": "document"
+                "type": "document",
+                "user_id": user_id
             })
             notifications_sent = [d["id"] for d in overdue_docs.data]
         elif expiring_docs.data:
@@ -1671,7 +1787,8 @@ async def document_reminders():
                 "title": "📄 Documents bientôt dus",
                 "body": f"{len(expiring_docs.data)} document(s) à rendre dans {days_left} jour(s)",
                 "url": "/documents",
-                "type": "document"
+                "type": "document",
+                "user_id": user_id
             })
             notifications_sent = [d["id"] for d in expiring_docs.data]
         
@@ -1679,7 +1796,7 @@ async def document_reminders():
             supabase.table("notifications_log").insert({
                 "type": "document_reminder",
                 "date": today,
-                "user_id": "rebecca",
+                "user_id": user_id,
                 "sent_at": datetime.now().isoformat()
             }).execute()
         
@@ -1691,17 +1808,19 @@ async def document_reminders():
 
 
 @app.post("/api/celebration-reminder")
-async def celebration_reminder():
+async def celebration_reminder(request: Dict[str, Any] = None):
     """Rappel pour encourager l'enregistrement des victoires (1x par semaine max)"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
+
+    user_id = get_request_user_id(request or {})
     
     # Vérifier si déjà envoyé cette semaine
     week_ago = (datetime.now() - timedelta(days=7)).isoformat()
     existing = supabase.table("notifications_log").select("*")\
         .eq("type", "celebration_reminder")\
         .gte("sent_at", week_ago)\
-        .eq("user_id", "rebecca")\
+        .eq("user_id", user_id)\
         .execute()
     
     if existing.data:
@@ -1709,20 +1828,21 @@ async def celebration_reminder():
     
     try:
         three_days_ago = (datetime.now() - timedelta(days=3)).isoformat()
-        recent_wins = supabase.table("wins").select("*").gte("date", three_days_ago).execute()
+        recent_wins = (     supabase.table("wins")     .select("*")     .eq("user_id", user_id)     .gte("date", three_days_ago)     .execute() )
         
         if len(recent_wins.data) == 0:
             send_notification_sync({
                 "title": "🏆 Une petite victoire aujourd'hui ?",
                 "body": "Chaque pas compte. Même une petite chose mérite d'être célébrée ✨",
                 "url": "/wins",
-                "type": "win"
+                "type": "win",
+                "user_id": user_id
             })
             
             supabase.table("notifications_log").insert({
                 "type": "celebration_reminder",
                 "date": datetime.now().date().isoformat(),
-                "user_id": "rebecca",
+                "user_id": user_id,
                 "sent_at": datetime.now().isoformat()
             }).execute()
             
@@ -1769,11 +1889,13 @@ async def morning_brief_reminder():
 
 
 @app.post("/api/weekly-report-reminder")
-async def weekly_report_reminder():
+async def weekly_report_reminder(request: Dict[str, Any] = None):
     """Rappel pour le rapport hebdomadaire (le dimanche)"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
+    user_id = get_request_user_id(request or {})
+
     if datetime.now().weekday() != 6:
         return {"success": True, "sent": False, "message": "Pas le jour du rapport hebdomadaire"}
     
@@ -1781,16 +1903,31 @@ async def weekly_report_reminder():
         start_of_week = datetime.now().date() - timedelta(days=7)
         start_of_week_str = start_of_week.isoformat()
         
-        tasks_completed = supabase.table("tasks").select("*").eq("status", "done").gte("updated_at", start_of_week_str).execute()
-        wins = supabase.table("wins").select("*").gte("date", start_of_week_str).execute()
+        tasks_completed = (
+            supabase.table("tasks")
+            .select("*")
+            .eq("user_id", user_id)
+            .eq("status", "done")
+            .gte("updated_at", start_of_week_str)
+            .execute()
+        )
         
-        send_notification_sync({
+        wins = (
+            supabase.table("wins")
+            .select("*")
+            .eq("user_id", user_id)
+            .gte("date", start_of_week_str)
+            .execute()
+        )
+        
+       send_notification_sync({
             "title": "📊 Ton rapport hebdomadaire",
             "body": f"{len(tasks_completed.data)} tâches terminées, {len(wins.data)} victoires célébrées cette semaine",
             "url": "/weekly",
             "tag": "weekly_report",
             "type": "report",
-            "requireInteraction": False
+            "requireInteraction": False,
+            "user_id": user_id
         })
         
         return {"success": True, "sent": True, "message": "Rapport hebdomadaire envoyé"}
@@ -1832,16 +1969,17 @@ async def run_all_reminders():
 
 
 @app.post("/api/check-and-notify")
-async def check_and_notify():
+async def check_and_notify(request: Dict[str, Any] = None):
     """Endpoint existant - vérifie et envoie les notifications"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
     notifications_sent = []
+    user_id = get_request_user_id(request or {})
     
     try:
         today = datetime.now().date().isoformat()
-        tasks_today = supabase.table("tasks").select("*").eq("due_date", today).neq("status", "done").execute()
+        tasks_today = supabase.table("tasks").select("*").eq("user_id", user_id).eq("due_date", today).neq("status", "done").execute()
         
         for task in tasks_today.data:
             send_notification_sync({
@@ -2726,6 +2864,7 @@ def subscribe_push(request: Dict[str, Any]):
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
+        user_id = get_request_user_id(request)
         endpoint = request.get("endpoint")
         keys = request.get("keys")
         
@@ -2735,7 +2874,7 @@ def subscribe_push(request: Dict[str, Any]):
         result = supabase.table("push_subscriptions").upsert({
             "endpoint": endpoint,
             "keys": keys,
-            "user_id": "rebecca",
+            "user_id": user_id,
             "updated_at": datetime.now().isoformat()
         }).execute()
         
@@ -2789,7 +2928,7 @@ def send_notification(request: Dict[str, Any]):
 # =====================================================
 
 @app.get("/api/calm-guidance")
-async def get_calm_guidance():
+async def get_calm_guidance(user_id: str = DEFAULT_USER_ID):
     """Génère un message de guidance personnalisé basé sur la charge réelle."""
     if not supabase:
         return {
@@ -2798,15 +2937,15 @@ async def get_calm_guidance():
             "load_score": 0,
             "specific_advice": []
         }
-    
+    user_id = normalize_user_id(user_id)
     today = datetime.now().date().isoformat()
     now = datetime.now()
     
-    urgent_tasks = supabase.table("tasks").select("*").eq("due_date", today).neq("status", "done").execute()
-    overdue_docs = supabase.table("documents").select("*").lt("due_date", today).neq("status", "approved").execute()
-    pending_tasks = supabase.table("tasks").select("*").eq("status", "in_progress").execute()
-    active_missions = supabase.table("missions").select("*").eq("status", "active").execute()
-    recent_wins = supabase.table("wins").select("*").gte("date", (now.date() - timedelta(days=7)).isoformat()).execute()
+    urgent_tasks = supabase.table("tasks").select("*").eq("user_id", user_id).eq("due_date", today).neq("status", "done").execute()
+    overdue_docs = supabase.table("documents").select("*").eq("user_id", user_id).lt("due_date", today).neq("status", "approved").execute()
+    pending_tasks = supabase.table("tasks").select("*").eq("user_id", user_id).eq("status", "in_progress").execute()
+    active_missions = supabase.table("missions").select("*").eq("user_id", user_id).eq("status", "active").execute()
+    recent_wins = supabase.table("wins").select("*").eq("user_id", user_id).gte("date", (now.date() - timedelta(days=7)).isoformat()).execute()
     
     load_score = 0
     load_score += len(urgent_tasks.data) * 10
@@ -2852,16 +2991,17 @@ async def get_calm_guidance():
 
 
 @app.get("/api/proactive-suggestions")
-async def get_proactive_suggestions():
+async def get_proactive_suggestions(user_id: str = DEFAULT_USER_ID):
     """Analyse les données et retourne des suggestions proactives."""
     if not supabase:
         return {"suggestions": []}
     
     suggestions = []
+    user_id = normalize_user_id(user_id)
     today = datetime.now().date().isoformat()
     tomorrow = (datetime.now().date() + timedelta(days=1)).isoformat()
     
-    urgent_tasks = supabase.table("tasks").select("*").in_("due_date", [today, tomorrow]).neq("status", "done").execute()
+    urgent_tasks = supabase.table("tasks").select("*").eq("user_id", user_id).in_("due_date", [today, tomorrow]).neq("status", "done").execute()
     if urgent_tasks.data:
         suggestions.append({
             "type": "urgent_tasks",
@@ -2921,12 +3061,13 @@ async def get_proactive_suggestions():
 
 
 @app.get("/api/ai-priorities")
-async def get_ai_priorities(limit: int = 3):
+async def get_ai_priorities(limit: int = 3, user_id: str = DEFAULT_USER_ID):
     """Calcule les priorités IA basées sur urgence, deadline, importance."""
     if not supabase:
         return {"priorities": []}
     
-    tasks = supabase.table("tasks").select("*").neq("status", "done").execute()
+    tasks = supabase.table("tasks").select("*").eq("user_id", user_id).neq("status", "done").execute()
+    user_id = normalize_user_id(user_id)
     
     if not tasks.data:
         return {"priorities": []}
@@ -3032,17 +3173,19 @@ def get_priority_reason_text(task: Dict, score: int) -> str:
 # =====================================================
 
 @app.get("/api/tasks/today")
-def get_today_tasks():
+def get_today_tasks(user_id: str = DEFAULT_USER_ID):
+    user_id = normalize_user_id(user_id)
     today = datetime.now().date().isoformat()
-    tasks = supabase.table("tasks").select("*").eq("due_date", today).neq("status", "done").execute()
+    tasks = supabase.table("tasks").select("*").eq("user_id", user_id).eq("due_date", today).neq("status", "done").execute()
     return {"tasks": tasks.data}
 
 
 @app.get("/api/tasks/upcoming")
-def get_upcoming_tasks():
+def get_upcoming_tasks(user_id: str = DEFAULT_USER_ID):
+    user_id = normalize_user_id(user_id)
     today = datetime.now().date()
     next_week = today + timedelta(days=7)
-    tasks = supabase.table("tasks").select("*").gte("due_date", today.isoformat()).lte("due_date", next_week.isoformat()).neq("status", "done").execute()
+    tasks = supabase.table("tasks").select("*").eq("user_id", user_id).gte("due_date", today.isoformat()).lte("due_date", next_week.isoformat()).neq("status", "done").execute()
     return {"tasks": tasks.data}
 
 
@@ -3070,9 +3213,10 @@ def get_recent_wins(limit: int = 5):
 
 
 @app.get("/tasks/by-status/{status}")
-def get_tasks_by_status(status: str, limit: int = 20):
+def get_tasks_by_status(status: str, limit: int = 20, user_id: str = DEFAULT_USER_ID):
+    user_id = normalize_user_id(user_id)
     """Récupère les tâches par statut"""
-    tasks = supabase.table("tasks").select("*").eq("status", status).limit(limit).execute()
+    tasks = supabase.table("tasks").select("*").eq("user_id", user_id).eq("status", status).limit(limit).execute()
     return {"tasks": tasks.data}
 
 
@@ -3460,36 +3604,59 @@ async def extract_text_from_document(file: UploadFile = File(...)):
 # MÉMOIRE IA - APPRENTISSAGE (EXISTANT)
 # =====================================================
 
-def save_to_memory(key: str, value: Dict, context: str = None):
+def save_to_memory(
+    key: str,
+    value: Dict,
+    context: str = None,
+    user_id: str = DEFAULT_USER_ID
+):
     if not supabase:
         return
     
     try:
-        existing = supabase.table("ai_memory").select("*").eq("key", key).execute()
+        user_id = normalize_user_id(user_id)
+
+        existing = (
+            supabase.table("ai_memory")
+            .select("*")
+            .eq("key", key)
+            .eq("user_id", user_id)
+            .execute()
+        )
+
         if existing.data:
             supabase.table("ai_memory").update({
                 "value": value,
                 "context": context,
                 "updated_at": datetime.now().isoformat()
-            }).eq("key", key).execute()
+            }).eq("key", key).eq("user_id", user_id).execute()
         else:
             supabase.table("ai_memory").insert({
                 "key": key,
                 "value": value,
                 "context": context,
-                "user_id": "rebecca"
+                "user_id": user_id
             }).execute()
+
         logger.info(f"💾 Mémoire sauvegardée: {key}")
     except Exception as e:
         logger.error(f"Erreur sauvegarde mémoire: {e}")
 
-
-def get_from_memory(key: str) -> Dict:
+def get_from_memory(key: str, user_id: str = DEFAULT_USER_ID) -> Dict:
     if not supabase:
         return {}
     
     try:
-        result = supabase.table("ai_memory").select("*").eq("key", key).execute()
+        user_id = normalize_user_id(user_id)
+
+        result = (
+            supabase.table("ai_memory")
+            .select("*")
+            .eq("key", key)
+            .eq("user_id", user_id)
+            .execute()
+        )
+
         if result.data:
             return result.data[0].get("value", {})
     except Exception as e:
@@ -3558,13 +3725,21 @@ def get_smart_category(input_text: str) -> str:
 # =====================================================
 
 @app.post("/api/missions-daily-reminder")
-async def missions_daily_reminder():
+async def missions_daily_reminder(request: Dict[str, Any] = None):
     """Rappel quotidien des missions actives (tous les jours à 9h)"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
+    user_id = get_request_user_id(request or {})
+    
     try:
-        active_missions = supabase.table("missions").select("*").eq("status", "active").execute()
+        active_missions = (
+            supabase.table("missions")
+            .select("*")
+            .eq("user_id", user_id)
+            .eq("status", "active")
+            .execute()
+        )
         
         if not active_missions.data:
             return {"success": True, "sent": False, "message": "Aucune mission active"}
@@ -3602,7 +3777,8 @@ async def missions_daily_reminder():
             "url": "/missions",
             "tag": "daily_missions",
             "type": "mission",
-            "requireInteraction": False
+            "requireInteraction": False,
+            "user_id": user_id
         })
         
         return {"success": True, "sent": True, "total_missions": total, "message": message}
@@ -3638,7 +3814,6 @@ async def opportunities_reminder():
                 return {"success": True, "sent": False, "message": "Aucune opportunité à haut potentiel"}
         
         total_value = sum(o.get("estimated_value", 0) for o in high_opps.data)
-        
         send_notification_sync({
             "title": "💰 Opportunités à haut potentiel",
             "body": f"{len(high_opps.data)} opportunité(s) à fort potentiel • {total_value:,.0f} CFA à saisir",
@@ -3696,7 +3871,7 @@ async def financial_weekly_report():
         
         message = f"📊 Revenus: {total_revenue:,.0f} CFA | Dépenses: {total_spending:,.0f} CFA | {status}"
         
-        send_notification_sync({
+          send_notification_sync({
             "title": "📈 Bilan financier hebdomadaire",
             "body": message,
             "url": "/money",
@@ -3731,10 +3906,12 @@ async def financial_weekly_report():
 
 
 @app.post("/api/family-events-reminder")
-async def family_events_reminder():
+async def family_events_reminder(request: Dict[str, Any] = None):
     """Rappel des événements familiaux (1x par jour max)"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
+
+    user_id = get_request_user_id(request or {})
     
     today = datetime.now().date().isoformat()
     
@@ -3742,7 +3919,7 @@ async def family_events_reminder():
     existing = supabase.table("notifications_log").select("*")\
         .eq("type", "family_reminder")\
         .eq("date", today)\
-        .eq("user_id", "rebecca")\
+        .eq("user_id", user_id)\
         .execute()
     
     if existing.data:
@@ -3754,8 +3931,15 @@ async def family_events_reminder():
         tomorrow = (datetime.now().date() + timedelta(days=1)).isoformat()
         next_3_days = (datetime.now().date() + timedelta(days=3)).isoformat()
         
-        today_events = supabase.table("family_events").select("*").eq("date", today).neq("status", "done").execute()
-        tomorrow_events = supabase.table("family_events").select("*").eq("date", tomorrow).neq("status", "done").execute()
+        today_events = supabase.table("family_events").select("*").eq("user_id", user_id).eq("date", today).neq("status", "done").execute()
+        tomorrow_events = (
+            supabase.table("family_events")
+            .select("*")
+            .eq("user_id", user_id)
+            .eq("date", tomorrow)
+            .neq("status", "done")
+            .execute()
+        )
         
         # Un seul message, priorité aux événements du jour
         if today_events.data:
@@ -3764,7 +3948,8 @@ async def family_events_reminder():
                 "title": "👨‍👩‍👧‍👦 Événement familial AUJOURD'HUI",
                 "body": events_summary,
                 "url": "/family",
-                "type": "family"
+                "type": "family",
+                "user_id": user_id
             })
             notifications_sent = [e["id"] for e in today_events.data]
         elif tomorrow_events.data:
@@ -3773,7 +3958,8 @@ async def family_events_reminder():
                 "title": "📅 Rappel familial pour DEMAIN",
                 "body": events_summary,
                 "url": "/family",
-                "type": "family"
+                "type": "family",
+                "user_id": user_id
             })
             notifications_sent = [e["id"] for e in tomorrow_events.data]
         
@@ -3781,7 +3967,7 @@ async def family_events_reminder():
             supabase.table("notifications_log").insert({
                 "type": "family_reminder",
                 "date": today,
-                "user_id": "rebecca",
+                "user_id": user_id,
                 "sent_at": datetime.now().isoformat()
             }).execute()
         
@@ -3809,30 +3995,31 @@ async def family_events_reminder():
 # =====================================================
 
 @app.get("/api/profile")
-async def get_user_profile():
+async def get_user_profile(user_id: str = DEFAULT_USER_ID):
+    user_id = normalize_user_id(user_id)
     """Récupère le profil utilisateur complet"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
-        result = supabase.table("user_profile").select("*").eq("user_id", "rebecca").execute()
+        result = supabase.table("user_profile").select("*").eq("user_id", user_id).execute()
         
         if not result.data:
             # Créer un profil par défaut
             supabase.table("user_profile").insert({
-                "user_id": "rebecca",
+                "user_id": user_id,
                 "preferred_name": "Rebecca",
                 "children": [],
                 "projects": [],
                 "current_goals": []
             }).execute()
-            result = supabase.table("user_profile").select("*").eq("user_id", "rebecca").execute()
+            result = supabase.table("user_profile").select("*").eq("user_id", user_id).execute()
         
         profile = result.data[0] if result.data else {}
         
         # Récupérer les champs additionnels depuis user_memory
         memory_result = supabase.table("user_memory").select("*")\
-            .eq("user_id", "rebecca")\
+            .eq("user_id", user_id)\
             .eq("category", "profile")\
             .execute()
         
@@ -3859,8 +4046,9 @@ async def update_user_profile(request: Dict[str, Any]):
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
-        # LOG pour voir ce qui est reçu
+        user_id = get_request_user_id(request)
         logger.info(f"📥 Requête PUT /api/profile reçue: {request}")
+        # LOG pour voir ce qui est reçu
         
         # Nettoyer la requête
         request.pop("id", None)
@@ -3891,10 +4079,10 @@ async def update_user_profile(request: Dict[str, Any]):
         logger.info(f"📤 Mise à jour avec: {clean_data}")
         
         # Mettre à jour le profil
-        result = supabase.table("user_profile").update(clean_data).eq("user_id", "rebecca").execute()
+        result = supabase.table("user_profile").update(clean_data).eq("user_id", user_id).execute()
         
         # Récupérer le profil mis à jour
-        profile_result = supabase.table("user_profile").select("*").eq("user_id", "rebecca").execute()
+        profile_result = supabase.table("user_profile").select("*").eq("user_id", user_id).execute()
         
         return {"success": True, "profile": profile_result.data[0] if profile_result.data else {}}
         
@@ -3909,8 +4097,9 @@ async def add_child(request: Dict[str, Any]):
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
+        user_id = get_request_user_id(request)
         # Récupérer le profil actuel
-        profile_result = supabase.table("user_profile").select("*").eq("user_id", "rebecca").execute()
+        profile_result = supabase.table("user_profile").select("*").eq("user_id", user_id).execute()
         children = profile_result.data[0].get("children", []) if profile_result.data else []
         
         new_child = {
@@ -3924,7 +4113,7 @@ async def add_child(request: Dict[str, Any]):
         result = supabase.table("user_profile").update({
             "children": children,
             "updated_at": datetime.now().isoformat()
-        }).eq("user_id", "rebecca").execute()
+        }).eq("user_id", user_id).execute()
         
         return {"success": True, "children": children}
         
@@ -3933,13 +4122,14 @@ async def add_child(request: Dict[str, Any]):
         return {"success": False, "error": str(e)}
 
 @app.get("/api/profile/context")
-async def get_profile_context():
+async def get_profile_context(user_id: str = DEFAULT_USER_ID):
     """Récupère un résumé du profil pour injection dans le prompt"""
     if not supabase:
         return {"context": ""}
     
     try:
-        result = supabase.table("user_profile").select("*").eq("user_id", "rebecca").execute()
+        user_id = normalize_user_id(user_id)
+        result = supabase.table("user_profile").select("*").eq("user_id", user_id).execute()
         
         if not result.data:
             return {"context": ""}
@@ -3992,6 +4182,7 @@ async def process_brain_dump(request: Dict[str, Any]):
     content = request.get("content", "")
     if not content:
         return {"success": False, "error": "Contenu requis"}
+    user_id = get_request_user_id(request or {})
     
     # Estimer la longueur du contenu pour adapter l'analyse
     content_length = len(content)
@@ -4067,14 +4258,14 @@ Ne retourne que le JSON, rien d'autre."""
             supabase.table("brain_dump_analyses").insert({
                 "content": content[:1000],
                 "analysis": analysis,
-                "user_id": "rebecca",
+                "user_id": user_id,
                 "created_at": datetime.now().isoformat()
             }).execute()
         
         # Sauvegarder dans la mémoire émotionnelle
         if analysis.get("emotions"):
             for emotion in analysis["emotions"][:3]:
-                await save_user_memory("emotions", f"recent_mood", emotion, "rebecca")
+                await save_user_memory("emotions", "recent_mood", emotion, user_id)
         
         return {"success": True, "analysis": analysis}
         
@@ -4262,6 +4453,7 @@ async def create_checklist(request: Dict[str, Any]):
     
     if not steps:
         return {"success": False, "error": "Steps requis"}
+    user_id = get_request_user_id(request or {})
     
     # Sauvegarder la checklist
     checklist_id = str(uuid.uuid4())
@@ -4271,7 +4463,7 @@ async def create_checklist(request: Dict[str, Any]):
             "title": title,
             "steps": steps,
             "progress": 0,
-            "user_id": "rebecca",
+            "user_id": user_id,
             "created_at": datetime.now().isoformat()
         }).execute()
     
@@ -4294,6 +4486,7 @@ async def create_draft(request: Dict[str, Any]):
     
     if not context:
         return {"success": False, "error": "Context requis"}
+    user_id = get_request_user_id(request or {})
     
     # Définir le prompt selon le type
     prompts = {
@@ -4324,7 +4517,7 @@ async def create_draft(request: Dict[str, Any]):
                 "type": draft_type,
                 "content": draft_content,
                 "context": context,
-                "user_id": "rebecca",
+                "user_id": user_id,
                 "created_at": datetime.now().isoformat()
             }).execute()
         
@@ -4767,6 +4960,8 @@ async def create_calendar_event(request: CalendarEventRequest):
 
 @app.post("/api/calendar/sync-task")
 async def sync_task_to_calendar(request: Dict[str, Any]):
+    task_id = request.get("task_id")
+    user_id = get_request_user_id(request)
     """Synchronise une tâche spécifique vers Google Calendar"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
@@ -4777,7 +4972,7 @@ async def sync_task_to_calendar(request: Dict[str, Any]):
     
     try:
         # Récupérer la tâche
-        task = supabase.table("tasks").select("*").eq("id", task_id).execute()
+        task = supabase.table("tasks").select("*").eq("user_id", user_id).eq("id", task_id).execute()
         
         if not task.data:
             return {"success": False, "error": "Tâche non trouvée"}
@@ -4811,6 +5006,8 @@ async def sync_task_to_calendar(request: Dict[str, Any]):
 
 @app.post("/api/calendar/sync-existing-task")
 async def sync_existing_task_to_calendar(request: Dict[str, Any]):
+    task_id = request.get("task_id")
+    user_id = get_request_user_id(request)
     """Synchronise une tâche existante vers Google Calendar (pour rattrapage)"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
@@ -4821,7 +5018,7 @@ async def sync_existing_task_to_calendar(request: Dict[str, Any]):
     
     try:
         # Récupérer la tâche
-        task = supabase.table("tasks").select("*").eq("id", task_id).execute()
+        task = supabase.table("tasks").select("*").eq("user_id", user_id).eq("id", task_id).execute()
         
         if not task.data:
             return {"success": False, "error": "Tâche non trouvée"}
@@ -5004,6 +5201,8 @@ async def send_morning_brief():
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
+        user_id = DEFAULT_USER_ID
+
         today = datetime.now().date().isoformat()
         now = datetime.now()
         hour = now.hour
@@ -5011,41 +5210,41 @@ async def send_morning_brief():
         # ========== RÉCUPÉRER LES DONNÉES CONTEXTUELLES ==========
         
         # 1. Tâches du jour
-        tasks_today = supabase.table("tasks").select("*").eq("due_date", today).neq("status", "done").execute()
+        tasks_today = supabase.table("tasks").select("*").eq("user_id", user_id).eq("due_date", today).neq("status", "done").execute()
         tasks_today_list = tasks_today.data
         tasks_count = len(tasks_today_list)
         
         # 2. Tâches en retard
-        overdue_tasks = supabase.table("tasks").select("*").lt("due_date", today).neq("status", "done").execute()
+        overdue_tasks = supabase.table("tasks").select("*").eq("user_id", user_id).lt("due_date", today).neq("status", "done").execute()
         overdue_count = len(overdue_tasks.data)
         overdue_tasks_list = overdue_tasks.data[:3]  # Les 3 plus urgentes
         
         # 3. Documents proches de l'échéance (7 jours)
         next_week = (datetime.now().date() + timedelta(days=7)).isoformat()
-        expiring_docs = supabase.table("documents").select("*").gte("due_date", today).lte("due_date", next_week).neq("status", "approved").execute()
+        expiring_docs = supabase.table("documents").select("*").eq("user_id", user_id).gte("due_date", today).lte("due_date", next_week).neq("status", "approved").execute()
         expiring_docs_list = expiring_docs.data[:3]
         
         # 4. Victoires récentes (7 jours)
         week_ago = (datetime.now().date() - timedelta(days=7)).isoformat()
-        recent_wins = supabase.table("wins").select("*").gte("date", week_ago).execute()
+        recent_wins = supabase.table("wins").select("*").eq("user_id", user_id).gte("date", week_ago).execute()
         wins_count = len(recent_wins.data)
         recent_wins_list = recent_wins.data[:3]
         
         # 5. Missions actives
-        active_missions = supabase.table("missions").select("*").eq("status", "active").execute()
+        active_missions = supabase.table("missions").select("*").eq("user_id", user_id).eq("status", "active").execute()
         missions_count = len(active_missions.data)
         missions_list = [{"name": m["name"], "priority": m.get("priority", "normal")} for m in active_missions.data[:3]]
         
         # 6. Humeur d'hier
         yesterday = (datetime.now().date() - timedelta(days=1)).isoformat()
-        yesterday_mood = supabase.table("mood_entries").select("mood").eq("date", yesterday).eq("user_id", "rebecca").execute()
+        yesterday_mood = supabase.table("mood_entries").select("mood").eq("user_id", user_id).eq("date", yesterday).eq("user_id", user_id).execute()
         yesterday_mood_value = yesterday_mood.data[0]["mood"] if yesterday_mood.data else None
         
         # 7. Prochain événement familial
-        next_family_event = supabase.table("family_events").select("*").gte("date", today).neq("status", "done").order("date", ascending=True).limit(1).execute()
+        next_family_event = supabase.table("family_events").select("*").eq("user_id", user_id).gte("date", today).neq("status", "done").order("date", ascending=True).limit(1).execute()
         
         # 8. Récupérer le nom et les enfants
-        profile = supabase.table("user_profile").select("preferred_name, children").eq("user_id", "rebecca").execute()
+        profile = supabase.table("user_profile").select("preferred_name, children").eq("user_id", user_id).execute()
         user_name = profile.data[0].get("preferred_name", "Rebecca") if profile.data else "Rebecca"
         children = profile.data[0].get("children", []) if profile.data else []
         
@@ -5059,11 +5258,11 @@ async def send_morning_brief():
                     birthday_today = child["name"]
         
         # 10. Mission à plus fort potentiel
-        top_mission = supabase.table("missions").select("*").eq("status", "active").order("revenue_potential", ascending=False).limit(1).execute()
+        top_mission = supabase.table("missions").select("*").eq("user_id", user_id).eq("status", "active").order("revenue_potential", ascending=False).limit(1).execute()
         
         # 11. Budget restant
-        total_revenue = supabase.table("revenue").select("amount").execute()
-        total_spending = supabase.table("spending").select("amount").execute()
+        total_revenue = supabase.table("revenue").select("amount").eq("user_id", user_id).execute()
+        total_spending = supabase.table("spending").eq("user_id", user_id).select("amount").execute()
         revenue_sum = sum(r.get("amount", 0) for r in total_revenue.data)
         spending_sum = sum(s.get("amount", 0) for s in total_spending.data)
         balance = revenue_sum - spending_sum
@@ -5434,25 +5633,26 @@ Becks peut t'aider à préparer les documents. 👑
 # =====================================================
 
 @app.post("/api/proactive/daily-planning")
-async def daily_planning():
+async def daily_planning(request: Dict[str, Any] = None):
     """
     Analyse les tâches et suggère un ordre de priorité pour la journée.
     À appeler par cron-job.org tous les matins à 8h (après le résumé).
     """
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
+    user_id = get_request_user_id(request or {})
     
     try:
         today = datetime.now().date().isoformat()
         
         # Récupérer les tâches du jour
-        tasks_today = supabase.table("tasks").select("*").eq("due_date", today).neq("status", "done").execute()
+        tasks_today = supabase.table("tasks").select("*").eq("user_id", user_id).eq("due_date", today).neq("status", "done").execute()
         
         # Récupérer les tâches en retard
-        overdue_tasks = supabase.table("tasks").select("*").lt("due_date", today).neq("status", "done").execute()
+        overdue_tasks = supabase.table("tasks").select("*").eq("user_id", user_id).lt("due_date", today).neq("status", "done").execute()
         
         # Récupérer les tâches prioritaires (high/critical)
-        high_priority_tasks = supabase.table("tasks").select("*").in_("priority", ["critical", "high"]).neq("status", "done").execute()
+        high_priority_tasks = supabase.table("tasks").select("*").eq("user_id", user_id).in_("priority", ["critical", "high"]).neq("status", "done").execute()
         
         # Construire la suggestion d'ordre
         planning = []
@@ -5668,22 +5868,23 @@ async def send_evening_summary():
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
+        user_id = DEFAULT_USER_ID
         today = datetime.now().date().isoformat()
         now = datetime.now()
         
         # ========== RÉCUPÉRER LES DONNÉES ==========
         
         # Tâches complétées aujourd'hui
-        completed_tasks = supabase.table("tasks").select("*").eq("status", "done").gte("updated_at", today).execute()
+        completed_tasks = supabase.table("tasks").select("*").eq("user_id", user_id).eq("status", "done").gte("updated_at", today).execute()
         completed_count = len(completed_tasks.data)
         completed_list = [t["title"] for t in completed_tasks.data[:3]]
         
         # Tâches restantes (non terminées)
-        pending_tasks = supabase.table("tasks").select("*").neq("status", "done").execute()
+        pending_tasks = supabase.table("tasks").select("*").eq("user_id", user_id).neq("status", "done").execute()
         pending_count = len(pending_tasks.data)
         
         # Tâches en retard
-        overdue_tasks = supabase.table("tasks").select("*").lt("due_date", today).neq("status", "done").execute()
+        overdue_tasks = supabase.table("tasks").select("*").eq("user_id", user_id).lt("due_date", today).neq("status", "done").execute()
         overdue_count = len(overdue_tasks.data)
         
         # Victoires du jour
@@ -5692,11 +5893,11 @@ async def send_evening_summary():
         wins_list = [w["title"] for w in wins_today.data[:3]]
         
         # Humeur du jour
-        mood_today = supabase.table("mood_entries").select("mood").eq("date", today).eq("user_id", "rebecca").execute()
+        mood_today = supabase.table("mood_entries").select("mood").eq("date", today).eq("user_id", user_id).execute()
         current_mood = mood_today.data[0]["mood"] if mood_today.data else None
         
         # Récupérer le nom
-        profile = supabase.table("user_profile").select("preferred_name").eq("user_id", "rebecca").execute()
+        profile = supabase.table("user_profile").select("preferred_name").eq("user_id", user_id).execute()
         user_name = profile.data[0].get("preferred_name", "Rebecca") if profile.data else "Rebecca"
         
         # ========== GÉNÉRATION IA ==========
@@ -5798,13 +5999,14 @@ def _get_evening_advice(completed: int, pending: int, overdue: int) -> str:
 # =====================================================
 
 @app.post("/api/proactive/smart-reminders")
-async def smart_reminders():
+async def smart_reminders(request: Dict[str, Any] = None):
     """
     Analyse l'historique et propose des actions intelligentes.
     À appeler par cron-job.org tous les matins à 8h30.
     """
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
+    user_id = get_request_user_id(request or {})
     
     try:
         today = datetime.now().date().isoformat()
@@ -5812,7 +6014,7 @@ async def smart_reminders():
         
         # 1. Analyser les tâches récurrentes oubliées
         # Tâches qui apparaissent souvent mais rarement terminées
-        task_titles = supabase.table("tasks").select("title, status").execute()
+        task_titles = supabase.table("tasks").select("title, status").eq("user_id", user_id).execute()
         task_count = {}
         for task in task_titles.data:
             title = task["title"]
@@ -6048,23 +6250,24 @@ async def backup_all_documents_to_drive():
         return {"success": False, "error": str(e)}
 
 @app.get("/api/morning-greeting")
-async def get_morning_greeting():
+async def get_morning_greeting(user_id: str = DEFAULT_USER_ID):
     """Retourne un message d'accueil personnalisé basé sur les vraies données du jour"""
     if not supabase:
         return {"success": True, "message": "Salut Rebecca. Je suis là."}
     
     try:
+        user_id = normalize_user_id(user_id)
         today = datetime.now().date().isoformat()
         hour = datetime.now().hour
         
         # Récupérer les vraies données
-        tasks_today = supabase.table("tasks").select("*").eq("due_date", today).neq("status", "done").execute()
-        overdue_tasks = supabase.table("tasks").select("*").lt("due_date", today).neq("status", "done").execute()
-        pending_docs = supabase.table("documents").select("*").neq("status", "approved").execute()
-        active_missions = supabase.table("missions").select("*").eq("status", "active").execute()
+        tasks_today = supabase.table("tasks").select("*").eq("user_id", user_id).eq("due_date", today).neq("status", "done").execute()
+        overdue_tasks = supabase.table("tasks").select("*").eq("user_id", user_id).lt("due_date", today).neq("status", "done").execute()
+        pending_docs = supabase.table("documents").select("*").eq("user_id", user_id).neq("status", "approved").execute()
+        active_missions = supabase.table("missions").select("*").eq("user_id", user_id).eq("status", "active").execute()
         
         # Récupérer l'humeur du jour
-        mood_result = supabase.table("mood_entries").select("mood").eq("date", today).execute()
+        mood_result = supabase.table("mood_entries").select("mood").eq("user_id", user_id).eq("date", today).execute()
         current_mood = mood_result.data[0]["mood"] if mood_result.data else None
         
         # Déterminer le moment de la journée
@@ -6134,35 +6337,36 @@ async def get_morning_greeting():
         return {"success": True, "message": "Salut Rebecca. Je suis là."}
 
 @app.get("/api/dashboard/today")
-async def get_today_dashboard():
+async def get_today_dashboard(user_id: str = DEFAULT_USER_ID):
     """Retourne toutes les données nécessaires pour le dashboard du jour avec des messages humains"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
+        user_id = normalize_user_id(user_id)
         today = datetime.now().date().isoformat()
         
         # Récupérer les tâches du jour
-        tasks_today = supabase.table("tasks").select("*").eq("due_date", today).neq("status", "done").execute()
+        tasks_today = supabase.table("tasks").select("*").eq("user_id", user_id).eq("due_date", today).neq("status", "done").execute()
         
         # Récupérer les tâches en retard
-        overdue_tasks = supabase.table("tasks").select("*").lt("due_date", today).neq("status", "done").execute()
+        overdue_tasks = supabase.table("tasks").select("*").eq("user_id", user_id).lt("due_date", today).neq("status", "done").execute()
         
         # Récupérer les missions actives
-        active_missions = supabase.table("missions").select("*").eq("status", "active").execute()
+        active_missions = supabase.table("missions").select("*").eq("user_id", user_id).eq("status", "active").execute()
         
         # Récupérer les documents en attente
-        pending_docs = supabase.table("documents").select("*").neq("status", "approved").execute()
+        pending_docs = supabase.table("documents").select("*").eq("user_id", user_id).neq("status", "approved").execute()
         
         # Récupérer les victoires récentes (7 jours)
         week_ago = (datetime.now().date() - timedelta(days=7)).isoformat()
-        recent_wins = supabase.table("wins").select("*").gte("date", week_ago).execute()
+        recent_wins = supabase.table("wins").select("*").eq("user_id", user_id).gte("date", week_ago).execute()
         
         # Récupérer les événements familiaux du jour
-        family_today = supabase.table("family_events").select("*").eq("date", today).neq("status", "done").execute()
+        family_today = supabase.table("family_events").select("*").eq("user_id", user_id).eq("date", today).neq("status", "done").execute()
         
         # Récupérer l'humeur du jour
-        mood_result = supabase.table("mood_entries").select("mood").eq("date", today).execute()
+        mood_result = supabase.table("mood_entries").select("mood").eq("user_id", user_id).eq("date", today).execute()
         current_mood = mood_result.data[0]["mood"] if mood_result.data else None
         
         # Calculer les priorités (basé sur l'urgence)
@@ -6321,26 +6525,27 @@ async def get_today_dashboard():
 
 
 @app.post("/api/morning-notification")
-async def send_morning_notification():
+async def send_morning_notification(request: Dict[str, Any] = None):
     """Envoie une notification matinale humaine avec son et vibration"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
+        user_id = get_request_user_id(request or {})
         today = datetime.now().date().isoformat()
         hour = datetime.now().hour
         
         # Récupérer les vraies données
-        tasks_today = supabase.table("tasks").select("*").eq("due_date", today).neq("status", "done").execute()
+        tasks_today = supabase.table("tasks").select("*").eq("user_id", user_id).eq("due_date", today).neq("status", "done").execute()
         tasks_count = len(tasks_today.data)
         
-        overdue_tasks = supabase.table("tasks").select("*").lt("due_date", today).neq("status", "done").execute()
+        overdue_tasks = supabase.table("tasks").select("*").eq("user_id", user_id).lt("due_date", today).neq("status", "done").execute()
         overdue_count = len(overdue_tasks.data)
         
-        pending_docs = supabase.table("documents").select("*").neq("status", "approved").execute()
+        pending_docs = supabase.table("documents").select("*").eq("user_id", user_id).neq("status", "approved").execute()
         docs_count = len(pending_docs.data)
         
-        active_missions = supabase.table("missions").select("*").eq("status", "active").execute()
+        active_missions = supabase.table("missions").select("*").eq("user_id", user_id).eq("status", "active").execute()
         missions_count = len(active_missions.data)
         
         # Construire un message humain (une seule phrase)
@@ -6365,6 +6570,7 @@ async def send_morning_notification():
             "vibrate": [200, 100, 200],
             "requireInteraction": False,
             "silent": False,
+            "user_id": user_id,
             "tag": f"morning_{today}"
         }
         
@@ -6537,6 +6743,7 @@ async def step_by_step_execution(request: Dict[str, Any]):
     
     if not query:
         return {"success": False, "error": "Query requise"}
+    user_id = get_request_user_id(request or {})
     
     try:
         # Récupérer le contexte utilisateur pour personnaliser
@@ -6594,7 +6801,7 @@ Si la demande est émotionnelle (fatigue, stress, etc.), retourne une version tr
                 "title": execution_plan.get("title"),
                 "steps": execution_plan.get("steps", []),
                 "status": "active",
-                "user_id": "rebecca",
+                "user_id": user_id,
                 "created_at": datetime.now().isoformat()
             }).execute()
         
@@ -6669,10 +6876,11 @@ async def detect_memory_patterns(request: Dict[str, Any]):
     """
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
+    user_id = get_request_user_id(request or {})
     
     try:
         # Récupérer tous les souvenirs
-        memories = supabase.table("user_memory").select("*").eq("user_id", "rebecca").execute()
+        memories = supabase.table("user_memory").select("*").eq("user_id", user_id).execute()
         
         if not memories.data:
             return {"success": True, "patterns": []}
@@ -6713,7 +6921,7 @@ async def detect_memory_patterns(request: Dict[str, Any]):
 
 
 @app.post("/api/rescue/detect-overload")
-async def detect_overload():
+async def detect_overload(request: Dict[str, Any] = None):
     """
     Analyse les données pour détecter si l'utilisateur est en surcharge.
     Retourne un score et des recommandations.
@@ -6722,16 +6930,17 @@ async def detect_overload():
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
+        user_id = get_request_user_id(request or {})
         today = datetime.now().date().isoformat()
         now = datetime.now()
         
         # 1. Récupérer l'humeur du jour
-        mood_result = supabase.table("mood_entries").select("mood").eq("date", today).eq("user_id", "rebecca").execute()
+        mood_result = supabase.table("mood_entries").select("mood").eq("date", today).eq("user_id", user_id).execute()
         current_mood = mood_result.data[0]["mood"] if mood_result.data else None
         
         # 2. Tâches urgentes et en retard
-        urgent_tasks = supabase.table("tasks").select("*").eq("status", "today").neq("status", "done").execute()
-        overdue_tasks = supabase.table("tasks").select("*").lt("due_date", today).neq("status", "done").execute()
+        urgent_tasks = supabase.table("tasks").select("*").eq("user_id", user_id).eq("status", "today").neq("status", "done").execute()
+        overdue_tasks = supabase.table("tasks").select("*").eq("user_id", user_id).lt("due_date", today).neq("status", "done").execute()
         
         # 3. Documents en retard
         overdue_docs = supabase.table("documents").select("*").lt("due_date", today).neq("status", "approved").execute()
@@ -6957,6 +7166,7 @@ async def intelligent_notification_check():
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
+        user_id = DEFAULT_USER_ID
         now = datetime.now()
         today = now.date().isoformat()
         hour = now.hour
@@ -6966,7 +7176,7 @@ async def intelligent_notification_check():
         # 1. Vérifier si déjà envoyé récemment (éviter spam)
         last_check = supabase.table("notifications_log").select("sent_at")\
             .eq("type", "intelligent_check")\
-            .eq("user_id", "rebecca")\
+            .eq("user_id", user_id)\
             .order("sent_at", desc=True)\
             .limit(1)\
             .execute()
@@ -6977,12 +7187,12 @@ async def intelligent_notification_check():
                 return {"success": True, "message": "Déjà vérifié récemment", "notifications_sent": []}
         
         # 2. Récupérer l'humeur du jour
-        mood_result = supabase.table("mood_entries").select("mood").eq("date", today).eq("user_id", "rebecca").execute()
+        mood_result = supabase.table("mood_entries").select("mood").eq("date", today).eq("user_id", user_id).execute()
         current_mood = mood_result.data[0]["mood"] if mood_result.data else None
         
         # 3. Récupérer les tâches
-        urgent_tasks = supabase.table("tasks").select("*").eq("status", "today").neq("status", "done").execute()
-        overdue_tasks = supabase.table("tasks").select("*").lt("due_date", today).neq("status", "done").execute()
+        urgent_tasks = supabase.table("tasks").select("*").eq("user_id", user_id).eq("status", "today").neq("status", "done").execute()
+        overdue_tasks = supabase.table("tasks").select("*").eq("user_id", user_id).lt("due_date", today).neq("status", "done").execute()
         
         # 4. Récupérer les brain dumps non traités
         pending_brain_dumps = supabase.table("inbox").select("*").eq("needs_processing", True).execute()
@@ -7074,7 +7284,7 @@ async def intelligent_notification_check():
             supabase.table("notifications_log").insert({
                 "type": "intelligent_check",
                 "date": today,
-                "user_id": "rebecca",
+                "user_id": user_id,
                 "sent_at": now.isoformat(),
                 "metadata": {"notifications": len(notifications_sent), "mood": current_mood}
             }).execute()
@@ -7119,13 +7329,15 @@ async def update_notification_preferences(request: Dict[str, Any]):
 
 
 @app.get("/api/notifications/preferences")
-async def get_notification_preferences():
+async def get_notification_preferences(user_id: str = DEFAULT_USER_ID):
     """Récupère les préférences de notifications"""
     if not supabase:
         return {"success": False, "preferences": {}}
+    user_id = normalize_user_id(user_id)
     
     try:
-        result = supabase.table("user_memory").select("*").eq("category", "notifications").eq("user_id", "rebecca").execute()
+    
+        result = supabase.table("user_memory").select("*").eq("category", "notifications").eq("user_id", user_id).execute()
         
         preferences = {}
         for item in result.data:
@@ -7164,6 +7376,7 @@ async def send_morning_checkin():
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
+        user_id = DEFAULT_USER_ID
         now = datetime.now()
         hour = now.hour
         today = now.date().isoformat()
@@ -7172,7 +7385,7 @@ async def send_morning_checkin():
         existing = supabase.table("notifications_log").select("*")\
             .eq("type", "morning_checkin")\
             .eq("date", today)\
-            .eq("user_id", "rebecca")\
+            .eq("user_id", user_id)\
             .execute()
         
         if existing.data:
@@ -7180,11 +7393,11 @@ async def send_morning_checkin():
         
         # 1. Récupérer l'humeur d'hier
         yesterday = (now.date() - timedelta(days=1)).isoformat()
-        mood_result = supabase.table("mood_entries").select("mood").eq("date", yesterday).eq("user_id", "rebecca").execute()
+        mood_result = supabase.table("mood_entries").select("mood").eq("date", yesterday).eq("user_id", user_id).execute()
         yesterday_mood = mood_result.data[0]["mood"] if mood_result.data else None
         
         # 2. Récupérer les tâches d'aujourd'hui
-        tasks_today = supabase.table("tasks").select("*").eq("due_date", today).neq("status", "done").execute()
+        tasks_today = supabase.table("tasks").select("*").eq("user_id", user_id).eq("due_date", today).neq("status", "done").execute()
         
         # 3. Récupérer les documents en retard
         overdue_docs = supabase.table("documents").select("*").lt("due_date", today).neq("status", "approved").execute()
@@ -7260,7 +7473,7 @@ Je suis là pour t'aider. Une chose à la fois. 👑"""
         supabase.table("notifications_log").insert({
             "type": "morning_checkin",
             "date": today,
-            "user_id": "rebecca",
+            "user_id": user_id,
             "sent_at": now.isoformat(),
             "metadata": {
                 "tasks_count": len(tasks_today.data),
@@ -7294,15 +7507,16 @@ async def test_morning_checkin():
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
+        user_id = DEFAULT_USER_ID
         now = datetime.now()
         today = now.date().isoformat()
         
         # Récupérer les données (sans vérifier si déjà envoyé)
         yesterday = (now.date() - timedelta(days=1)).isoformat()
-        mood_result = supabase.table("mood_entries").select("mood").eq("date", yesterday).eq("user_id", "rebecca").execute()
+        mood_result = supabase.table("mood_entries").select("mood").eq("date", yesterday).eq("user_id", user_id).execute()
         yesterday_mood = mood_result.data[0]["mood"] if mood_result.data else None
         
-        tasks_today = supabase.table("tasks").select("*").eq("due_date", today).neq("status", "done").execute()
+        tasks_today = supabase.table("tasks").select("*").eq("user_id", user_id).eq("due_date", today).neq("status", "done").execute()
         overdue_docs = supabase.table("documents").select("*").lt("due_date", today).neq("status", "approved").execute()
         wins_yesterday = supabase.table("wins").select("*").eq("date", yesterday).execute()
         
@@ -7405,7 +7619,7 @@ def _generate_human_weekly_insight(completion_rate: int, wins_count: int, balanc
 
 
 @app.get("/api/weekly-ceo")
-async def get_weekly_ceo():
+async def get_weekly_ceo(user_id: str = DEFAULT_USER_ID):
     """
     Retourne une vue stratégique hebdomadaire avec des messages humains.
     """
@@ -7413,6 +7627,7 @@ async def get_weekly_ceo():
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
+        user_id = normalize_user_id(user_id)
         now = datetime.now()
         start_of_week = (now.date() - timedelta(days=now.weekday())).isoformat()
         end_of_week = (now.date() + timedelta(days=6 - now.weekday())).isoformat()
@@ -7420,52 +7635,61 @@ async def get_weekly_ceo():
         # 1. Tâches complétées cette semaine
         completed_tasks = supabase.table("tasks").select("*")\
             .gte("updated_at", start_of_week)\
+            .eq("user_id", user_id)\
             .eq("status", "done")\
             .execute()
         
         # 2. Tâches créées cette semaine
         new_tasks = supabase.table("tasks").select("*")\
+            .eq("user_id", user_id)\
             .gte("created_at", start_of_week)\
             .execute()
         
         # 3. Missions actives
-        active_missions = supabase.table("missions").select("*").eq("status", "active").execute()
+        active_missions = supabase.table("missions").select("*").eq("user_id", user_id).eq("status", "active").execute()
         
         # 4. Missions avec le plus haut potentiel de revenu
         missions_by_revenue = supabase.table("missions").select("*")\
+            .eq("user_id", user_id)\
             .order("revenue_potential", desc=True)\
             .limit(5)\
             .execute()
         
         # 5. Documents en attente ou en retard
         pending_docs = supabase.table("documents").select("*")\
+            .eq("user_id", user_id)\
             .neq("status", "approved")\
             .execute()
         
         overdue_docs = supabase.table("documents").select("*")\
+            .eq("user_id", user_id)\
             .lt("due_date", now.date().isoformat())\
             .neq("status", "approved")\
             .execute()
         
         # 6. Victoires cette semaine
         wins_this_week = supabase.table("wins").select("*")\
+            .eq("user_id", user_id)\
             .gte("date", start_of_week)\
             .execute()
         
         # 7. Dépenses cette semaine
         spending_this_week = supabase.table("spending").select("amount")\
+            .eq("user_id", user_id)\
             .gte("date", start_of_week)\
             .execute()
         total_spending = sum(s.get("amount", 0) for s in spending_this_week.data)
         
         # 8. Revenus cette semaine
         revenue_this_week = supabase.table("revenue").select("amount")\
+            .eq("user_id", user_id)\
             .gte("date", start_of_week)\
             .execute()
         total_revenue = sum(r.get("amount", 0) for r in revenue_this_week.data)
         
         # 9. Humeurs de la semaine
         moods_this_week = supabase.table("mood_entries").select("mood, date")\
+            .eq("user_id", user_id)\
             .gte("date", start_of_week)\
             .execute()
         
@@ -7478,7 +7702,9 @@ async def get_weekly_ceo():
         
         # 10. Tâches en retard
         overdue_tasks = supabase.table("tasks").select("*")\
+            .eq("user_id", user_id)\
             .lt("due_date", now.date().isoformat())\
+            .eq("user_id", user_id)\
             .neq("status", "done")\
             .execute()
         
@@ -7816,6 +8042,7 @@ async def scan_opportunities():
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
+        user_id = DEFAULT_USER_ID
         opportunities_found = []
         
         inbox_items = supabase.table("inbox").select("*").eq("needs_processing", False).limit(50).execute()
@@ -7893,7 +8120,7 @@ Si aucune opportunité, retourne {"opportunities": []}"""},
                         "probability": opp.get("confidence", "medium"),
                         "notes": f"🔍 Détecté par scanner le {datetime.now().strftime('%d/%m/%Y')}\nSource: {opp.get('source', 'Inconnue')}\nAction recommandée: {opp.get('next_action', 'À définir')}",
                         "next_action": opp.get("next_action"),
-                        "user_id": "rebecca"
+                        "user_id": user_id
                     }).execute()
             
             return {
@@ -7933,6 +8160,7 @@ async def generate_ready_to_send(request: Dict[str, Any]):
     
     if not context:
         return {"success": False, "error": "Contexte requis"}
+    user_id = get_request_user_id(request or {})
     
     memory_context = await get_user_memory_context()
     profile_context = await get_profile_context()
@@ -7980,7 +8208,7 @@ Ne retourne que le JSON, rien d'autre."""
                 "type": doc_type,
                 "content": generated.get("full_text", generated.get("body", "")),
                 "context": context,
-                "user_id": "rebecca",
+                "user_id": user_id,
                 "created_at": datetime.now().isoformat()
             }).execute()
         
@@ -8013,6 +8241,7 @@ async def compare_options(request: Dict[str, Any]):
     
     if not option_a or not option_b:
         return {"success": False, "error": "Deux options sont requises"}
+    user_id = get_request_user_id(request or {})
     
     memory_context = await get_user_memory_context()
     profile_context = await get_profile_context()
@@ -8088,7 +8317,7 @@ Note : Pour chaque critère, note de 1 à 5. Le score total est la somme des not
                     "recommendation": comparison.get("recommendation"),
                     "context": context
                 }),
-                "user_id": "rebecca",
+                "user_id": user_id,
                 "created_at": datetime.now().isoformat()
             }).execute()
         
@@ -8376,6 +8605,8 @@ async def send_weekly_summary():
     # Vérifier si on est dimanche (optionnel, la cron s'en charge)
     if datetime.now().weekday() != 6:
         return {"success": True, "sent": False, "message": "Pas dimanche, résumé non envoyé"}
+
+    user_id = DEFAULT_USER_ID
     
     try:
         now = datetime.now()
@@ -8388,12 +8619,14 @@ async def send_weekly_summary():
         completed_tasks = supabase.table("tasks").select("*")\
             .gte("updated_at", start_of_week)\
             .eq("status", "done")\
+            .eq("user_id", user_id)\
             .execute()
         completed_count = len(completed_tasks.data)
         completed_list = [t["title"] for t in completed_tasks.data[:5]]
         
         # 2. Tâches créées
         new_tasks = supabase.table("tasks").select("*")\
+            .eq("user_id", user_id)\
             .gte("created_at", start_of_week)\
             .execute()
         new_count = len(new_tasks.data)
@@ -8403,6 +8636,7 @@ async def send_weekly_summary():
         
         # 4. Tâches en retard
         overdue_tasks = supabase.table("tasks").select("*")\
+            .eq("user_id", user_id)\
             .lt("due_date", now.date().isoformat())\
             .neq("status", "done")\
             .execute()
@@ -8410,6 +8644,7 @@ async def send_weekly_summary():
         
         # 5. Victoires de la semaine
         wins = supabase.table("wins").select("*")\
+            .eq("user_id", user_id)\
             .gte("date", start_of_week)\
             .execute()
         wins_count = len(wins.data)
@@ -8417,11 +8652,13 @@ async def send_weekly_summary():
         
         # 6. Dépenses et revenus
         spending = supabase.table("spending").select("amount")\
+            .eq("user_id", user_id)\
             .gte("date", start_of_week)\
             .execute()
         total_spending = sum(s.get("amount", 0) for s in spending.data)
         
         revenue = supabase.table("revenue").select("amount")\
+            .eq("user_id", user_id)\
             .gte("date", start_of_week)\
             .execute()
         total_revenue = sum(r.get("amount", 0) for r in revenue.data)
@@ -8429,6 +8666,7 @@ async def send_weekly_summary():
         
         # 7. Humeurs de la semaine
         moods = supabase.table("mood_entries").select("mood")\
+            .eq("user_id", user_id)\
             .gte("date", start_of_week)\
             .execute()
         mood_counts = {}
@@ -8436,10 +8674,10 @@ async def send_weekly_summary():
             mood_counts[m["mood"]] = mood_counts.get(m["mood"], 0) + 1
         
         # 8. Missions actives
-        active_missions = supabase.table("missions").select("*").eq("status", "active").execute()
+        active_missions = supabase.table("missions").select("*").eq("user_id", user_id).eq("status", "active").execute()
         
         # 9. Récupérer le nom
-        profile = supabase.table("user_profile").select("preferred_name").eq("user_id", "rebecca").execute()
+        profile = supabase.table("user_profile").select("preferred_name").eq("user_id", user_id).execute()
         user_name = profile.data[0].get("preferred_name", "Rebecca") if profile.data else "Rebecca"
         
         # ========== GÉNÉRATION IA ==========
@@ -8615,13 +8853,14 @@ async def send_smart_notifications():
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
+        user_id = DEFAULT_USER_ID
         today = datetime.now().date().isoformat()
         now = datetime.now()
         
         # Vérifier si déjà envoyé dans la dernière heure
         last_check = supabase.table("notifications_log").select("sent_at")\
             .eq("type", "smart_group")\
-            .eq("user_id", "rebecca")\
+            .eq("user_id", user_id)\
             .order("sent_at", desc=True)\
             .limit(1)\
             .execute()
@@ -8634,28 +8873,28 @@ async def send_smart_notifications():
         # ========== RÉCUPÉRER LES NOTIFICATIONS POTENTIELLES ==========
         
         # 1. Tâches du jour
-        tasks_today = supabase.table("tasks").select("*").eq("due_date", today).neq("status", "done").execute()
+        tasks_today = supabase.table("tasks").select("*").eq("user_id", user_id).eq("due_date", today).neq("status", "done").execute()
         tasks_today_count = len(tasks_today.data)
         tasks_today_list = [t["title"] for t in tasks_today.data[:3]]
         
         # 2. Tâches en retard
-        overdue_tasks = supabase.table("tasks").select("*").lt("due_date", today).neq("status", "done").execute()
+        overdue_tasks = supabase.table("tasks").select("*").eq("user_id", user_id).lt("due_date", today).neq("status", "done").execute()
         overdue_count = len(overdue_tasks.data)
         
         # 3. Documents en retard ou proches
-        overdue_docs = supabase.table("documents").select("*").lt("due_date", today).neq("status", "approved").execute()
-        expiring_docs = supabase.table("documents").select("*").gte("due_date", today).lte("due_date", (datetime.now().date() + timedelta(days=3)).isoformat()).neq("status", "approved").execute()
+        overdue_docs = supabase.table("documents").select("*").eq("user_id", user_id).lt("due_date", today).neq("status", "approved").execute()
+        expiring_docs = supabase.table("documents").select("*").eq("user_id", user_id).gte("due_date", today).lte("due_date", (datetime.now().date() + timedelta(days=3)).isoformat()).neq("status", "approved").execute()
         
         # 4. Missions inactives (5+ jours)
         five_days_ago = (datetime.now() - timedelta(days=5)).isoformat()
-        stale_missions = supabase.table("missions").select("*").eq("status", "active").lt("updated_at", five_days_ago).execute()
+        stale_missions = supabase.table("missions").select("*").eq("user_id", user_id).eq("status", "active").lt("updated_at", five_days_ago).execute()
         
         # 5. Victoires récentes (7 jours)
         week_ago = (datetime.now().date() - timedelta(days=7)).isoformat()
-        recent_wins = supabase.table("wins").select("*").gte("date", week_ago).execute()
+        recent_wins = supabase.table("wins").select("*").eq("user_id", user_id).gte("date", week_ago).execute()
         
         # 6. Événements familiaux aujourd'hui
-        family_today = supabase.table("family_events").select("*").eq("date", today).neq("status", "done").execute()
+        family_today = supabase.table("family_events").select("*").eq("user_id", user_id).eq("date", today).neq("status", "done").execute()
         
         # ========== CONSTRUIRE LE MESSAGE REGROUPÉ ==========
         
@@ -8701,7 +8940,7 @@ async def send_smart_notifications():
         # ========== CRÉER LE MESSAGE FINAL ==========
         
         # Récupérer le nom
-        profile = supabase.table("user_profile").select("preferred_name").eq("user_id", "rebecca").execute()
+        profile = supabase.table("user_profile").select("preferred_name").eq("user_id", user_id).execute()
         user_name = profile.data[0].get("preferred_name", "Rebecca") if profile.data else "Rebecca"
         
         # Heure pour la salutation
@@ -8730,6 +8969,7 @@ Becks est là si tu as besoin. 👑"""
             "title": f"📋 {len(notifications)} point(s) important(s)",
             "body": notifications[0] + (" • ..." if len(notifications) > 1 else ""),
             "url": "/",
+            "user_id": user_id,
             "type": "smart_group"
         })
         
@@ -8737,7 +8977,7 @@ Becks est là si tu as besoin. 👑"""
         supabase.table("notifications_log").insert({
             "type": "smart_group",
             "date": today,
-            "user_id": "rebecca",
+            "user_id": user_id,
             "sent_at": now.isoformat(),
             "metadata": {
                 "notifications_count": len(notifications),
