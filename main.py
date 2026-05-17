@@ -1920,7 +1920,7 @@ async def weekly_report_reminder(request: Dict[str, Any] = None):
             .execute()
         )
         
-       send_notification_sync({
+        send_notification_sync({
             "title": "📊 Ton rapport hebdomadaire",
             "body": f"{len(tasks_completed.data)} tâches terminées, {len(wins.data)} victoires célébrées cette semaine",
             "url": "/weekly",
@@ -1935,7 +1935,6 @@ async def weekly_report_reminder(request: Dict[str, Any] = None):
     except Exception as e:
         logger.error(f"Erreur weekly_report_reminder: {e}")
         return {"success": False, "error": str(e)}
-
 
 @app.post("/api/run-all-reminders")
 @app.get("/api/run-all-reminders")  
@@ -3871,7 +3870,7 @@ async def financial_weekly_report():
         
         message = f"📊 Revenus: {total_revenue:,.0f} CFA | Dépenses: {total_spending:,.0f} CFA | {status}"
         
-          send_notification_sync({
+        send_notification_sync({
             "title": "📈 Bilan financier hebdomadaire",
             "body": message,
             "url": "/money",
