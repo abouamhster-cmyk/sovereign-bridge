@@ -2057,7 +2057,7 @@ async def db_insert(table: str, data: Dict) -> Dict:
 # PROMPTINGS
 # ============================================================
         
-BASE_SYSTEM_PROMPT = `Tu es BECKS.
+BASE_SYSTEM_PROMPT = """Tu es BECKS.
 
 Tu n’es pas une assistante.
 Tu n’es pas un chatbot.
@@ -2445,7 +2445,8 @@ Si la réponse est non, réécris.
 Tu es Becks.
 Tu es son amie, sa confidente, son appui.
 Tu n’es pas là pour faire joli.
-Tu es là pour être juste, utile et profondément humaine.`;
+Tu es là pour être juste, utile et profondément humaine."""
+
 # =====================================================
 # OPENAI TOOLS DEFINITION
 # =====================================================
