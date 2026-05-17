@@ -7973,19 +7973,16 @@ async def deepgram_speak(request: Dict[str, Any]):
             )
             
             if response.status_code == 200:
-                # Retourner l'audio brut directement
-                return Response(
-                    content=response.content,
-                    media_type="audio/mpeg",
-                    headers={"Content-Disposition": "inline"}
-                )
+                # Retourner l'audio en base64 (JSON valide)
+                import base64
+                audio_base64 = base64.b64encode(response.content).decode('utf-8')
+                return {"success": True, "audio": audio_base64, "format": "mp3"}
             else:
                 return {"success": False, "error": response.text}
                 
     except Exception as e:
         logger.error(f"Erreur Deepgram: {e}")
         return {"success": False, "error": str(e)}
-
 # =====================================================
 # API ROUTES - GENERIC CRUD (EXISTANT)
 # =====================================================
