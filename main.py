@@ -8016,12 +8016,8 @@ def delete_item(table: str, item_id: str):
         raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
     return db_delete(table, item_id)
 
-
 @app.post("/api/generate-greeting")
 async def generate_greeting(request: Dict[str, Any]):
-    """
-    Génère un message d'accueil personnalisé pour le dashboard.
-    """
     tasks_count = request.get("tasks_count", 0)
     overdue_count = request.get("overdue_count", 0)
     wins_count = request.get("wins_count", 0)
@@ -8032,34 +8028,48 @@ async def generate_greeting(request: Dict[str, Any]):
     # Déterminer le moment de la journée
     if hour < 12:
         time_context = "matin"
+        emoji = "☀️"
     elif hour < 18:
         time_context = "après-midi"
+        emoji = "🌤️"
     else:
         time_context = "soir"
+        emoji = "🌙"
     
-    # Construire le prompt pour l'IA
-    prompt = f"""Génère un message d'accueil chaleureux et personnalisé pour Rebecca.
+    # Adapter selon l'humeur
+    mood_context = ""
+    if mood == "fatiguée":
+        mood_context = "Elle est fatiguée. Sois douce et propose une micro-pause."
+    elif mood == "stressée":
+        mood_context = "Elle est stressée. Propose de respirer et de prioriser UNE seule chose."
+    elif mood == "excellent":
+        mood_context = "Elle est en pleine forme ! Propose d'attaquer une tâche importante."
+    elif mood == "bien":
+        mood_context = "Elle va bien. Propose une action équilibrée."
+    
+    prompt = f"""Génère un message d'accueil pour Rebecca, comme si tu étais son amie et assistante personnelle.
 
-Contexte :
-- Moment de la journée : {time_context}
-- Tâches à faire aujourd'hui : {tasks_count}
+CONTEXTE :
+- Moment : {time_context} {emoji}
+- Tâches aujourd'hui : {tasks_count}
 - Tâches en retard : {overdue_count}
 - Victoires récentes : {wins_count}
 - Missions actives : {missions_count}
-- Humeur détectée : {mood if mood else "non renseignée"}
+- {mood_context}
 
-RÈGLES :
-- Sois naturelle, comme une amie
-- Maximum 25 mots
-- Pas de liste, pas d'énumération
-- Si elle a des tâches en retard → mentionne-le avec bienveillance
-- Si elle est fatiguée ou stressée → propose d'aller doucement
-- Si rien d'urgent → message détendu
+STYLE : 
+- Humain, chaleureux, naturel (pas robotique)
+- Parle à la première personne ("Je vois que...", "Je sens que...")
+- Maximum 40 mots
+- Structure ton message ainsi :
+  1. Une phrase sur son état ou le moment
+  2. Un constat sur sa charge (tâches/missions)
+  3. Une proposition d'action simple ET une question ouverte
 
-Exemples :
-- "Salut Rebecca. Tu as 2 tâches en retard. On y va doucement ?"
-- "Bonjour ! Rien d'urgent aujourd'hui. Profites-en pour souffler."
-- "Coucou. 3 victoires récentes, bien joué ! Continue comme ça."
+EXEMPLES de bons messages :
+- "☀️ Bonjour Rebecca. Je vois que tu as 3 tâches aujourd'hui, dont une en retard. On commence par celle-là ? Je suis là. 💖"
+- "🌤️ Salut. 2 missions actives et 1 victoire récente, bien joué ! Tu veux qu'on avance sur laquelle ?"
+- "🌙 Bonsoir. Tu es fatiguée ? Ralentissons. Une seule petite chose pour ce soir ?"
 
 Retourne UNIQUEMENT le message, rien d'autre."""
 
@@ -8068,17 +8078,17 @@ Retourne UNIQUEMENT le message, rien d'autre."""
             model="gpt-4o",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
-            max_tokens=100
+            max_tokens=150
         )
         
         greeting = response.choices[0].message.content.strip()
-        
         return {"success": True, "greeting": greeting}
         
     except Exception as e:
         logger.error(f"Erreur génération greeting: {e}")
-        return {"success": False, "error": str(e)}
-
+        # Fallback humain
+        fallback = f"{emoji} Salut Rebecca. {tasks_count} tâche(s) aujourd'hui. On y va doucement. 👑"
+        return {"success": True, "greeting": fallback}
 
 
 @app.post("/api/weekly-summary")
