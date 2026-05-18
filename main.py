@@ -28,9 +28,9 @@ app.add_middleware(
     allow_origins=[
         "https://sovereignallmighty.netlify.app",
         "http://localhost:3000",
-        "https://sovereign-app-ashen.vercel.app", 
-        "https://*.vercel.app"
+        "https://sovereign-app-ashen.vercel.app"
     ],
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -282,6 +282,7 @@ ou
                         "title": f"📱 WhatsApp - {sender_name}",
                         "body": text_message[:100],
                         "url": "/communications?tab=whatsapp",
+                        "user_id": DEFAULT_USER_ID,
                         "type": "whatsapp"
                     })
                     
@@ -291,6 +292,7 @@ ou
                     "title": f"📱 WhatsApp - {sender_name}",
                     "body": text_message[:100],
                     "url": "/communications?tab=whatsapp",
+                    "user_id": DEFAULT_USER_ID,
                     "type": "whatsapp"
                 })
     
@@ -610,23 +612,45 @@ GREENAPI_BASE_URL = f"https://api.green-api.com/waInstance{GREENAPI_ID_INSTANCE}
 # USER CONTEXT
 # =====================================================
 
-DEFAULT_USER_ID = os.environ.get("DEFAULT_USER_ID", "rebecca")
+DEFAULT_USER_ID = os.environ.get("DEFAULT_USER_ID")
 
 def get_request_user_id(request_data: Dict[str, Any] = None) -> str:
     """
     Récupère le user_id envoyé par le frontend.
-    Si aucun user_id n'est fourni, on garde DEFAULT_USER_ID pour ne pas casser l'app actuelle.
+    Si absent, utilise DEFAULT_USER_ID seulement s'il existe dans les variables d'environnement.
+    Sinon, renvoie une erreur claire.
     """
-    if request_data and request_data.get("user_id"):
-        return request_data.get("user_id")
-    return DEFAULT_USER_ID
+    incoming_user_id = None
 
-def normalize_user_id(user_id: Optional[str] = None) -> str:
+    if request_data:
+        incoming_user_id = request_data.get("user_id")
+
+    return require_user_id(incoming_user_id)
+
+def normalize_user_id(user_id: Optional[str] = None) -> Optional[str]:
     """
     Retourne un user_id propre.
-    Si rien n'est fourni, utilise DEFAULT_USER_ID.
+    Ne met plus 'rebecca' par défaut, car certaines tables attendent un UUID.
     """
-    return user_id or DEFAULT_USER_ID
+    if user_id and user_id != "rebecca":
+        return user_id
+    
+    return DEFAULT_USER_ID
+
+def require_user_id(user_id: Optional[str] = None) -> str:
+    """
+    Exige un vrai user_id.
+    À utiliser sur les routes qui lisent/écrivent des données personnelles.
+    """
+    clean_user_id = normalize_user_id(user_id)
+
+    if not clean_user_id:
+        raise HTTPException(
+            status_code=400,
+            detail="user_id requis. Le frontend doit envoyer l'identifiant utilisateur connecté."
+        )
+
+    return clean_user_id
 
 
 if not OPENAI_API_KEY:
@@ -884,6 +908,7 @@ def normalize_field_value(table: str, field: str, value: str) -> str:
 
 class ChatRequest(BaseModel):
     messages: List[Dict[str, Any]]
+    user_id: Optional[str] = None
 
 
 class WriteRequest(BaseModel):
@@ -921,7 +946,7 @@ def send_notification_sync(notification_data: Dict[str, Any]) -> List[Dict]:
         logger.error("Supabase non configuré")
         return []
     
-    user_id = notification_data.get("user_id", DEFAULT_USER_ID)
+    user_id = require_user_id(notification_data.get("user_id"))
     notif_type = notification_data.get("type", "default")
     today = datetime.now().date().isoformat()
     
@@ -968,7 +993,7 @@ def send_notification_sync(notification_data: Dict[str, Any]) -> List[Dict]:
     # ============================================
     # 2. ENVOYER LES NOTIFICATIONS PUSH
     # ============================================
-    subscriptions = supabase.table("push_subscriptions").select("*").execute()
+    subscriptions = (     supabase.table("push_subscriptions")     .select("*")     .eq("user_id", user_id)     .execute() )
     results = []
     
     # Styles selon le type
@@ -1068,13 +1093,14 @@ def store_chat_session(
     user_message: str,
     assistant_response: str,
     tools_used: List[str] = None,
-    user_id: str = DEFAULT_USER_ID
+    user_id: Optional[str] = None
 ):
     """Stocke la session de chat dans Supabase"""
     if not supabase:
         return
     
     try:
+        user_id = require_user_id(user_id)
         supabase.table("chat_sessions").insert({
             "user_message": user_message[:500],
             "assistant_response": assistant_response[:1000],
@@ -1089,12 +1115,13 @@ def store_chat_session(
 # FONCTIONS POUR LA MÉMOIRE UTILISATEUR
 # =====================================================
 
-async def get_user_memory_context(user_id: str = DEFAULT_USER_ID) -> str:
+async def get_user_memory_context(user_id: Optional[str] = None) -> str:
     """Récupère la mémoire utilisateur"""
     if not supabase:
         return ""
     
     try:
+        user_id = require_user_id(user_id)
         # Utiliser une requête différente si l'ID n'est pas un UUID
         result = supabase.table("user_memory").select("*").eq("user_id", user_id).execute()
         memories = result.data
@@ -1123,14 +1150,22 @@ async def get_user_memory_context(user_id: str = DEFAULT_USER_ID) -> str:
         return ""
 
 
-async def save_user_memory(category: str, key: str, value: str, user_id: str = DEFAULT_USER_ID):
+async def save_user_memory(category: str, key: str, value: str, user_id: Optional[str] = None):
     """Sauvegarde une information dans la mémoire utilisateur"""
     if not supabase:
         return False
     
     try:
-        # Vérifier si la clé existe déjà
-        existing = supabase.table("user_memory").select("*").eq("user_id", user_id).eq("category", category).eq("key", key).execute()
+        user_id = require_user_id(user_id)
+
+        existing = (
+            supabase.table("user_memory")
+            .select("*")
+            .eq("user_id", user_id)
+            .eq("category", category)
+            .eq("key", key)
+            .execute()
+        )
         
         if existing.data:
             supabase.table("user_memory").update({
@@ -1160,12 +1195,11 @@ async def save_user_memory(category: str, key: str, value: str, user_id: str = D
 # GESTION DES CONTACTS
 # =====================================================
 
-async def get_contact_number(contact_name: str, user_id: str = DEFAULT_USER_ID) -> dict:
-    """Cherche un numéro de téléphone pour un contact.
-    Retourne: {"found": bool, "phone": str, "source": str}
-    """
+async def get_contact_number(contact_name: str, user_id: Optional[str] = None) -> dict:
     if not supabase:
         return {"found": False, "phone": None, "source": None}
+
+    user_id = require_user_id(user_id)
     
     contact_name_lower = contact_name.lower().strip()
     
@@ -1210,10 +1244,11 @@ def extract_phone_from_text(text: str) -> str:
     return None
 
 
-async def save_contact_memory(contact_name: str, phone: str, user_id: str = DEFAULT_USER_ID):
-    """Sauvegarde un contact dans la mémoire rapide"""
+async def save_contact_memory(contact_name: str, phone: str, user_id: Optional[str] = None):
     if not supabase:
         return False
+
+    user_id = require_user_id(user_id)
     
     key = f"{contact_name.lower()}_phone"
     
@@ -1383,12 +1418,12 @@ def db_delete(table: str, id: str) -> Dict:
         return {"success": False, "error": str(e)}
 
 
-def get_financial_summary(user_id: str = DEFAULT_USER_ID) -> Dict:
+def get_financial_summary(user_id: Optional[str] = None) -> Dict:
     if not supabase:
         return {"total_revenue": 0, "total_spending": 0, "net_balance": 0}
     
     try:
-        user_id = normalize_user_id(user_id)
+        user_id = require_user_id(user_id)
 
         rev_result = (
             supabase.table("revenue")
@@ -1418,12 +1453,12 @@ def get_financial_summary(user_id: str = DEFAULT_USER_ID) -> Dict:
         logger.error(f"Erreur financial_summary: {e}")
         return {"total_revenue": 0, "total_spending": 0, "net_balance": 0}
 
-def get_priority_tasks(limit: int = 10, user_id: str = DEFAULT_USER_ID) -> List[Dict]:
+def get_priority_tasks(limit: int = 10, user_id: Optional[str] = None) -> List[Dict]:
     if not supabase:
         return []
     
     try:
-        user_id = normalize_user_id(user_id)
+        user_id = require_user_id(user_id)
 
         result = (
             supabase.table("tasks")
@@ -1446,7 +1481,7 @@ def get_priority_tasks(limit: int = 10, user_id: str = DEFAULT_USER_ID) -> List[
 async def save_memory(request: MemorySaveRequest):
     """Sauvegarde une information dans la mémoire utilisateur"""
     try:
-        user_id = request.user_id or DEFAULT_USER_ID
+        user_id = require_user_id(request.user_id)
         result = await save_user_memory(
             request.category,
             request.key,
@@ -1459,12 +1494,13 @@ async def save_memory(request: MemorySaveRequest):
         return {"success": False, "error": str(e)}
 
 @app.get("/api/memory/get")
-async def get_memory(category: str = None, key: str = None, user_id: str = DEFAULT_USER_ID):
-    """Récupère les informations de la mémoire utilisateur"""
+async def get_memory(category: str = None, key: str = None, user_id: Optional[str] = None):
     if not supabase:
         return {"success": False, "data": []}
     
     try:
+        user_id = require_user_id(user_id)
+
         query = supabase.table("user_memory").select("*").eq("user_id", user_id)
         if category:
             query = query.eq("category", category)
@@ -1484,7 +1520,7 @@ async def create_task_from_conversation(request: ExecuteTaskRequest):
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
-        user_id = request.user_id or DEFAULT_USER_ID
+        user_id = require_user_id(request.user_id)
         
         result = supabase.table("tasks").insert({
             "title": request.title,
@@ -1563,13 +1599,12 @@ async def save_mood(request: Dict[str, Any]):
 
 
 @app.get("/api/mood/history")
-async def get_mood_history(days: int = 30, user_id: str = DEFAULT_USER_ID):
-    """Récupère l'historique des humeurs"""
+async def get_mood_history(days: int = 30, user_id: Optional[str] = None):
     if not supabase:
         return {"success": False, "data": []}
     
     try:
-        user_id = normalize_user_id(user_id)
+        user_id = require_user_id(user_id)
         start_date = (datetime.now().date() - timedelta(days=days)).isoformat()
 
         result = (
@@ -1858,10 +1893,12 @@ async def celebration_reminder(request: Dict[str, Any] = None):
 
 
 @app.post("/api/morning-brief-reminder")
-async def morning_brief_reminder():
+async def morning_brief_reminder(request: Dict[str, Any] = None):
     """Rappel du brief matinal (entre 7h et 9h)"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
+
+    user_id = get_request_user_id(request or {})
     
     current_hour = datetime.now().hour
     
@@ -1870,7 +1907,7 @@ async def morning_brief_reminder():
             return {"success": True, "sent": False, "message": "Pas l'heure du brief matinal"}
         
         today = datetime.now().date().isoformat()
-        existing_brief = supabase.table("daily_briefs").select("*").eq("date", today).execute()
+        existing_brief = (     supabase.table("daily_briefs")     .select("*")     .eq("user_id", user_id)     .eq("date", today)     .execute() )
         
         if existing_brief.data:
             send_notification_sync({
@@ -1879,7 +1916,8 @@ async def morning_brief_reminder():
                 "url": "/brief",
                 "tag": "morning_brief",
                 "type": "brief",
-                "requireInteraction": True
+                "requireInteraction": True, 
+                "user_id": user_id
             })
             return {"success": True, "sent": True, "message": "Brief matinal envoyé"}
         else:
@@ -1987,7 +2025,8 @@ async def check_and_notify(request: Dict[str, Any] = None):
                 "title": "📋 Tâche du jour",
                 "body": f"{task['title']} - À faire aujourd'hui",
                 "url": "/tasks",
-                "tag": f"task_{task['id']}"
+                "tag": f"task_{task['id']}", 
+                "user_id": user_id
             })
             notifications_sent.append(f"Task: {task['title']}")
         
@@ -1997,7 +2036,9 @@ async def check_and_notify(request: Dict[str, Any] = None):
                 "title": "⚠️ Document en retard",
                 "body": f"{doc['name']} - En retard",
                 "url": "/documents",
-                "tag": f"doc_{doc['id']}"
+                "tag": f"doc_{doc['id']}",
+                "user_id": user_id
+
             })
             notifications_sent.append(f"Doc overdue: {doc['name']}")
         
@@ -2007,7 +2048,8 @@ async def check_and_notify(request: Dict[str, Any] = None):
                 "title": "🌅 Bonjour Rebecca",
                 "body": "Ton brief quotidien est prêt !",
                 "url": "/brief",
-                "tag": "morning_brief"
+                "tag": "morning_brief",
+                "user_id": user_id
             })
             notifications_sent.append("Morning brief")
         
@@ -2908,19 +2950,20 @@ def unsubscribe_push(request: Dict[str, Any]):
 
 @app.post("/api/send-notification")
 def send_notification(request: Dict[str, Any]):
-    """Envoie une notification à tous les abonnés"""
     title = request.get("title", "SOVEREIGN")
     body = request.get("body", "")
     url = request.get("url", "/")
-    
+    user_id = get_request_user_id(request)
+
     results = send_notification_sync({
         "title": title,
         "body": body,
         "url": url,
         "type": request.get("type", "default"),
-        "tag": request.get("tag")
+        "tag": request.get("tag"),
+        "user_id": user_id
     })
-    
+
     return {"success": True, "results": results}
 
 
@@ -2929,7 +2972,7 @@ def send_notification(request: Dict[str, Any]):
 # =====================================================
 
 @app.get("/api/calm-guidance")
-async def get_calm_guidance(user_id: str = DEFAULT_USER_ID):
+async def get_calm_guidance(user_id: Optional[str] = None):
     """Génère un message de guidance personnalisé basé sur la charge réelle."""
     if not supabase:
         return {
@@ -2938,7 +2981,7 @@ async def get_calm_guidance(user_id: str = DEFAULT_USER_ID):
             "load_score": 0,
             "specific_advice": []
         }
-    user_id = normalize_user_id(user_id)
+    user_id = require_user_id(user_id)
     today = datetime.now().date().isoformat()
     now = datetime.now()
     
@@ -2992,13 +3035,13 @@ async def get_calm_guidance(user_id: str = DEFAULT_USER_ID):
 
 
 @app.get("/api/proactive-suggestions")
-async def get_proactive_suggestions(user_id: str = DEFAULT_USER_ID):
+async def get_proactive_suggestions(user_id: Optional[str] = None):
     """Analyse les données et retourne des suggestions proactives."""
     if not supabase:
         return {"suggestions": []}
     
     suggestions = []
-    user_id = normalize_user_id(user_id)
+    user_id = require_user_id(user_id)
     today = datetime.now().date().isoformat()
     tomorrow = (datetime.now().date() + timedelta(days=1)).isoformat()
     
@@ -3062,7 +3105,7 @@ async def get_proactive_suggestions(user_id: str = DEFAULT_USER_ID):
 
 
 @app.get("/api/ai-priorities")
-async def get_ai_priorities(limit: int = 3, user_id: str = DEFAULT_USER_ID):
+async def get_ai_priorities(limit: int = 3, user_id: Optional[str] = None):
     """Calcule les priorités IA basées sur urgence, deadline, importance."""
     if not supabase:
         return {"priorities": []}
@@ -3174,16 +3217,16 @@ def get_priority_reason_text(task: Dict, score: int) -> str:
 # =====================================================
 
 @app.get("/api/tasks/today")
-def get_today_tasks(user_id: str = DEFAULT_USER_ID):
-    user_id = normalize_user_id(user_id)
+def get_today_tasks(user_id: Optional[str] = None):
+    user_id = require_user_id(user_id)
     today = datetime.now().date().isoformat()
     tasks = supabase.table("tasks").select("*").eq("user_id", user_id).eq("due_date", today).neq("status", "done").execute()
     return {"tasks": tasks.data}
 
 
 @app.get("/api/tasks/upcoming")
-def get_upcoming_tasks(user_id: str = DEFAULT_USER_ID):
-    user_id = normalize_user_id(user_id)
+def get_upcoming_tasks(user_id: Optional[str] = None):
+    user_id = require_user_id(user_id)
     today = datetime.now().date()
     next_week = today + timedelta(days=7)
     tasks = supabase.table("tasks").select("*").eq("user_id", user_id).gte("due_date", today.isoformat()).lte("due_date", next_week.isoformat()).neq("status", "done").execute()
@@ -3214,7 +3257,7 @@ def get_recent_wins(limit: int = 5):
 
 
 @app.get("/tasks/by-status/{status}")
-def get_tasks_by_status(status: str, limit: int = 20, user_id: str = DEFAULT_USER_ID):
+def get_tasks_by_status(status: str, limit: int = 20, user_id: Optional[str] = None):
     user_id = normalize_user_id(user_id)
     """Récupère les tâches par statut"""
     tasks = supabase.table("tasks").select("*").eq("user_id", user_id).eq("status", status).limit(limit).execute()
@@ -3263,8 +3306,11 @@ async def chat_endpoint(request: ChatRequest):
     date_context = f"\n\nToday is {today_date}. Use this information to provide relevant context."
     
     # Ajouter le système prompt avec mémoire
-    memory_context = await get_user_memory_context()
-    profile_context_result = await get_profile_context()
+    user_id = require_user_id(request.user_id)
+    
+    memory_context = await get_user_memory_context(user_id)
+    
+    profile_context_result = await get_profile_context(user_id=user_id)
     profile_context = profile_context_result.get("context", "")
     
     enhanced_system_prompt = BASE_SYSTEM_PROMPT + date_context + memory_context
@@ -3374,12 +3420,12 @@ async def chat_endpoint(request: ChatRequest):
                 logger.info(f"✍️ Écriture dans {target_table}: {result['success']}")
                 
             elif name == "get_financial_summary":
-                result = get_financial_summary()
+                result = get_financial_summary(user_id)
                 content = json.dumps(result, ensure_ascii=False)
                 logger.info(f"💰 Résumé financier: {result['net_balance']} XOF")
                 
             elif name == "get_priority_tasks":
-                result = get_priority_tasks(args.get("limit", 10))
+                result = get_priority_tasks(args.get("limit", 10), user_id=user_id)
                 content = json.dumps(result, ensure_ascii=False)
                 logger.info(f"📋 Tâches prioritaires: {len(result)}")
 
@@ -3394,7 +3440,7 @@ async def chat_endpoint(request: ChatRequest):
                     content = f"❌ Erreur: {result.get('error', 'inconnue')}"
             
             elif name == "save_memory":
-                result = await save_user_memory(args.get("category"), args.get("key"), args.get("value"))
+                result = await save_user_memory(     args.get("category"),     args.get("key"),     args.get("value"),     user_id=user_id )
                 content = f"✅ Information mémorisée: {args['key']} = {args['value']}" if result else "❌ Erreur mémoire"
                 logger.info(f"💾 Save memory: {args['key']} -> {args['value']}")
 
@@ -3426,7 +3472,8 @@ async def chat_endpoint(request: ChatRequest):
                 result = await create_task_from_conversation(ExecuteTaskRequest(
                     title=args.get("title"),
                     due_date=args.get("due_date") or None,
-                    priority=args.get("priority", "normal")
+                    priority=args.get("priority", "normal"),
+                    user_id=user_id
                 ))
                 if result.get("success"):
                     content = f"✅ Tâche créée: {args['title']}"
@@ -3466,7 +3513,7 @@ async def chat_endpoint(request: ChatRequest):
         if request.messages:
             last_user = request.messages[-1].get("content", "")
             tools_used = [tc.function.name for tc in msg.tool_calls] if msg.tool_calls else []
-            store_chat_session(last_user, clean_response, tools_used)
+            store_chat_session(last_user, clean_response, tools_used, user_id=user_id)
         
         logger.info(f"📨 Réponse envoyée")
         return {"reply": clean_response}
@@ -3522,13 +3569,14 @@ Par exemple :
 # =====================================================
 
 @app.get("/financials/summary")
-def financial_summary():
-    return get_financial_summary()
-
+def financial_summary(user_id: Optional[str] = None):
+    user_id = require_user_id(user_id)
+    return get_financial_summary(user_id)
 
 @app.get("/tasks/priority")
-def tasks_priority(limit: int = 10):
-    return {"tasks": get_priority_tasks(limit)}
+def tasks_priority(limit: int = 10, user_id: Optional[str] = None):
+    user_id = require_user_id(user_id)
+    return {"tasks": get_priority_tasks(limit, user_id=user_id)}
 
 
 
@@ -3615,7 +3663,7 @@ def save_to_memory(
         return
     
     try:
-        user_id = normalize_user_id(user_id)
+        user_id = require_user_id(user_id)
 
         existing = (
             supabase.table("ai_memory")
@@ -3643,12 +3691,12 @@ def save_to_memory(
     except Exception as e:
         logger.error(f"Erreur sauvegarde mémoire: {e}")
 
-def get_from_memory(key: str, user_id: str = DEFAULT_USER_ID) -> Dict:
+def get_from_memory(key: str, user_id: Optional[str] = None) -> Dict:
     if not supabase:
         return {}
     
     try:
-        user_id = normalize_user_id(user_id)
+        user_id = require_user_id(user_id)
 
         result = (
             supabase.table("ai_memory")
@@ -3790,16 +3838,30 @@ async def missions_daily_reminder(request: Dict[str, Any] = None):
 
 
 @app.post("/api/opportunities-reminder")
-async def opportunities_reminder():
+async def opportunities_reminder(request: Dict[str, Any] = None):
     """Rappel des opportunités à haut potentiel"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
-        high_opps = supabase.table("opportunities").select("*").eq("probability", "high").not_.in_("stage", ["won", "lost"]).execute()
-        
+        user_id = get_request_user_id(request or {})
+        high_opps = (
+            supabase.table("opportunities")
+            .select("*")
+            .eq("user_id", user_id)
+            .eq("probability", "high")
+            .not_.in_("stage", ["won", "lost"])
+            .execute()
+        )        
         if not high_opps.data:
-            preparing_opps = supabase.table("opportunities").select("*").eq("stage", "preparing").not_.in_("stage", ["won", "lost"]).execute()
+            preparing_opps = (
+                supabase.table("opportunities")
+                .select("*")
+                .eq("user_id", user_id)
+                .eq("stage", "preparing")
+                .not_.in_("stage", ["won", "lost"])
+                .execute()
+            )            
             if preparing_opps.data:
                 total_value = sum(o.get("estimated_value", 0) for o in preparing_opps.data)
                 send_notification_sync({
@@ -3808,7 +3870,8 @@ async def opportunities_reminder():
                     "url": "/opportunities",
                     "tag": "opportunities_preparing",
                     "type": "opportunity",
-                    "requireInteraction": False
+                    "requireInteraction": False,
+                    "user_id": user_id
                 })
                 return {"success": True, "sent": True, "type": "preparing", "count": len(preparing_opps.data)}
             else:
@@ -3821,7 +3884,8 @@ async def opportunities_reminder():
             "url": "/opportunities",
             "tag": "high_value_opportunities",
             "type": "opportunity",
-            "requireInteraction": True
+            "requireInteraction": True,
+            "user_id": user_id
         })
         
         return {"success": True, "sent": True, "count": len(high_opps.data), "total_value": total_value}
@@ -3832,10 +3896,11 @@ async def opportunities_reminder():
 
 
 @app.post("/api/financial-weekly-report")
-async def financial_weekly_report():
+async def financial_weekly_report(request: Dict[str, Any] = None):
     """Bilan financier hebdomadaire (le dimanche)"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
+        user_id = get_request_user_id(request or {})
     
     if datetime.now().weekday() != 6:
         return {"success": True, "sent": False, "message": "Pas le jour du bilan financier (dimanche)"}
@@ -3843,11 +3908,25 @@ async def financial_weekly_report():
     try:
         start_of_week = (datetime.now().date() - timedelta(days=7)).isoformat()
         end_of_week = datetime.now().date().isoformat()
+        revenue_data = (
+            supabase.table("revenue")
+            .select("*")
+            .eq("user_id", user_id)
+            .gte("date", start_of_week)
+            .lte("date", end_of_week)
+            .execute()
+        )
         
-        revenue_data = supabase.table("revenue").select("*").gte("date", start_of_week).lte("date", end_of_week).execute()
+        spending_data = (
+            supabase.table("spending")
+            .select("*")
+            .eq("user_id", user_id)
+            .gte("date", start_of_week)
+            .lte("date", end_of_week)
+            .execute()
+        )        
         total_revenue = sum(r.get("amount", 0) for r in revenue_data.data)
         
-        spending_data = supabase.table("spending").select("*").gte("date", start_of_week).lte("date", end_of_week).execute()
         total_spending = sum(s.get("amount", 0) for s in spending_data.data)
         
         balance = total_revenue - total_spending
@@ -3878,7 +3957,8 @@ async def financial_weekly_report():
             "url": "/money",
             "tag": "weekly_financial",
             "type": "financial",
-            "requireInteraction": False
+            "requireInteraction": False,
+            "user_id": user_id
         })
         
         if total_spending > 500000:
@@ -3888,7 +3968,8 @@ async def financial_weekly_report():
                 "url": "/money",
                 "tag": "high_spending_alert",
                 "type": "financial",
-                "requireInteraction": True
+                "requireInteraction": True,
+                "user_id": user_id
             })
         
         return {
@@ -3996,8 +4077,8 @@ async def family_events_reminder(request: Dict[str, Any] = None):
 # =====================================================
 
 @app.get("/api/profile")
-async def get_user_profile(user_id: str = DEFAULT_USER_ID):
-    user_id = normalize_user_id(user_id)
+async def get_user_profile(user_id: Optional[str] = None):
+    user_id = require_user_id(user_id)
     """Récupère le profil utilisateur complet"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
@@ -4123,13 +4204,13 @@ async def add_child(request: Dict[str, Any]):
         return {"success": False, "error": str(e)}
 
 @app.get("/api/profile/context")
-async def get_profile_context(user_id: str = DEFAULT_USER_ID):
+async def get_profile_context(user_id: Optional[str] = None):
     """Récupère un résumé du profil pour injection dans le prompt"""
     if not supabase:
         return {"context": ""}
     
     try:
-        user_id = normalize_user_id(user_id)
+        user_id = require_user_id(user_id)
         result = supabase.table("user_profile").select("*").eq("user_id", user_id).execute()
         
         if not result.data:
@@ -4190,8 +4271,8 @@ async def process_brain_dump(request: Dict[str, Any]):
     content_words = len(content.split())
     
     # Récupérer le contexte utilisateur pour personnaliser
-    profile_context = await get_profile_context()
-    memory_context = await get_user_memory_context()
+    profile_context = await get_profile_context(user_id=user_id)
+    memory_context = await get_user_memory_context(user_id)
     
     try:
         response = client.chat.completions.create(
@@ -5071,7 +5152,7 @@ async def clean_expired_subscriptions():
     
     try:
         # Récupérer toutes les subscriptions
-        subscriptions = supabase.table("push_subscriptions").select("*").execute()
+        subscriptions = supabase.table("push_subscriptions").select("*").execute() 
         
         deleted_count = 0
         for sub in subscriptions.data:
@@ -5358,7 +5439,8 @@ Je suis là. 💖"""
                 "title": f"🌅 {user_name}",
                 "body": ai_content.get("priorities_summary", "Bonne journée !")[:80],
                 "url": "/",
-                "type": "brief"
+                "type": "brief",
+                "user_id": user_id
             })
             push_sent = True
         except Exception as e:
@@ -5387,7 +5469,7 @@ Je suis là. 💖"""
 # =====================================================
 
 @app.post("/api/proactive/stale-missions")
-async def check_stale_missions():
+async def check_stale_missions(request: Dict[str, Any] = None):
     """
     Vérifie les missions inactives (pas de mise à jour depuis 5 jours)
     et envoie des alertes par email et notification push.
@@ -5397,9 +5479,15 @@ async def check_stale_missions():
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
+        user_id = get_request_user_id(request or {})
         # Récupérer les missions actives
-        active_missions = supabase.table("missions").select("*").eq("status", "active").execute()
-        
+        active_missions = (
+            supabase.table("missions")
+            .select("*")
+            .eq("user_id", user_id)
+            .eq("status", "active")
+            .execute()
+        )        
         if not active_missions.data:
             return {"success": True, "message": "Aucune mission active", "stale_missions": []}
         
@@ -5464,6 +5552,7 @@ Becks reste à ta disposition pour t'aider. 👑
                 "body": f"{len(stale_missions)} mission(s) sans activité depuis 5 jours",
                 "url": "/missions",
                 "type": "mission",
+                "user_id": user_id,
                 "requireInteraction": True
             })
             push_sent = True
@@ -5498,7 +5587,7 @@ Becks reste à ta disposition pour t'aider. 👑
 # =====================================================
 
 @app.post("/api/proactive/opportunities-alert")
-async def check_opportunities_alert():
+async def check_opportunities_alert(request: Dict[str, Any] = None):
     """
     Vérifie les grants et contrats proches de l'échéance (≤ 7 jours)
     et envoie des alertes.
@@ -5508,19 +5597,42 @@ async def check_opportunities_alert():
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
+        user_id = get_request_user_id(request or {})
         today = datetime.now().date()
         next_week = today + timedelta(days=7)
         today_iso = today.isoformat()
         next_week_iso = next_week.isoformat()
         
         # Récupérer les grants proches de l'échéance
-        grants = supabase.table("lf_grants").select("*").gte("deadline", today_iso).lte("deadline", next_week_iso).execute()
-        
         # Récupérer les contrats proches de l'échéance
-        contracts = supabase.table("lf_contracts").select("*").gte("deadline", today_iso).lte("deadline", next_week_iso).execute()
-        
         # Récupérer les opportunités générales
-        opportunities = supabase.table("opportunities").select("*").gte("deadline", today_iso).lte("deadline", next_week_iso).neq("stage", "won").execute()
+        grants = (
+            supabase.table("lf_grants")
+            .select("*")
+            .eq("user_id", user_id)
+            .gte("deadline", today_iso)
+            .lte("deadline", next_week_iso)
+            .execute()
+        )
+        
+        contracts = (
+            supabase.table("lf_contracts")
+            .select("*")
+            .eq("user_id", user_id)
+            .gte("deadline", today_iso)
+            .lte("deadline", next_week_iso)
+            .execute()
+        )
+        
+        opportunities = (
+            supabase.table("opportunities")
+            .select("*")
+            .eq("user_id", user_id)
+            .gte("deadline", today_iso)
+            .lte("deadline", next_week_iso)
+            .neq("stage", "won")
+            .execute()
+        )
         
         all_items = []
         
@@ -5609,6 +5721,7 @@ Becks peut t'aider à préparer les documents. 👑
                 "body": f"{len(all_items)} opportunité(s) approchent de leur échéance",
                 "url": "/love-fire-sport",
                 "type": "money",
+                "user_id": user_id,
                 "requireInteraction": True
             })
             push_sent = True
@@ -5722,6 +5835,7 @@ Becks te soutient ! 👑
                 "body": f"Priorité 1 : {planning[0]['title']}",
                 "url": "/tasks",
                 "type": "task",
+                "user_id": user_id,
                 "requireInteraction": False
             })
             push_sent = True
@@ -5939,6 +6053,7 @@ Retourne UNIQUEMENT du JSON : {{"message": "..."}}"""
                 "title": "🌙 Fin de journée",
                 "body": f"{completed_count} tâche(s) accomplie(s) • {wins_count} victoire(s)",
                 "url": "/",
+                "user_id": user_id,
                 "type": "brief"
             })
             push_sent = True
@@ -6083,7 +6198,9 @@ Réponds-moi directement ou clique sur une suggestion pour que je t'aide.
                 "body": suggestions[0][:50],
                 "url": "/chat",
                 "type": "task",
+                "user_id": user_id,
                 "requireInteraction": False
+
             })
             push_sent = True
             logger.info("🔔 Notification push rappels intelligents envoyée")
@@ -6251,13 +6368,13 @@ async def backup_all_documents_to_drive():
         return {"success": False, "error": str(e)}
 
 @app.get("/api/morning-greeting")
-async def get_morning_greeting(user_id: str = DEFAULT_USER_ID):
+async def get_morning_greeting(user_id: Optional[str] = None):
     """Retourne un message d'accueil personnalisé basé sur les vraies données du jour"""
     if not supabase:
         return {"success": True, "message": "Salut Rebecca. Je suis là."}
     
     try:
-        user_id = normalize_user_id(user_id)
+        user_id = require_user_id(user_id)
         today = datetime.now().date().isoformat()
         hour = datetime.now().hour
         
@@ -6338,13 +6455,13 @@ async def get_morning_greeting(user_id: str = DEFAULT_USER_ID):
         return {"success": True, "message": "Salut Rebecca. Je suis là."}
 
 @app.get("/api/dashboard/today")
-async def get_today_dashboard(user_id: str = DEFAULT_USER_ID):
+async def get_today_dashboard(user_id: Optional[str] = None):
     """Retourne toutes les données nécessaires pour le dashboard du jour avec des messages humains"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
-        user_id = normalize_user_id(user_id)
+        user_id = require_user_id(user_id)
         today = datetime.now().date().isoformat()
         
         # Récupérer les tâches du jour
@@ -6748,8 +6865,8 @@ async def step_by_step_execution(request: Dict[str, Any]):
     
     try:
         # Récupérer le contexte utilisateur pour personnaliser
-        profile_context = await get_profile_context()
-        memory_context = await get_user_memory_context()
+        profile_context = await get_profile_context(user_id=user_id)
+        memory_context = await get_user_memory_context(user_id)
         
         system_prompt = f"""Tu es Becks, l'agent d'exécution de Rebecca. Tu transformes une demande en plan d'action CONCRET, ÉTAPE PAR ÉTAPE.
 
@@ -6822,6 +6939,7 @@ async def complete_execution_step(request: Dict[str, Any]):
     """Marque une étape comme complétée"""
     plan_id = request.get("plan_id")
     step_index = request.get("step_index")
+    user_id = get_request_user_id(request)
     
     if not plan_id or step_index is None:
         return {"success": False, "error": "plan_id et step_index requis"}
@@ -6831,7 +6949,13 @@ async def complete_execution_step(request: Dict[str, Any]):
             return {"success": True, "message": "Pas de base, étape fictive"}
         
         # Récupérer le plan
-        result = supabase.table("execution_plans").select("*").eq("id", plan_id).execute()
+        result = (
+            supabase.table("execution_plans")
+            .select("*")
+            .eq("user_id", user_id)
+            .eq("id", plan_id)
+            .execute()
+        )        
         if not result.data:
             return {"success": False, "error": "Plan non trouvé"}
         
@@ -6847,6 +6971,7 @@ async def complete_execution_step(request: Dict[str, Any]):
                 "title": "✅ Étape accomplie",
                 "body": f"'{steps[step_index].get('description', 'Étape')}' - Reste {len(steps) - len(completed_steps)} étape(s)",
                 "url": "/chat",
+                "user_id": user_id,
                 "type": "task"
             })
         
@@ -7276,6 +7401,7 @@ async def intelligent_notification_check():
                 "type": notif["type"],
                 "sound": "/sounds/notification.mp3",
                 "vibrate": [200, 100, 200],
+                "user_id": user_id,
                 "requireInteraction": notif["type"] in ["rescue", "task"]
             })
             notifications_sent.append(notif)
@@ -7330,11 +7456,11 @@ async def update_notification_preferences(request: Dict[str, Any]):
 
 
 @app.get("/api/notifications/preferences")
-async def get_notification_preferences(user_id: str = DEFAULT_USER_ID):
+async def get_notification_preferences(user_id: Optional[str] = None):
     """Récupère les préférences de notifications"""
     if not supabase:
         return {"success": False, "preferences": {}}
-    user_id = normalize_user_id(user_id)
+    user_id = require_user_id(user_id)
     
     try:
     
@@ -7466,6 +7592,7 @@ Je suis là pour t'aider. Une chose à la fois. 👑"""
             "sound": "/sounds/notification.mp3",
             "vibrate": [200, 100, 200],
             "requireInteraction": False,
+            "user_id": user_id,
             "silent": False,
             "tag": f"morning_checkin_{today}"
         })
@@ -7620,7 +7747,7 @@ def _generate_human_weekly_insight(completion_rate: int, wins_count: int, balanc
 
 
 @app.get("/api/weekly-ceo")
-async def get_weekly_ceo(user_id: str = DEFAULT_USER_ID):
+async def get_weekly_ceo(user_id: Optional[str] = None):
     """
     Retourne une vue stratégique hebdomadaire avec des messages humains.
     """
@@ -7628,7 +7755,7 @@ async def get_weekly_ceo(user_id: str = DEFAULT_USER_ID):
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
-        user_id = normalize_user_id(user_id)
+        user_id = require_user_id(user_id)
         now = datetime.now()
         start_of_week = (now.date() - timedelta(days=now.weekday())).isoformat()
         end_of_week = (now.date() + timedelta(days=6 - now.weekday())).isoformat()
@@ -8163,8 +8290,8 @@ async def generate_ready_to_send(request: Dict[str, Any]):
         return {"success": False, "error": "Contexte requis"}
     user_id = get_request_user_id(request or {})
     
-    memory_context = await get_user_memory_context()
-    profile_context = await get_profile_context()
+    memory_context = await get_user_memory_context(user_id)
+    profile_context = await get_profile_context(user_id=user_id)
     
     prompt = f"""Tu es Becks, l'assistante de Rebecca. Génère un {doc_type} prêt à être copié et envoyé.
 
@@ -8244,8 +8371,8 @@ async def compare_options(request: Dict[str, Any]):
         return {"success": False, "error": "Deux options sont requises"}
     user_id = get_request_user_id(request or {})
     
-    memory_context = await get_user_memory_context()
-    profile_context = await get_profile_context()
+    memory_context = await get_user_memory_context(user_id)
+    profile_context = await get_profile_context(user_id=user_id)
     
     prompt = f"""Tu es Becks, conseillère stratégique. Aide Rebecca à choisir entre deux options.
 
@@ -8740,6 +8867,7 @@ Passe une bonne soirée et repose-toi bien. 💖"""
                 "title": "📊 Bilan de la semaine",
                 "body": f"{completed_count} tâches faites • {wins_count} victoires",
                 "url": "/vision-strategy?tab=weekly",
+                "user_id": user_id,
                 "type": "report"
             })
             push_sent = True
