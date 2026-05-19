@@ -243,6 +243,7 @@ async def save_message_direct(sender: str, sender_name: str, text_message: str,
             "from_name": sender_name,
             "message": text_message,
             "status": "pending",
+            "replied": False,  # ← AJOUTÉ
             "importance": "medium",
             "created_at": datetime.now().isoformat()
         }
@@ -264,13 +265,14 @@ async def analyze_and_notify(sender: str, sender_name: str, text_message: str):
     try:
         analysis = await analyze_message_importance(sender_name, text_message)
         
-        # Sauvegarde UNIQUE avec les métadonnées d'analyse
+        # Sauvegarde avec replied = False par défaut
         if supabase:
             supabase.table("whatsapp_messages").insert({
                 "from": sender,
                 "from_name": sender_name,
                 "message": text_message,
                 "status": "pending",
+                "replied": False,  # ← AJOUTÉ
                 "importance": analysis["importance"],
                 "summary": analysis["summary"],
                 "is_greeting": analysis["is_greeting"],
@@ -343,6 +345,7 @@ async def fallback_save_and_notify(sender: str, sender_name: str, text_message: 
             "from_name": sender_name,
             "message": text_message,
             "status": "pending",
+            "replied": False,  # ← AJOUTÉ
             "importance": "medium",
             "created_at": datetime.now().isoformat()
         }).execute()
@@ -357,34 +360,31 @@ async def fallback_save_and_notify(sender: str, sender_name: str, text_message: 
         "type": "whatsapp"
     })
 
-
 # =====================================================
 # WHATSAPP - NOTIFICATIONS PROGRAMMÉES
 # =====================================================
 
 @app.post("/api/whatsapp/pending-notifications")
 async def whatsapp_pending_notifications(request: Dict[str, Any] = None):
-    """
-    Envoie un résumé des messages WhatsApp en attente.
-    À appeler par cron: matin (8h), midi (12h), soir (18h)
-    """
+    """Envoie un résumé des messages WhatsApp en attente (non répondus)"""
+    
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
     user_id = get_request_user_id(request or {})
     
-    # 🔥 CORRECTION : utiliser "pending" au lieu de "unread"
+    # 🔥 Utiliser replied = False au lieu de status = pending
     pending_messages = supabase.table("whatsapp_messages")\
         .select("*")\
         .eq("user_id", user_id)\
-        .eq("status", "pending")\
+        .eq("replied", False)\
         .order("importance", desc=True)\
         .order("created_at", desc=True)\
         .execute()
     
     if not pending_messages.data:
         return {"success": True, "sent": False, "message": "Aucun message en attente"}
-    
+        
     # Séparer par importance
     high_priority = [m for m in pending_messages.data if m.get("importance") == "high"]
     medium_priority = [m for m in pending_messages.data if m.get("importance") == "medium"]
@@ -490,13 +490,15 @@ async def whatsapp_reply(request: Dict[str, Any]):
         if message_id:
             # Marquer le message spécifique comme répondu
             supabase.table("whatsapp_messages").update({
-                "status": "replied", 
+                "status": "replied",
+                "replied": True,  # ← AJOUTÉ
                 "response": message
             }).eq("id", message_id).execute()
         else:
             # Marquer tous les messages pending de ce contact comme répondu
             supabase.table("whatsapp_messages").update({
-                "status": "replied", 
+                "status": "replied",
+                "replied": True,  # ← AJOUTÉ
                 "response": message
             }).eq("from", to).eq("status", "pending").execute()
     
