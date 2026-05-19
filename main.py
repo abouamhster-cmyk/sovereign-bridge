@@ -192,7 +192,26 @@ async def whatsapp_webhook(request: Request):
             # Ne pas sauvegarder les types non supportés
             return {"status": "ok"}
         
-
+        # ========== SAUVEGARDE EN BASE ==========
+        if text_message and supabase:
+            try:
+                # Sauvegarder avec les métadonnées du fichier si présent
+                message_data_to_save = {
+                    "from": sender,
+                    "from_name": sender_name,
+                    "message": text_message,
+                    "status": "pending",
+                    "created_at": datetime.now().isoformat()
+                }
+                
+                if attachment_url:
+                    message_data_to_save["attachment_url"] = attachment_url
+                    message_data_to_save["attachment_type"] = attachment_type
+                
+                supabase.table("whatsapp_messages").insert(message_data_to_save).execute()
+                print(f"✅ Message sauvegardé")
+            except Exception as e:
+                print(f"❌ Erreur sauvegarde: {e}")
         
         # ========== ANALYSE POUR RÉPONSE AUTO ==========
         # Ne pas analyser les messages avec fichiers (sauf audio transcrit)
