@@ -17,10 +17,7 @@ from supabase import create_client, Client
 from pywebpush import webpush, WebPushException
 import httpx
 
-# Debug GreenAPI
-print(f"🔍 GREENAPI_ID_INSTANCE: {GREENAPI_ID_INSTANCE}")
-print(f"🔍 GREENAPI_API_TOKEN: {GREENAPI_API_TOKEN[:10] if GREENAPI_API_TOKEN else 'None'}...")
-print(f"🔍 GREENAPI_BASE_URL: {GREENAPI_BASE_URL}")
+
 # =====================================================
 # FASTAPI INITIALIZATION
 # =====================================================
@@ -630,6 +627,11 @@ VAPID_CLAIMS = {"sub": "mailto:jbillcataria@gmail.com"}
 GREENAPI_ID_INSTANCE = os.environ.get("GREENAPI_ID_INSTANCE")
 GREENAPI_API_TOKEN = os.environ.get("GREENAPI_API_TOKEN")
 GREENAPI_BASE_URL = f"https://api.green-api.com/waInstance{GREENAPI_ID_INSTANCE}" if GREENAPI_ID_INSTANCE else None
+
+# Debug GreenAPI
+print(f"🔍 GREENAPI_ID_INSTANCE: {GREENAPI_ID_INSTANCE}")
+print(f"🔍 GREENAPI_API_TOKEN: {GREENAPI_API_TOKEN[:10] if GREENAPI_API_TOKEN else 'None'}...")
+print(f"🔍 GREENAPI_BASE_URL: {GREENAPI_BASE_URL}")
 
 # =====================================================
 # USER CONTEXT
