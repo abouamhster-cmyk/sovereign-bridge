@@ -17,7 +17,10 @@ from supabase import create_client, Client
 from pywebpush import webpush, WebPushException
 import httpx
 
-
+# Debug GreenAPI
+print(f"🔍 GREENAPI_ID_INSTANCE: {GREENAPI_ID_INSTANCE}")
+print(f"🔍 GREENAPI_API_TOKEN: {GREENAPI_API_TOKEN[:10] if GREENAPI_API_TOKEN else 'None'}...")
+print(f"🔍 GREENAPI_BASE_URL: {GREENAPI_BASE_URL}")
 # =====================================================
 # FASTAPI INITIALIZATION
 # =====================================================
@@ -310,24 +313,35 @@ ou
 # ========== FONCTIONS AUXILIAIRES ==========
 async def whatsapp_send_message(to: str, message: str):
     """Envoie un message WhatsApp via GreenAPI"""
+    print(f"📤 Tentative d'envoi à {to}")
+    
     if not GREENAPI_ID_INSTANCE or not GREENAPI_API_TOKEN:
-        print("❌ GreenAPI non configuré")
+        print("❌ GreenAPI non configuré - variables manquantes")
+        print(f"   ID_INSTANCE: {GREENAPI_ID_INSTANCE is not None}")
+        print(f"   API_TOKEN: {GREENAPI_API_TOKEN is not None}")
         return False
     
     clean_to = to.replace("@c.us", "").replace("+", "").replace(" ", "")
+    url = f"{GREENAPI_BASE_URL}/sendMessage/{GREENAPI_API_TOKEN}"
+    payload = {"chatId": f"{clean_to}@c.us", "message": message}
+    
+    print(f"📤 URL: {url}")
+    print(f"📤 Payload: {payload}")
     
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                f"{GREENAPI_BASE_URL}/sendMessage/{GREENAPI_API_TOKEN}",
-                json={"chatId": f"{clean_to}@c.us", "message": message}
-            )
+            response = await client.post(url, json=payload)
+            print(f"📤 Response status: {response.status_code}")
+            print(f"📤 Response body: {response.text[:200]}")
+            
             if response.status_code == 200:
                 print(f"✅ Message envoyé à {clean_to}: {message[:50]}...")
                 return True
-            return False
+            else:
+                print(f"❌ Erreur GreenAPI: {response.status_code} - {response.text}")
+                return False
     except Exception as e:
-        print(f"❌ Erreur envoi: {e}")
+        print(f"❌ Erreur envoi: {type(e).__name__} - {e}")
         return False
 
 # ========== ENDPOINTS API ==========
