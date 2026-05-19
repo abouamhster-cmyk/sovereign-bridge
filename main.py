@@ -114,6 +114,15 @@ async def whatsapp_webhook(request: Request):
         if message_type == "textMessage":
             text_message = message_data.get("textMessageData", {}).get("textMessage", "")
             print(f"💬 [{sender_name}]: {text_message}")
+
+        # ========== TEXTE LONG (extendedTextMessage) ==========
+        elif message_type == "extendedTextMessage":
+            # GreenAPI peut envoyer les textes longs sous ce type
+            extended_data = message_data.get("extendedTextMessageData", {})
+            text_message = extended_data.get("text", "")
+            if not text_message:
+                text_message = extended_data.get("caption", "")
+            print(f"💬 [{sender_name}]: {text_message}")
         
         # ========== AUDIO (Message vocal) ==========
         elif message_type == "audioMessage":
