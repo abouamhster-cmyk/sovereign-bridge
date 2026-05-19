@@ -505,7 +505,7 @@ async def get_whatsapp_conversations(days: int = 30):
                 "from": sender,
                 "from_name": from_name,
                 "messages": [],
-                "unread": 0,
+                "pending": 0,
                 "last_message_at": msg.get("created_at")
             }
         
