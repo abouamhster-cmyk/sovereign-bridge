@@ -2648,7 +2648,7 @@ tools = [
                         "type": "string",
                         "enum": [
                             "missions", "tasks", "spending", "revenue", "documents",
-                            "content", "family_events", "wins", "relocation_tasks"
+                            "content", "family_events", "wins", "relocation_tasks", "whatsapp_messages"
                         ]
                     },
                     "filters": {"type": "object", "description": "Filtres optionnels"},
