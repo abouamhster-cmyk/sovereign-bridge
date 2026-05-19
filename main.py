@@ -5274,7 +5274,7 @@ async def edge_speak_text(request: Dict[str, Any]):
 # PROACTIF - RÉSUMÉ MATINAL
 # =====================================================
 @app.post("/api/proactive/morning-brief")
-async def send_morning_brief():
+async def send_morning_brief(request: Dict[str, Any] = None):
     """
     Envoie un résumé matinal personnalisé par email et notification push.
     Tous les messages sont générés dynamiquement par GPT-4o.
@@ -5283,7 +5283,7 @@ async def send_morning_brief():
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
-        user_id = DEFAULT_USER_ID
+        user_id = get_request_user_id(request or {})
 
         today = datetime.now().date().isoformat()
         now = datetime.now()
@@ -5975,7 +5975,7 @@ async def execute_batch_actions(actions: List[ExecutorAction], auto_confirm: boo
 
 
 @app.post("/api/proactive/evening-summary")
-async def send_evening_summary():
+async def send_evening_summary(request: Dict[str, Any] = None):
     """
     Envoie un résumé de fin de journée personnalisé par IA.
     """
@@ -5983,7 +5983,7 @@ async def send_evening_summary():
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
-        user_id = DEFAULT_USER_ID
+        user_id = get_request_user_id(request or {})
         today = datetime.now().date().isoformat()
         now = datetime.now()
         
@@ -7056,7 +7056,7 @@ async def detect_overload(request: Dict[str, Any] = None):
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
-        user_id = get_request_user_id(request or {})
+        user_id = require_user_id(user_id)
         today = datetime.now().date().isoformat()
         now = datetime.now()
         
@@ -7283,7 +7283,7 @@ Retourne UNIQUEMENT le message, rien d'autre."""
 # =====================================================
 
 @app.post("/api/notifications/intelligent-check")
-async def intelligent_notification_check():
+async def intelligent_notification_check(request: Dict[str, Any] = None):
     """
     Analyse le contexte et envoie des notifications intelligentes si nécessaire.
     À appeler via cron toutes les 2-3 heures.
@@ -7292,7 +7292,7 @@ async def intelligent_notification_check():
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
-        user_id = DEFAULT_USER_ID
+        user_id = get_request_user_id(request or {})
         now = datetime.now()
         today = now.date().isoformat()
         hour = now.hour
@@ -7494,7 +7494,7 @@ async def get_notification_preferences(user_id: Optional[str] = None):
 # =====================================================
 
 @app.post("/api/morning-checkin")
-async def send_morning_checkin():
+async def send_morning_checkin(request: Dict[str, Any] = None):
     """
     Envoie une notification proactive le matin avec un message personnalisé.
     À appeler via cron tous les matins entre 7h et 9h.
@@ -7503,7 +7503,7 @@ async def send_morning_checkin():
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
-        user_id = DEFAULT_USER_ID
+        user_id = get_request_user_id(request or {})
         now = datetime.now()
         hour = now.hour
         today = now.date().isoformat()
@@ -8162,7 +8162,7 @@ Retourne UNIQUEMENT du JSON:
 # =====================================================
 
 @app.post("/api/opportunities/scan")
-async def scan_opportunities():
+async def scan_opportunities(request: Dict[str, Any] = None):
     """
     Scan toutes les sources pour détecter des opportunités.
     """
@@ -8170,7 +8170,7 @@ async def scan_opportunities():
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
-        user_id = DEFAULT_USER_ID
+        user_id = get_request_user_id(request or {})
         opportunities_found = []
         
         inbox_items = supabase.table("inbox").select("*").eq("needs_processing", False).limit(50).execute()
@@ -8722,7 +8722,7 @@ Retourne UNIQUEMENT le message, rien d'autre."""
 
 
 @app.post("/api/weekly-summary")
-async def send_weekly_summary():
+async def send_weekly_summary(request: Dict[str, Any] = None):
     """
     Envoie un résumé hebdomadaire personnalisé par email et notification push.
     À appeler par cron-job.org tous les dimanches à 19h.
@@ -8734,9 +8734,9 @@ async def send_weekly_summary():
     if datetime.now().weekday() != 6:
         return {"success": True, "sent": False, "message": "Pas dimanche, résumé non envoyé"}
 
-    user_id = DEFAULT_USER_ID
     
     try:
+        user_id = get_request_user_id(request or {})
         now = datetime.now()
         start_of_week = (now.date() - timedelta(days=now.weekday())).isoformat()
         end_of_week = now.date().isoformat()
@@ -8973,7 +8973,7 @@ Retourne UNIQUEMENT le titre, rien d'autre."""
 
 
 @app.post("/api/notifications/smart-group")
-async def send_smart_notifications():
+async def send_smart_notifications(request: Dict[str, Any] = None):
     """
     Analyse les notifications en attente et les regroupe intelligemment.
     À appeler par cron-job.org toutes les heures.
@@ -8982,7 +8982,7 @@ async def send_smart_notifications():
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
-        user_id = DEFAULT_USER_ID
+        user_id = get_request_user_id(request or {})
         today = datetime.now().date().isoformat()
         now = datetime.now()
         
