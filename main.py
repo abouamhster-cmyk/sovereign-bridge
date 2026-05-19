@@ -6526,30 +6526,45 @@ async def backup_all_documents_to_drive():
         logger.error(f"❌ Erreur backup all: {e}")
         return {"success": False, "error": str(e)}
 
+#------------------------------------------------
+#------------------------------------------------
+
 @app.get("/api/morning-greeting")
-async def get_morning_greeting(user_id: Optional[str] = None):
-    """Retourne un message d'accueil vivant et personnalisé"""
+async def get_morning_greeting(user_id: Optional[str] = None, force: bool = False):
+    """Retourne un message d'accueil personnalisé (une fois par jour)"""
     if not supabase:
         return {"success": True, "message": "Salut Rebecca. Je suis là."}
     
     try:
         user_id = require_user_id(user_id)
         today = datetime.now().date().isoformat()
-        hour = datetime.now().hour
+        
+        # Vérifier si le rapport a déjà été envoyé aujourd'hui
+        if not force:
+            existing = supabase.table("daily_reports")\
+                .select("*")\
+                .eq("user_id", user_id)\
+                .eq("report_date", today)\
+                .execute()
+            
+            if existing.data:
+                # Rapport déjà envoyé aujourd'hui
+                return {
+                    "success": True, 
+                    "already_sent": True,
+                    "message": None
+                }
         
         # ========== RÉCUPÉRER LES DONNÉES ==========
+        today = datetime.now().date().isoformat()
+        hour = datetime.now().hour
         
-        # Tâches
         tasks_today = supabase.table("tasks").select("*").eq("user_id", user_id).eq("due_date", today).neq("status", "done").execute()
         overdue_tasks = supabase.table("tasks").select("*").eq("user_id", user_id).lt("due_date", today).neq("status", "done").execute()
-        
-        # Missions
         active_missions = supabase.table("missions").select("*").eq("user_id", user_id).eq("status", "active").execute()
-        
-        # Documents urgents
         urgent_docs = supabase.table("documents").select("*").eq("user_id", user_id).lt("due_date", today).neq("status", "approved").execute()
         
-        # WhatsApp en attente (classé par importance)
+        # WhatsApp en attente
         pending_whatsapp = supabase.table("whatsapp_messages")\
             .select("*")\
             .eq("user_id", user_id)\
@@ -6558,57 +6573,42 @@ async def get_morning_greeting(user_id: Optional[str] = None):
             .execute()
         
         whatsapp_high = [m for m in pending_whatsapp.data if m.get("importance") == "high"]
-        whatsapp_medium = [m for m in pending_whatsapp.data if m.get("importance") == "medium"]
-        
-        # Opportunités à haut potentiel
-        high_opportunities = supabase.table("opportunities").select("*")\
-            .eq("user_id", user_id)\
-            .eq("probability", "high")\
-            .neq("stage", "won")\
-            .execute()
         
         # Humeur d'hier
         yesterday = (datetime.now().date() - timedelta(days=1)).isoformat()
         mood_yesterday = supabase.table("mood_entries").select("mood").eq("user_id", user_id).eq("date", yesterday).execute()
         yesterday_mood = mood_yesterday.data[0]["mood"] if mood_yesterday.data else None
         
-        # Récupérer le prénom
+        # Prénom
         profile = supabase.table("user_profile").select("preferred_name").eq("user_id", user_id).execute()
         user_name = profile.data[0].get("preferred_name", "Rebecca") if profile.data else "Rebecca"
         
-        # ========== GÉNÉRATION IA POUR UN MESSAGE VIVANT ==========
+        # ========== GÉNÉRATION IA ==========
+        hour = datetime.now().hour
+        if hour < 12:
+            greeting_prefix = "☀️ Bonjour"
+        elif hour < 18:
+            greeting_prefix = "🌤️ Bon après-midi"
+        else:
+            greeting_prefix = "🌙 Bonsoir"
         
-        prompt = f"""Génère un message d'accueil matinal VIVANT et NATUREL pour Rebecca.
+        prompt = f"""Génère un message d'accueil VIVANT et NATUREL pour Rebecca.
 
-CONTEXTE :
+Contexte :
 - Prénom : {user_name}
-- Moment : {get_time_of_day()}
+- Moment : {greeting_prefix}
 - Humeur hier : {yesterday_mood or "non renseignée"}
-- Tâches aujourd'hui : {len(tasks_today.data)} tâche(s) ({len(overdue_tasks.data)} en retard)
+- Tâches aujourd'hui : {len(tasks_today.data)} (dont {len(overdue_tasks.data)} en retard)
 - Missions actives : {len(active_missions.data)}
 - Documents urgents : {len(urgent_docs.data)}
-- WhatsApp importants : {len(whatsapp_high)} message(s) prioritaire(s), {len(whatsapp_medium)} à consulter
-- Opportunités actives : {len(high_opportunities.data)} opportunité(s) à haut potentiel
+- WhatsApp importants : {len(whatsapp_high)}
 
-RÈGLES D'ÉCRITURE :
-- Sois VIVANTE, NATURELLE, HUMAINE (pas robotique)
-- Parle à la première personne ("Je vois que...", "Je sens que...")
-- Maximum 60 mots
-- Structure : 
-  1. Salutation + constat de son état (si humeur connue)
-  2. Un point marquant sur sa charge
-  3. Un encouragement ou conseil
-  4. Une question ouverte
+Règles :
+- Sois naturelle, vivante, humaine (pas de liste de chiffres)
+- Maximum 50 mots
+- Termine par une question ouverte
 
-INTERDIT :
-- Liste de chiffres
-- Phrases génériques
-- Ton corporate
-
-Exemples de BON messages :
-"☀️ Bonjour Rebecca. Je sens que tu avais besoin de souffler hier. Aujourd'hui, 3 choses t'attendent, dont {len(overdue_tasks.data)} en retard. On commence par la plus urgente ?"
-
-"🌤️ Salut. {len(whatsapp_high)} messages WhatsApp importants, {len(urgent_docs.data)} documents urgents. Une chose à la fois. Je suis là. Par quoi tu veux commencer ?"
+Exemple : "{greeting_prefix} {user_name}. Tu as {len(tasks_today.data)} choses à faire aujourd'hui, dont {len(overdue_tasks.data)} en retard. On commence par la plus urgente ?"
 
 Retourne UNIQUEMENT le message, rien d'autre."""
 
@@ -6617,57 +6617,36 @@ Retourne UNIQUEMENT le message, rien d'autre."""
                 model="gpt-4o",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.8,
-                max_tokens=200
+                max_tokens=150
             )
             greeting = response.choices[0].message.content.strip()
         except Exception as e:
-            logger.error(f"Erreur génération greeting IA: {e}")
-            # Fallback humain
-            greeting = await generate_fallback_greeting(
-                user_name, len(tasks_today.data), len(overdue_tasks.data),
-                len(whatsapp_high), len(urgent_docs.data), len(active_missions.data)
-            )
+            # Fallback
+            if len(overdue_tasks.data) > 0:
+                greeting = f"{greeting_prefix} {user_name}. Tu as {len(overdue_tasks.data)} tâche(s) en retard. On s'en occupe ?"
+            elif len(tasks_today.data) > 0:
+                greeting = f"{greeting_prefix} {user_name}. {len(tasks_today.data)} chose(s) à faire aujourd'hui. On y va ?"
+            elif len(whatsapp_high) > 0:
+                greeting = f"{greeting_prefix} {user_name}. {len(whatsapp_high)} message(s) WhatsApp t'attendent. Je te les montre ?"
+            else:
+                greeting = f"{greeting_prefix} {user_name}. Journée calme. Besoin de quelque chose ?"
         
-        return {"success": True, "message": greeting, "user_name": user_name}
+        # Sauvegarder qu'on a envoyé le rapport
+        supabase.table("daily_reports").insert({
+            "user_id": user_id,
+            "report_date": today,
+            "report_content": greeting
+        }).execute()
+        
+        return {"success": True, "message": greeting, "already_sent": False}
         
     except Exception as e:
         logger.error(f"Erreur morning greeting: {e}")
-        return {"success": True, "message": f"Salut Rebecca. Je suis là. Besoin de quoi ?"}
+        return {"success": True, "message": f"Salut Rebecca. Je suis là."}
 
+#---------------------------------------------------------------------------------------------
+#-------------------------------------------------------------------------------
 
-def get_time_of_day() -> str:
-    """Retourne la salutation selon l'heure"""
-    hour = datetime.now().hour
-    if hour < 12:
-        return "☀️ Bonjour"
-    elif hour < 18:
-        return "🌤️ Bon après-midi"
-    else:
-        return "🌙 Bonsoir"
-
-
-async def generate_fallback_greeting(user_name: str, tasks: int, overdue: int, whatsapp: int, docs: int, missions: int) -> str:
-    """Fallback humain si l'IA échoue"""
-    hour = datetime.now().hour
-    if hour < 12:
-        greeting = "☀️ Bonjour"
-    elif hour < 18:
-        greeting = "🌤️ Bon après-midi"
-    else:
-        greeting = "🌙 Bonsoir"
-    
-    if overdue > 0:
-        return f"{greeting} {user_name}. Tu as {overdue} tâche(s) en retard. On regarde ça ensemble ?"
-    elif whatsapp > 0:
-        return f"{greeting} {user_name}. {whatsapp} message(s) WhatsApp t'attendent. Je te les montre ?"
-    elif tasks > 0:
-        return f"{greeting} {user_name}. {tasks} chose(s) à faire aujourd'hui. On y va ?"
-    elif docs > 0:
-        return f"{greeting} {user_name}. {docs} document(s) urgent(s). Besoin d'aide ?"
-    elif missions > 0:
-        return f"{greeting} {user_name}. {missions} mission(s) active(s). Par laquelle on commence ?"
-    else:
-        return f"{greeting} {user_name}. Journée calme. Tu veux avancer sur quelque chose ou souffler ?"
 
 @app.get("/api/dashboard/today")
 async def get_today_dashboard(user_id: Optional[str] = None):
