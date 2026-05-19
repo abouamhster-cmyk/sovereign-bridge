@@ -67,6 +67,7 @@ def naturalize_response(text: str) -> str:
     text = text.replace("Cordialement", "")
     return text.strip()
 
+
 # =====================================================
 # WHATSAPP WEBHOOK
 # =====================================================
@@ -128,10 +129,8 @@ async def process_incoming_message(data: dict):
     
     # Analyser et notifier (ou sauvegarder directement pour les fichiers)
     if is_file_message(text_message):
-        # Pour les fichiers : sauvegarde directe sans analyse
         await save_message_direct(sender, sender_name, text_message, attachment_url, attachment_type)
     else:
-        # Pour les textes : analyse d'importance puis sauvegarde
         await analyze_and_notify(sender, sender_name, text_message)
 
 
@@ -356,9 +355,7 @@ async def fallback_save_and_notify(sender: str, sender_name: str, text_message: 
         "url": "/chat?mode=whatsapp",
         "user_id": DEFAULT_USER_ID,
         "type": "whatsapp"
-    }) 
-
-
+    })
 
 
 # =====================================================
@@ -376,7 +373,7 @@ async def whatsapp_pending_notifications(request: Dict[str, Any] = None):
     
     user_id = get_request_user_id(request or {})
     
-    # Récupérer les messages en attente (status = 'pending')
+    # 🔥 CORRECTION : utiliser "pending" au lieu de "unread"
     pending_messages = supabase.table("whatsapp_messages")\
         .select("*")\
         .eq("user_id", user_id)\
@@ -443,42 +440,69 @@ def get_time_of_day() -> str:
         return "🌤️ Bon après-midi"
     else:
         return "🌙 Bonsoir"
-        
-# ========== FONCTIONS AUXILIAIRES ==========
+
+
+# =====================================================
+# WHATSAPP - RÉPONSES
+# =====================================================
+
 async def whatsapp_send_message(to: str, message: str):
     """Envoie un message WhatsApp via GreenAPI"""
     print(f"📤 Tentative d'envoi à {to}")
     
     if not GREENAPI_ID_INSTANCE or not GREENAPI_API_TOKEN:
         print("❌ GreenAPI non configuré - variables manquantes")
-        print(f"   ID_INSTANCE: {GREENAPI_ID_INSTANCE is not None}")
-        print(f"   API_TOKEN: {GREENAPI_API_TOKEN is not None}")
         return False
     
     clean_to = to.replace("@c.us", "").replace("+", "").replace(" ", "")
     url = f"{GREENAPI_BASE_URL}/sendMessage/{GREENAPI_API_TOKEN}"
     payload = {"chatId": f"{clean_to}@c.us", "message": message}
     
-    print(f"📤 URL: {url}")
-    print(f"📤 Payload: {payload}")
-    
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(url, json=payload)
-            print(f"📤 Response status: {response.status_code}")
-            print(f"📤 Response body: {response.text[:200]}")
             
             if response.status_code == 200:
                 print(f"✅ Message envoyé à {clean_to}: {message[:50]}...")
                 return True
             else:
-                print(f"❌ Erreur GreenAPI: {response.status_code} - {response.text}")
+                print(f"❌ Erreur GreenAPI: {response.status_code}")
                 return False
     except Exception as e:
         print(f"❌ Erreur envoi: {type(e).__name__} - {e}")
         return False
 
-# ========== ENDPOINTS API ==========
+
+@app.post("/api/whatsapp/reply")
+async def whatsapp_reply(request: Dict[str, Any]):
+    """Envoie une réponse WhatsApp (depuis Rebecca)"""
+    to = request.get("to")
+    message = request.get("message")
+    message_id = request.get("message_id")
+    
+    if not to or not message:
+        return {"success": False, "error": "to et message requis"}
+    
+    # Envoyer via GreenAPI
+    success = await whatsapp_send_message(to, message)
+    
+    if success and supabase:
+        if message_id:
+            # Marquer le message spécifique comme répondu
+            supabase.table("whatsapp_messages").update({
+                "status": "replied", 
+                "response": message
+            }).eq("id", message_id).execute()
+        else:
+            # Marquer tous les messages pending de ce contact comme répondu
+            supabase.table("whatsapp_messages").update({
+                "status": "replied", 
+                "response": message
+            }).eq("from", to).eq("status", "pending").execute()
+    
+    return {"success": success}
+
+
 @app.get("/api/whatsapp/conversations")
 async def get_whatsapp_conversations(days: int = 30):
     """Récupère les conversations WhatsApp du mois (hors groupes)"""
@@ -492,8 +516,8 @@ async def get_whatsapp_conversations(days: int = 30):
     for msg in result.data:
         sender = msg.get("from", "")
         
-        # ========== EXCLURE LES GROUPES ==========
-        if "@g.us" in sender or sender.endswith("@g.us") or "g.us" in sender:
+        # Exclure les groupes
+        if "@g.us" in sender or sender.endswith("@g.us"):
             continue
         
         from_name = msg.get("from_name", "Inconnu")
@@ -513,16 +537,6 @@ async def get_whatsapp_conversations(days: int = 30):
         if len(message_text) > 150:
             message_text = message_text[:150] + "..."
         
-        # Ajouter l'aperçu du fichier si présent
-        if msg.get("attachment_url"):
-            attachment_type = msg.get("attachment_type", "file")
-            if attachment_type == "image":
-                message_text = f"🖼️ [Image] {message_text}"
-            elif attachment_type == "document":
-                message_text = f"📎 [Document] {message_text}"
-            elif attachment_type == "video":
-                message_text = f"🎥 [Vidéo] {message_text}"
-        
         conversations[sender]["messages"].append({
             "id": msg.get("id"),
             "message": message_text,
@@ -533,49 +547,12 @@ async def get_whatsapp_conversations(days: int = 30):
         })
         
         if msg.get("status") == "pending":
-            conversations[sender]["unread"] += 1
+            conversations[sender]["pending"] += 1
     
     filtered = [c for c in conversations.values() if c["messages"]]
     filtered.sort(key=lambda x: x["last_message_at"], reverse=True)
     return {"conversations": filtered[:15]}
 
-@app.post("/api/whatsapp/reply")
-async def whatsapp_reply(request: Dict[str, Any]):
-    """Envoie une réponse WhatsApp (depuis Rebecca)"""
-    to = request.get("to")
-    message = request.get("message")
-    message_id = request.get("message_id")
-    
-    if not to or not message:
-        return {"success": False, "error": "to et message requis"}
-    
-    # Envoyer via GreenAPI
-    success = await whatsapp_send_message(to, message)
-    
-    if success and supabase:
-        # Si un message_id est fourni, on le marque directement
-        if message_id:
-            supabase.table("whatsapp_messages").update({
-                "status": "replied", 
-                "response": message
-            }).eq("id", message_id).execute()
-        else:
-            # Sinon, trouver le dernier message "pending" de ce contact
-            pending = supabase.table("whatsapp_messages")\
-                .select("id")\
-                .eq("from", to)\
-                .eq("status", "pending")\
-                .order("created_at", desc=True)\
-                .limit(1)\
-                .execute()
-            
-            if pending.data:
-                supabase.table("whatsapp_messages").update({
-                    "status": "replied", 
-                    "response": message
-                }).eq("id", pending.data[0]["id"]).execute()
-    
-    return {"success": success}
 
 @app.post("/api/whatsapp/send")
 async def whatsapp_send(request: Dict[str, Any]):
@@ -603,6 +580,7 @@ async def whatsapp_send(request: Dict[str, Any]):
         logger.error(f"Erreur envoi: {e}")
         return {"success": False, "error": str(e)}
 
+
 @app.post("/api/whatsapp/send-image")
 async def whatsapp_send_image(request: Dict[str, Any]):
     """Envoie une image WhatsApp"""
@@ -622,41 +600,13 @@ async def whatsapp_send_image(request: Dict[str, Any]):
         )
         return {"success": response.status_code == 200}
 
+
 @app.get("/api/whatsapp/status")
 async def whatsapp_status():
     """Vérifie si GreenAPI est configuré"""
     if not GREENAPI_ID_INSTANCE or not GREENAPI_API_TOKEN:
         return {"configured": False}
     return {"configured": True, "idInstance": GREENAPI_ID_INSTANCE}
-
-@app.get("/api/whatsapp/test-db")
-async def test_db():
-    """Test la connexion à la base"""
-    if not supabase:
-        return {"error": "Supabase non configuré"}
-    try:
-        result = supabase.table("whatsapp_messages").select("*").limit(1).execute()
-        return {"supabase_ok": True, "table_exists": True, "message_count": len(result.data)}
-    except Exception as e:
-        return {"supabase_ok": True, "table_exists": False, "error": str(e)}
-
-@app.post("/api/whatsapp/test-webhook")
-async def test_webhook():
-    """Simule un webhook pour tester la sauvegarde"""
-    if supabase:
-        try:
-            result = supabase.table("whatsapp_messages").insert({
-                "from": "22900000000@c.us",
-                "from_name": "Test User",
-                "message": "Ceci est un message de test",
-                "status": "pending",
-                "created_at": datetime.now().isoformat()
-            }).execute()
-            return {"success": True, "inserted": result.data}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-    return {"success": False, "error": "Supabase non configuré"}
-
 
 # =====================================================
 # WHATSAPP VIA BAILEYS (gratuit, illimité)
