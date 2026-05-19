@@ -2393,6 +2393,13 @@ Tu ne réponds pas comme :
 
 Tu réponds comme une personne proche, intelligente et fiable.
 
+ 
+RÈGLES IMPORTANTES POUR WHATSAPP :
+- Pour les messages non répondus, utilise status="pending" (pas "unread")
+- La colonne "replied" n'existe pas, utilise "status" à la place
+- Statuts possibles: "pending" (en attente), "replied" (répondu), "auto_sent" (auto envoyé)
+
+
 # ============================================================
 # CE QUE TU SAIS DE REBECCA
 # ============================================================
@@ -3404,7 +3411,6 @@ def get_revenue_by_project():
 # =====================================================
 # API ROUTES - CHAT AMÉLIORÉ AVEC MÉMOIRE
 # =====================================================
-
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
     logger.info(f"📨 Reçu: {len(request.messages)} messages")
@@ -3427,6 +3433,18 @@ async def chat_endpoint(request: ChatRequest):
     enhanced_system_prompt = BASE_SYSTEM_PROMPT + date_context + memory_context
     if profile_context:
         enhanced_system_prompt += f"\n\n# X. CURRENT PROFILE CONTEXT\n{profile_context}"
+    
+    # 🔥 AJOUT DES INSTRUCTIONS WHATSAPP DANS LE PROMPT
+    whatsapp_instructions = """
+    
+# WHATSAPP SPECIFIC RULES:
+- To get pending WhatsApp messages, use: read_table(table="whatsapp_messages", filters={"replied": False})
+- NEVER use status="unread" because this column doesn't exist
+- Use "replied": False for pending messages
+- Use "replied": True for answered messages
+- The whatsapp_messages table has these columns: from, from_name, message, status, replied, importance, summary, is_greeting, created_at
+"""
+    enhanced_system_prompt += whatsapp_instructions
     
     messages_payload.append({"role": "system", "content": enhanced_system_prompt})
     
@@ -3517,9 +3535,26 @@ async def chat_endpoint(request: ChatRequest):
             content = ""
             
             if name == "read_table":
-                result = db_query(args["table"], args.get("filters"), args.get("limit", 50))
+                table = args.get("table")
+                filters = args.get("filters", {})
+                
+                # 🔥 CORRECTION SPÉCIALE POUR WHATSAPP
+                if table == "whatsapp_messages":
+                    # Si l'IA demande "unread", on la redirige vers "replied": False
+                    if filters.get("status") == "unread":
+                        filters.pop("status", None)
+                        filters["replied"] = False
+                        logger.info(f"🔄 WhatsApp: status=unread → replied=False")
+                    
+                    # Si l'IA demande "pending", on la redirige vers "replied": False
+                    if filters.get("status") == "pending":
+                        filters.pop("status", None)
+                        filters["replied"] = False
+                        logger.info(f"🔄 WhatsApp: status=pending → replied=False")
+                
+                result = db_query(table, filters, args.get("limit", 50))
                 content = json.dumps(result, ensure_ascii=False)
-                logger.info(f"📖 Lecture {args['table']}: {result.get('count', 0)} lignes")
+                logger.info(f"📖 Lecture {table}: {result.get('count', 0)} lignes")
                 
             elif name == "write_to_table":
                 target_table = args.pop("table")
@@ -3551,7 +3586,7 @@ async def chat_endpoint(request: ChatRequest):
                     content = f"❌ Erreur: {result.get('error', 'inconnue')}"
             
             elif name == "save_memory":
-                result = await save_user_memory(     args.get("category"),     args.get("key"),     args.get("value"),     user_id=user_id )
+                result = await save_user_memory(args.get("category"), args.get("key"), args.get("value"), user_id=user_id)
                 content = f"✅ Information mémorisée: {args['key']} = {args['value']}" if result else "❌ Erreur mémoire"
                 logger.info(f"💾 Save memory: {args['key']} -> {args['value']}")
 
@@ -3568,11 +3603,7 @@ async def chat_endpoint(request: ChatRequest):
                 elif not body:
                     content = "❌ Le corps de l'email est vide. Que veux-tu dire dans ce message ?"
                 else:
-                    email_result = await send_email(EmailRequest(
-                        to=to,
-                        subject=subject,
-                        body=body
-                    ))
+                    email_result = await send_email(EmailRequest(to=to, subject=subject, body=body))
                     if email_result.get("success"):
                         content = f"✅ Email envoyé avec succès à {to}\n\n📧 **Récapitulatif :**\n- Destinataire : {to}\n- Sujet : {subject}"
                     else:
@@ -3635,7 +3666,6 @@ async def chat_endpoint(request: ChatRequest):
         
         # Analyser le type d'erreur
         if "email" in error_str.lower() or "EmailRequest" in error_str:
-            # Erreur liée à l'email
             reply = """❌ L'adresse email n'est pas valide ou il manque des informations.
 
 Pour envoyer un email, j'ai besoin de :
@@ -3644,27 +3674,19 @@ Pour envoyer un email, j'ai besoin de :
 3. Le contenu du message
 
 Peux-tu me donner ces informations ? Je préparerai l'email pour toi."""
-
         elif "rate limit" in error_str.lower() or "429" in error_str:
-            # Limite d'API dépassée
             reply = """⏳ L'IA est momentanément surchargée.
 
 Attends 30 secondes, puis réécris-moi ta demande. Je garde ton message en mémoire."""
-
         elif "timeout" in error_str.lower() or "timed out" in error_str:
-            # Délai d'attente dépassé
             reply = """🌐 Le serveur met trop de temps à répondre.
 
 Peux-tu reformuler ta demande plus simplement ? Ou attends 1 minute avant de réessayer."""
-
         elif "validation" in error_str.lower():
-            # Erreur de validation (champ manquant)
             reply = """❌ Il manque des informations pour traiter ta demande.
 
 Dis-moi précisément ce que tu veux faire, et je te guiderai étape par étape."""
-
         else:
-            # Erreur générique
             reply = """❌ Je rencontre un problème technique.
 
 Peux-tu me dire exactement ce que tu voulais faire ? Je vais t'aider autrement.
