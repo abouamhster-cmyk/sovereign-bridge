@@ -67,18 +67,23 @@ def naturalize_response(text: str) -> str:
     text = text.replace("Cordialement", "")
     return text.strip()
 
+# =====================================================
+# WHATSAPP WEBHOOK
+# =====================================================
+
 # ========== WEBHOOK PRINCIPAL ==========
 @app.api_route("/api/whatsapp/webhook", methods=["POST", "OPTIONS"])
 async def whatsapp_webhook(request: Request):
+    """Webhook principal pour recevoir les messages WhatsApp"""
+    
     if request.method == "OPTIONS":
         return Response(status_code=200)
     
     body = await request.body()
-    body_str = body.decode('utf-8')
     
     try:
-        data = json.loads(body_str)
-    except:
+        data = json.loads(body.decode('utf-8'))
+    except json.JSONDecodeError:
         data = {}
     
     # Ignorer les statuts d'envoi
@@ -87,226 +92,358 @@ async def whatsapp_webhook(request: Request):
     
     # Traiter uniquement les messages entrants
     if data.get("typeWebhook") == "incomingMessageReceived":
-        message_data = data.get("messageData", {})
-        message_type = message_data.get("typeMessage", "")
-        
-        sender_data = data.get("senderData", {})
-        sender = sender_data.get("sender", "")
-        sender_name = sender_data.get("senderName", "Inconnu")
-        chat_id = sender_data.get("chatId", sender)
-        
-        # ========== IGNORER LES GROUPES ==========
-        # Si le chat_id contient "@g.us" ou que c'est un groupe
-        if "@g.us" in chat_id or sender.endswith("@g.us") or chat_id.endswith("@g.us"):
-            print(f"⏭️ Message de groupe ignoré: {chat_id}")
-            return {"status": "ok"}
-        
-        # Ignorer les réactions
-        if message_type == "reactionMessage":
-            print(f"⏭️ Réaction ignorée de {sender_name}")
-            return {"status": "ok"}
-        
-        text_message = ""
-        attachment_url = None
-        attachment_type = None
-        
-        # ========== TEXTE ==========
-        if message_type == "textMessage":
-            text_message = message_data.get("textMessageData", {}).get("textMessage", "")
-            print(f"💬 [{sender_name}]: {text_message}")
-
-        # ========== TEXTE LONG (extendedTextMessage) ==========
-        elif message_type == "extendedTextMessage":
-            # GreenAPI peut envoyer les textes longs sous ce type
-            extended_data = message_data.get("extendedTextMessageData", {})
-            text_message = extended_data.get("text", "")
-            if not text_message:
-                text_message = extended_data.get("caption", "")
-            print(f"💬 [{sender_name}]: {text_message}")
-        
-        # ========== AUDIO (Message vocal) ==========
-        elif message_type == "audioMessage":
-            audio_data = message_data.get("audioMessageData", {})
-            audio_url = audio_data.get("url")
-            audio_duration = audio_data.get("duration", 0)
-            print(f"🎤 Message vocal de {sender_name} ({audio_duration}s)")
-            
-            if audio_url and supabase:
-                try:
-                    async with httpx.AsyncClient() as client_http:
-                        audio_response = await client_http.get(audio_url)
-                        audio_content = audio_response.content
-                    
-                    import tempfile
-                    with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
-                        tmp.write(audio_content)
-                        tmp_path = tmp.name
-                    
-                    with open(tmp_path, "rb") as audio_file:
-                        transcript = client.audio.transcriptions.create(
-                            model="whisper-1", file=audio_file, language="fr"
-                        )
-                    
-                    os.unlink(tmp_path)
-                    transcribed_text = transcript.text
-                    text_message = f"🎤 [VOCAL] {transcribed_text}"
-                    print(f"📝 Transcription: {transcribed_text}")
-                except Exception as e:
-                    print(f"❌ Erreur transcription: {e}")
-                    text_message = "🎤 [Message vocal non transcrit]"
-        
-        # ========== IMAGE ==========
-        elif message_type == "imageMessage":
-            image_data = message_data.get("imageMessageData", {})
-            caption = image_data.get("caption", "")
-            image_url = image_data.get("url", "")
-            text_message = f"🖼️ [IMAGE] {caption if caption else 'Image sans légende'}"
-            attachment_url = image_url
-            attachment_type = "image"
-            print(f"🖼️ Image de {sender_name}: {caption}")
-        
-        # ========== DOCUMENT ==========
-        elif message_type == "documentMessage":
-            doc_data = message_data.get("documentMessageData", {})
-            file_name = doc_data.get("fileName", "Document")
-            doc_url = doc_data.get("url", "")
-            text_message = f"📎 [DOCUMENT] {file_name}"
-            attachment_url = doc_url
-            attachment_type = "document"
-            print(f"📎 Document de {sender_name}: {file_name}")
-        
-        # ========== VIDEO ==========
-        elif message_type == "videoMessage":
-            video_data = message_data.get("videoMessageData", {})
-            caption = video_data.get("caption", "")
-            video_url = video_data.get("url", "")
-            text_message = f"🎥 [VIDEO] {caption if caption else 'Vidéo sans légende'}"
-            attachment_url = video_url
-            attachment_type = "video"
-            print(f"🎥 Vidéo de {sender_name}")
-        
-        # ========== AUTRES ==========
-        else:
-            text_message = f"📎 [{message_type}] non supporté"
-            print(f"📎 Autre type non supporté: {message_type}")
-            # Ne pas sauvegarder les types non supportés
-            return {"status": "ok"}
-        
-        # ========== SAUVEGARDE EN BASE ==========
-        if text_message and supabase:
-            try:
-                # Sauvegarder avec les métadonnées du fichier si présent
-                message_data_to_save = {
-                    "from": sender,
-                    "from_name": sender_name,
-                    "message": text_message,
-                    "status": "pending",
-                    "created_at": datetime.now().isoformat()
-                }
-                
-                if attachment_url:
-                    message_data_to_save["attachment_url"] = attachment_url
-                    message_data_to_save["attachment_type"] = attachment_type
-                
-                supabase.table("whatsapp_messages").insert(message_data_to_save).execute()
-                print(f"✅ Message sauvegardé")
-            except Exception as e:
-                print(f"❌ Erreur sauvegarde: {e}")
-        
-        # ========== ANALYSE POUR RÉPONSE AUTO ==========
-        # Ne pas analyser les messages avec fichiers (sauf audio transcrit)
-        if text_message and not text_message.startswith("🖼️") and not text_message.startswith("📎") and not text_message.startswith("🎥"):
-            try:
-                analysis_prompt = f"""Message WhatsApp de {sender_name}: "{text_message}"
-Réponds UNIQUEMENT avec ce format JSON:
-{{"action": "auto_reply", "reply": "ta réponse courte (1-2 phrases max)"}}
-ou
-{{"action": "need_human", "summary": "résumé pour Rebecca"}}"""
-                
-                analysis = client.chat.completions.create(
-                    model="gpt-4o",
-                    messages=[{"role": "user", "content": analysis_prompt}],
-                    max_tokens=150,
-                    temperature=0.7
-                )
-                
-                result_text = analysis.choices[0].message.content
-                result_text = result_text.replace("```json", "").replace("```", "").strip()
-                result = json.loads(result_text)
-                
-                if result.get("action") == "auto_reply" and result.get("reply"):
-                    reply = result.get("reply")
-                    reply = naturalize_response(reply)
-                    delay_seconds = random.randint(MIN_REPLY_DELAY, MAX_REPLY_DELAY)
-                    print(f"⏰ Réponse auto dans {delay_seconds//60} min: {reply[:50]}...")
-                    
-                    # Sauvegarder l'ID du message pour vérification
-                    msg_id = None
-                    if supabase:
-                        insert_result = supabase.table("whatsapp_messages").insert({
-                            "from": sender,
-                            "from_name": sender_name,
-                            "message": text_message,
-                            "response": reply,
-                            "status": "auto_pending",
-                            "created_at": datetime.now().isoformat()
-                        }).execute()
-                        if insert_result.data:
-                            msg_id = insert_result.data[0].get("id")
-                    
-                    async def delayed_reply():
-                        print(f"🔍 Délai de {delay_seconds} secondes démarré...")
-                        await asyncio.sleep(delay_seconds)
-                        
-                        print(f"🔍 Vérification du message {msg_id}...")
-                        
-                        # Vérifier si le message a été marqué comme "replied"
-                        if supabase and msg_id:
-                            check = supabase.table("whatsapp_messages")\
-                                .select("status")\
-                                .eq("id", msg_id)\
-                                .execute()
-                            
-                            print(f"🔍 Statut trouvé: {check.data[0].get('status') if check.data else 'None'}")
-                            
-                            if check.data and check.data[0].get("status") == "replied":
-                                print(f"⏭️ Annulation: message déjà répondu manuellement")
-                                return
-                        
-                        # Envoyer la réponse
-                        print(f"🔍 Envoi de la réponse: {reply[:50]}...")
-                        await whatsapp_send_message(chat_id, reply)
-                        print(f"✅ Réponse auto envoyée")
-                        
-                        if supabase and msg_id:
-                            supabase.table("whatsapp_messages").update({
-                                "status": "auto_sent"
-                            }).eq("id", msg_id).execute()
-                    
-                    asyncio.create_task(delayed_reply())
-                
-                else:
-                    print(f"📱 Message nécessite Rebecca")
-                    send_notification_sync({
-                        "title": f"📱 WhatsApp - {sender_name}",
-                        "body": text_message[:100],
-                        "url": "/communications?tab=whatsapp",
-                        "user_id": DEFAULT_USER_ID,
-                        "type": "whatsapp"
-                    })
-                    
-            except Exception as e:
-                print(f"❌ Erreur analyse: {e}")
-                send_notification_sync({
-                    "title": f"📱 WhatsApp - {sender_name}",
-                    "body": text_message[:100],
-                    "url": "/communications?tab=whatsapp",
-                    "user_id": DEFAULT_USER_ID,
-                    "type": "whatsapp"
-                })
+        await process_incoming_message(data)
     
     return {"status": "ok"}
 
+
+async def process_incoming_message(data: dict):
+    """Traite un message entrant"""
+    
+    message_data = data.get("messageData", {})
+    message_type = message_data.get("typeMessage", "")
+    
+    sender_data = data.get("senderData", {})
+    sender = sender_data.get("sender", "")
+    sender_name = sender_data.get("senderName", "Inconnu")
+    chat_id = sender_data.get("chatId", sender)
+    
+    # Ignorer les groupes
+    if is_group_message(chat_id, sender):
+        print(f"⏭️ Message de groupe ignoré: {chat_id}")
+        return
+    
+    # Ignorer les réactions
+    if message_type == "reactionMessage":
+        print(f"⏭️ Réaction ignorée de {sender_name}")
+        return
+    
+    # Extraire le contenu du message
+    text_message, attachment_url, attachment_type = await extract_message_content(
+        message_type, message_data, sender_name
+    )
+    
+    if not text_message:
+        return
+    
+    # Analyser et notifier (ou sauvegarder directement pour les fichiers)
+    if is_file_message(text_message):
+        # Pour les fichiers : sauvegarde directe sans analyse
+        await save_message_direct(sender, sender_name, text_message, attachment_url, attachment_type)
+    else:
+        # Pour les textes : analyse d'importance puis sauvegarde
+        await analyze_and_notify(sender, sender_name, text_message)
+
+
+def is_group_message(chat_id: str, sender: str) -> bool:
+    """Vérifie si le message provient d'un groupe"""
+    return any(identifier in chat_id or identifier in sender 
+              for identifier in ["@g.us"])
+
+
+async def extract_message_content(message_type: str, message_data: dict, sender_name: str):
+    """Extrait le contenu du message selon son type"""
+    
+    text_message = ""
+    attachment_url = None
+    attachment_type = None
+    
+    if message_type == "textMessage":
+        text_message = message_data.get("textMessageData", {}).get("textMessage", "")
+        print(f"💬 [{sender_name}]: {text_message}")
+    
+    elif message_type == "extendedTextMessage":
+        extended_data = message_data.get("extendedTextMessageData", {})
+        text_message = extended_data.get("text") or extended_data.get("caption", "")
+        print(f"💬 [{sender_name}]: {text_message}")
+    
+    elif message_type == "audioMessage":
+        text_message = await process_audio_message(message_data, sender_name)
+    
+    elif message_type == "imageMessage":
+        image_data = message_data.get("imageMessageData", {})
+        caption = image_data.get("caption", "")
+        text_message = f"🖼️ [IMAGE] {caption if caption else 'Image sans légende'}"
+        attachment_url = image_data.get("url")
+        attachment_type = "image"
+        print(f"🖼️ Image de {sender_name}: {caption}")
+    
+    elif message_type == "documentMessage":
+        doc_data = message_data.get("documentMessageData", {})
+        file_name = doc_data.get("fileName", "Document")
+        text_message = f"📎 [DOCUMENT] {file_name}"
+        attachment_url = doc_data.get("url")
+        attachment_type = "document"
+        print(f"📎 Document de {sender_name}: {file_name}")
+    
+    elif message_type == "videoMessage":
+        video_data = message_data.get("videoMessageData", {})
+        caption = video_data.get("caption", "")
+        text_message = f"🎥 [VIDEO] {caption if caption else 'Vidéo sans légende'}"
+        attachment_url = video_data.get("url")
+        attachment_type = "video"
+        print(f"🎥 Vidéo de {sender_name}")
+    
+    else:
+        print(f"📎 Autre type non supporté: {message_type}")
+    
+    return text_message, attachment_url, attachment_type
+
+
+async def process_audio_message(message_data: dict, sender_name: str) -> str:
+    """Traite un message audio avec transcription Whisper"""
+    
+    audio_data = message_data.get("audioMessageData", {})
+    audio_url = audio_data.get("url")
+    audio_duration = audio_data.get("duration", 0)
+    
+    print(f"🎤 Message vocal de {sender_name} ({audio_duration}s)")
+    
+    if not audio_url or not supabase:
+        return "🎤 [Message vocal non transcrit]"
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            audio_response = await client.get(audio_url)
+            audio_content = audio_response.content
+        
+        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
+            tmp.write(audio_content)
+            tmp_path = tmp.name
+        
+        with open(tmp_path, "rb") as audio_file:
+            transcript = client.audio.transcriptions.create(
+                model="whisper-1", file=audio_file, language="fr"
+            )
+        
+        os.unlink(tmp_path)
+        transcribed_text = transcript.text
+        print(f"📝 Transcription: {transcribed_text}")
+        return f"🎤 [VOCAL] {transcribed_text}"
+    
+    except Exception as e:
+        print(f"❌ Erreur transcription: {e}")
+        return "🎤 [Message vocal non transcrit]"
+
+
+def is_file_message(text_message: str) -> bool:
+    """Vérifie si le message est un fichier (image, document, vidéo)"""
+    return any(text_message.startswith(prefix) for prefix in ["🖼️", "📎", "🎥"])
+
+
+async def save_message_direct(sender: str, sender_name: str, text_message: str, 
+                               attachment_url: str = None, attachment_type: str = None):
+    """Sauvegarde directe d'un message sans analyse (pour les fichiers)"""
+    
+    if not supabase:
+        return
+    
+    try:
+        message_data = {
+            "from": sender,
+            "from_name": sender_name,
+            "message": text_message,
+            "status": "pending",
+            "importance": "medium",
+            "created_at": datetime.now().isoformat()
+        }
+        
+        if attachment_url:
+            message_data["attachment_url"] = attachment_url
+            message_data["attachment_type"] = attachment_type
+        
+        supabase.table("whatsapp_messages").insert(message_data).execute()
+        print(f"✅ Fichier sauvegardé")
+    
+    except Exception as e:
+        print(f"❌ Erreur sauvegarde fichier: {e}")
+
+
+async def analyze_and_notify(sender: str, sender_name: str, text_message: str):
+    """Analyse le message, sauvegarde et envoie une notification si important"""
+    
+    try:
+        analysis = await analyze_message_importance(sender_name, text_message)
+        
+        # Sauvegarde UNIQUE avec les métadonnées d'analyse
+        if supabase:
+            supabase.table("whatsapp_messages").insert({
+                "from": sender,
+                "from_name": sender_name,
+                "message": text_message,
+                "status": "pending",
+                "importance": analysis["importance"],
+                "summary": analysis["summary"],
+                "is_greeting": analysis["is_greeting"],
+                "created_at": datetime.now().isoformat()
+            }).execute()
+            print(f"✅ Message sauvegardé (importance: {analysis['importance']})")
+        
+        # Envoyer une notification si important
+        if should_notify(analysis):
+            send_notification_sync({
+                "title": f"📱 WhatsApp - {sender_name}",
+                "body": analysis["summary"][:80],
+                "url": "/chat?mode=whatsapp",
+                "user_id": DEFAULT_USER_ID,
+                "type": "whatsapp"
+            })
+            print(f"🔔 Notification envoyée pour message {analysis['importance']}")
+        else:
+            print(f"⏭️ Message de faible importance, pas de notification")
+    
+    except Exception as e:
+        print(f"❌ Erreur analyse: {e}")
+        await fallback_save_and_notify(sender, sender_name, text_message)
+
+
+async def analyze_message_importance(sender_name: str, text_message: str) -> dict:
+    """Analyse l'importance du message via GPT"""
+    
+    analysis_prompt = f"""Message WhatsApp de {sender_name}: "{text_message}"
+Analyse ce message et retourne UNIQUEMENT du JSON:
+{{
+  "importance": "high/medium/low",
+  "summary": "résumé court du message (max 20 mots)",
+  "is_greeting": true/false
+}}
+
+Règles:
+- importance: high = contient une question, une demande, une urgence, un document, un délai
+- importance: medium = contient une information, un partage, une mise à jour
+- importance: low = simple salutation, emoji, réponse courte sans attente
+- is_greeting: true si juste "cc", "bonjour", "salut", "coucou" sans contenu"""
+
+    analysis = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": analysis_prompt}],
+        max_tokens=150,
+        temperature=0.5
+    )
+    
+    result_text = analysis.choices[0].message.content
+    result_text = result_text.replace("```json", "").replace("```", "").strip()
+    
+    return json.loads(result_text)
+
+
+def should_notify(analysis: dict) -> bool:
+    """Détermine si une notification doit être envoyée"""
+    importance = analysis.get("importance", "medium")
+    is_greeting = analysis.get("is_greeting", False)
+    
+    return importance == "high" or (importance == "medium" and not is_greeting)
+
+
+async def fallback_save_and_notify(sender: str, sender_name: str, text_message: str):
+    """Sauvegarde de secours sans analyse"""
+    
+    if supabase:
+        supabase.table("whatsapp_messages").insert({
+            "from": sender,
+            "from_name": sender_name,
+            "message": text_message,
+            "status": "pending",
+            "importance": "medium",
+            "created_at": datetime.now().isoformat()
+        }).execute()
+        print(f"✅ Message sauvegardé (fallback)")
+    
+    # Envoyer une notification quand même
+    send_notification_sync({
+        "title": f"📱 WhatsApp - {sender_name}",
+        "body": text_message[:100],
+        "url": "/chat?mode=whatsapp",
+        "user_id": DEFAULT_USER_ID,
+        "type": "whatsapp"
+    }) 
+
+
+
+
+# =====================================================
+# WHATSAPP - NOTIFICATIONS PROGRAMMÉES
+# =====================================================
+
+@app.post("/api/whatsapp/pending-notifications")
+async def whatsapp_pending_notifications(request: Dict[str, Any] = None):
+    """
+    Envoie un résumé des messages WhatsApp en attente.
+    À appeler par cron: matin (8h), midi (12h), soir (18h)
+    """
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    user_id = get_request_user_id(request or {})
+    
+    # Récupérer les messages en attente (status = 'pending')
+    pending_messages = supabase.table("whatsapp_messages")\
+        .select("*")\
+        .eq("user_id", user_id)\
+        .eq("status", "pending")\
+        .order("importance", desc=True)\
+        .order("created_at", desc=True)\
+        .execute()
+    
+    if not pending_messages.data:
+        return {"success": True, "sent": False, "message": "Aucun message en attente"}
+    
+    # Séparer par importance
+    high_priority = [m for m in pending_messages.data if m.get("importance") == "high"]
+    medium_priority = [m for m in pending_messages.data if m.get("importance") == "medium"]
+    low_priority = [m for m in pending_messages.data if m.get("importance") == "low"]
+    
+    # Construire le message
+    time_of_day = get_time_of_day()
+    message = f"{time_of_day} Rebecca.\n\n"
+    
+    if high_priority:
+        message += f"⚠️ **{len(high_priority)} message(s) important(s) en attente sur WhatsApp** :\n"
+        for msg in high_priority[:3]:
+            message += f"   • **{msg['from_name']}** : {msg.get('summary', msg['message'][:50])}...\n"
+        if len(high_priority) > 3:
+            message += f"   • et {len(high_priority) - 3} autre(s) message(s) important(s)\n"
+        message += "\n"
+    
+    if medium_priority:
+        message += f"📋 {len(medium_priority)} autre(s) message(s) à consulter\n"
+    
+    if low_priority and not high_priority and not medium_priority:
+        message += f"💬 {len(low_priority)} salutation(s) sans réponse urgente\n"
+    
+    message += "\n👉 Dis-moi 'affiche mes WhatsApp' pour voir les détails et répondre."
+    
+    # Envoyer la notification
+    send_notification_sync({
+        "title": f"📱 WhatsApp - {len(high_priority)} message(s) important(s)",
+        "body": message[:200],
+        "url": "/chat?mode=whatsapp",
+        "user_id": user_id,
+        "type": "whatsapp"
+    })
+    
+    return {
+        "success": True,
+        "sent": True,
+        "stats": {
+            "high": len(high_priority),
+            "medium": len(medium_priority),
+            "low": len(low_priority),
+            "total": len(pending_messages.data)
+        }
+    }
+
+
+def get_time_of_day() -> str:
+    """Retourne la salutation selon l'heure"""
+    hour = datetime.now().hour
+    if hour < 12:
+        return "☀️ Bonjour"
+    elif hour < 18:
+        return "🌤️ Bon après-midi"
+    else:
+        return "🌙 Bonsoir"
+        
 # ========== FONCTIONS AUXILIAIRES ==========
 async def whatsapp_send_message(to: str, message: str):
     """Envoie un message WhatsApp via GreenAPI"""
@@ -519,9 +656,6 @@ async def test_webhook():
         except Exception as e:
             return {"success": False, "error": str(e)}
     return {"success": False, "error": "Supabase non configuré"}
-
-
-
 
 
 # =====================================================
