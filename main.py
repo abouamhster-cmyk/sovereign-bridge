@@ -2615,8 +2615,34 @@ tools = [
         }
     },
 
+
+   # -------------------------------------------------
+    # add_revenue
     # -------------------------------------------------
-    # add_revenue"
+    {
+        "type": "function",
+        "function": {
+            "name": "add_mission",
+            "description": "Ajoute une nouvelle mission ou projet.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Nom de la mission"},
+                    "category": {"type": "string", "enum": ["business", "family", "personal", "relocation", "farm", "content", "documents"], "description": "Catégorie de la mission"},
+                    "priority": {"type": "string", "enum": ["critical", "high", "normal", "low"], "description": "Priorité"},
+                    "status": {"type": "string", "enum": ["idea", "planning", "active", "waiting", "paused", "complete"], "description": "Statut"},
+                    "deadline": {"type": "string", "description": "Date limite (format YYYY-MM-DD)"},
+                    "revenue_potential": {"type": "integer", "description": "Potentiel de revenu de 1 à 5"},
+                    "notes": {"type": "string", "description": "Notes supplémentaires"}
+                },
+                "required": ["name"]
+            }
+        }
+    },
+   
+
+    # -------------------------------------------------
+    # add_revenue
     # -------------------------------------------------
     {
         "type": "function",
@@ -3611,7 +3637,52 @@ async def add_revenue(user_id: str, source: str, amount: float, project: str = N
     except Exception as e:
         logger.error(f"Erreur add_revenue: {e}")
         return {"success": False, "error": str(e)}
+
+
+async def add_mission(user_id: str, name: str, category: str = "business", 
+                       priority: str = "normal", status: str = "idea", 
+                       deadline: str = None, revenue_potential: int = 3,
+                       notes: str = "") -> Dict:
+    """Ajoute une mission"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        valid_categories = ["business", "family", "personal", "relocation", "farm", "content", "documents"]
+        if category not in valid_categories:
+            category = "business"
         
+        valid_priorities = ["critical", "high", "normal", "low"]
+        if priority not in valid_priorities:
+            priority = "normal"
+        
+        valid_statuses = ["idea", "planning", "active", "waiting", "paused", "complete"]
+        if status not in valid_statuses:
+            status = "idea"
+        
+        mission_data = {
+            "name": name,
+            "category": category,
+            "priority": priority,
+            "status": status,
+            "deadline": deadline,
+            "revenue_potential": revenue_potential,
+            "notes": notes,
+            "user_id": user_id,
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat()
+        }
+        
+        result = supabase.table("missions").insert(mission_data).execute()
+        
+        if hasattr(result, 'error') and result.error:
+            return {"success": False, "error": str(result.error)}
+        
+        return {"success": True, "message": f"🎯 Mission ajoutée: {name}", "data": result.data[0] if result.data else None}
+    
+    except Exception as e:
+        logger.error(f"Erreur add_mission: {e}")
+        return {"success": False, "error": str(e)}
 # =====================================================
 # API ROUTES - CHAT AMÉLIORÉ AVEC MÉMOIRE
 # =====================================================
