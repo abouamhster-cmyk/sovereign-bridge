@@ -3962,55 +3962,61 @@ async def update_document(user_id: str, document_id: str = None, name: str = Non
         return {"success": False, "error": str(e)}
 
 async def update_item(user_id: str, table: str, name: str = None, item_id: str = None, updates: dict = None):
-    """Met à jour un élément dans n'importe quelle table (tasks, missions, family_events, documents, etc.)"""
+    """Met à jour un élément existant dans n'importe quelle table"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
-    # Tables autorisées
     allowed_tables = ["tasks", "missions", "family_events", "documents", "wins", "spending", "revenue"]
     if table not in allowed_tables:
         return {"success": False, "error": f"Table '{table}' non autorisée"}
     
     try:
-        # Trouver l'élément par ID ou par nom
+        # Trouver l'élément
         if item_id:
             result = supabase.table(table).select("*").eq("id", item_id).eq("user_id", user_id).execute()
         elif name:
-            # Recherche approximative par nom (différent selon la table)
-            if table == "tasks" or table == "missions":
-                result = supabase.table(table).select("*").eq("user_id", user_id).ilike("name", f"%{name}%").execute()
-            elif table == "documents":
+            # Recherche selon la table
+            if table == "tasks":
+                result = supabase.table(table).select("*").eq("user_id", user_id).ilike("title", f"%{name}%").execute()
+            elif table == "missions":
                 result = supabase.table(table).select("*").eq("user_id", user_id).ilike("name", f"%{name}%").execute()
             elif table == "family_events":
-                result = supabase.table(table).select("*").eq("user_id", user_id).ilike("title", f"%{name}%").execute()
-            elif table == "wins":
                 result = supabase.table(table).select("*").eq("user_id", user_id).ilike("title", f"%{name}%").execute()
             else:
                 result = supabase.table(table).select("*").eq("user_id", user_id).execute()
         else:
-            return {"success": False, "error": "Il faut fournir un ID ou un nom"}
+            return {"success": False, "error": "Il faut fournir un nom ou un ID"}
         
         if not result.data:
-            return {"success": False, "error": f"Élément non trouvé: {name or item_id} dans {table}"}
+            return {"success": False, "error": f"Élément non trouvé: {name or item_id}"}
         
         item = result.data[0]
         
         # Appliquer les mises à jour
         update_data = {}
-        allowed_fields = get_allowed_fields_for_table(table)
+        allowed_fields = {
+            "tasks": ["title", "status", "priority", "due_date", "project", "notes"],
+            "missions": ["name", "status", "priority", "deadline", "notes", "revenue_potential"],
+            "family_events": ["title", "child_name", "category", "date", "priority", "status", "notes"],
+            "documents": ["name", "type", "status", "due_date", "url", "file_url", "notes"],
+            "wins": ["title", "category", "celebration_emoji", "notes"],
+            "spending": ["title", "amount", "category", "project", "notes"],
+            "revenue": ["source", "amount", "project", "notes"]
+        }
+        
         for field, value in updates.items():
-            if field in allowed_fields:
+            if field in allowed_fields.get(table, []):
                 update_data[field] = value
         
         if not update_data:
-            return {"success": False, "error": "Aucune mise à jour valide fournie"}
+            return {"success": False, "error": "Aucune mise à jour valide"}
         
         update_data["updated_at"] = datetime.now().isoformat()
         
         # Mettre à jour
         update_result = supabase.table(table).update(update_data).eq("id", item["id"]).execute()
         
-        return {"success": True, "message": f"Élément mis à jour dans {table}", "data": update_result.data[0] if update_result.data else None}
+        return {"success": True, "message": f"Élément '{name or item_id}' mis à jour dans {table}", "data": update_result.data[0] if update_result.data else None}
     
     except Exception as e:
         logger.error(f"Erreur update_item: {e}")
