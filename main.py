@@ -2663,6 +2663,26 @@ tools = [
             }
         }
     },
+
+    # -------------------------------------------------
+    # update_document
+    # -------------------------------------------------
+
+    {
+        "type": "function",
+        "function": {
+            "name": "update_document",
+            "description": "Met à jour un document existant (ajouter/modifier un lien, des notes, le statut, etc.)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Nom du document à modifier"},
+                    "updates": {"type": "object", "description": "Champs à mettre à jour (ex: {\"url\": \"https://...\", \"notes\": \"Nouvelle note\"})"}
+                },
+                "required": ["name", "updates"]
+            }
+        }
+    },
     
     # -------------------------------------------------
     # get_document
@@ -3869,6 +3889,48 @@ async def list_documents(user_id: str, limit: int = 10, status: str = None, show
     except Exception as e:
         logger.error(f"Erreur list_documents: {e}")
         return {"success": False, "error": str(e), "documents": []}
+
+
+async def update_document(user_id: str, document_id: str = None, name: str = None, 
+                          updates: dict = None) -> Dict:
+    """Met à jour un document existant"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        # Trouver le document par ID ou par nom
+        if document_id:
+            result = supabase.table("documents").select("*").eq("id", document_id).eq("user_id", user_id).execute()
+        elif name:
+            result = supabase.table("documents").select("*").eq("user_id", user_id).ilike("name", f"%{name}%").execute()
+        else:
+            return {"success": False, "error": "Il faut fournir un ID ou un nom"}
+        
+        if not result.data:
+            return {"success": False, "error": f"Document non trouvé: {name or document_id}"}
+        
+        doc = result.data[0]
+        
+        # Appliquer les mises à jour
+        update_data = {}
+        allowed_fields = ["name", "type", "status", "due_date", "url", "file_url", "notes"]
+        for field in allowed_fields:
+            if field in updates:
+                update_data[field] = updates[field]
+        
+        if not update_data:
+            return {"success": False, "error": "Aucune mise à jour fournie"}
+        
+        update_data["updated_at"] = datetime.now().isoformat()
+        
+        # Mettre à jour
+        update_result = supabase.table("documents").update(update_data).eq("id", doc["id"]).execute()
+        
+        return {"success": True, "message": f"Document '{doc['name']}' mis à jour", "document": update_result.data[0] if update_result.data else None}
+    
+    except Exception as e:
+        logger.error(f"Erreur update_document: {e}")
+        return {"success": False, "error": str(e)}
         
 # =====================================================
 # API ROUTES - CHAT AMÉLIORÉ AVEC MÉMOIRE
@@ -4056,6 +4118,20 @@ async def chat_endpoint(request: ChatRequest):
                 else:
                     content = f"❌ {result.get('error')}"
                 logger.info(f"💰 Add revenue: {amount} CFA - {source}")
+
+            elif name == "update_document":
+                name = args.get("name")
+                updates = args.get("updates", {})
+                
+                result = await update_document(user_id, name=name, updates=updates)
+                if result.get("success"):
+                    content = f"✅ {result.get('message')}"
+                    # Afficher le lien ajouté si présent
+                    if updates.get("url"):
+                        content += f"\n🔗 Lien ajouté : {updates['url']}"
+                else:
+                    content = f"❌ {result.get('error')}"
+                logger.info(f"📝 Update document: {name}")
 
             elif name == "list_documents":
                 limit = args.get("limit", 10)
