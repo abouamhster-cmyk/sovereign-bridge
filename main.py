@@ -4488,43 +4488,62 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                     content = f"❌ {result.get('error')}"
                 logger.info(f"🎯 Add mission: {name}")
 
+            elif name == "delete_task":
+                task_name = args.get("task_name")
+                # Chercher et supprimer la tâche
+                all_tasks = db_query("tasks", {"user_id": user_id}, limit=100)
+                found = None
+                for t in all_tasks.get("data", []):
+                    if task_name.lower() in t.get("title", "").lower():
+                        found = t
+                        break
+                if found:
+                    db_delete("tasks", found["id"])
+                    content = f"✅ Tâche supprimée : {found['title']}"
+                else:
+                    content = f"❌ Tâche non trouvée : {task_name}"
+            
+            elif name == "delete_document":
+                doc_name = args.get("document_name")
+                all_docs = db_query("documents", {"user_id": user_id}, limit=100)
+                found = None
+                for d in all_docs.get("data", []):
+                    if doc_name.lower() in d.get("name", "").lower():
+                        found = d
+                        break
+                if found:
+                    db_delete("documents", found["id"])
+                    content = f"✅ Document supprimé : {found['name']}"
+                else:
+                    content = f"❌ Document non trouvé : {doc_name}"
+
             elif name == "delete_item":
                 table = args.get("table")
                 item_name = args.get("name")
-                item_id = args.get("item_id")
                 
                 logger.info(f"🗑️ Delete {table}: {item_name}")
                 
-                # Chercher l'élément
-                if item_id:
-                    result = db_query(table, {"id": item_id, "user_id": user_id}, limit=1)
-                else:
-                    # Récupérer tous les éléments
-                    all_items = db_query(table, {"user_id": user_id}, limit=100)
-                    found_item = None
-                    
-                    if all_items.get("data"):
-                        item_name_lower = item_name.lower()
-                        for item in all_items["data"]:
-                            title = item.get("title") or item.get("name") or ""
-                            if item_name_lower in title.lower():
-                                found_item = item
-                                break
+                # Récupérer tous les éléments
+                all_items = db_query(table, {"user_id": user_id}, limit=100)
+                found_item = None
                 
-                if found_item or (item_id and result.get("data")):
-                    item = found_item or result["data"][0]
-                    item_title = item.get("title") or item.get("name") or item_name
-                    
-                    # Supprimer
-                    delete_result = db_delete(table, item["id"])
-                    
+                if all_items.get("data"):
+                    item_name_lower = item_name.lower()
+                    for item in all_items["data"]:
+                        title = item.get("title") or item.get("name") or ""
+                        if item_name_lower in title.lower():
+                            found_item = item
+                            break
+                
+                if found_item:
+                    delete_result = db_delete(table, found_item["id"])
                     if delete_result.get("success"):
-                        content = f"✅ {table[:-1].capitalize()} supprimé(e) : **{item_title}**"
-                        logger.info(f"✅ Deleted {table}: {item_title}")
+                        content = f"✅ {table[:-1]} supprimé : {found_item.get('title') or found_item.get('name')}"
+                        logger.info(f"✅ Deleted {table}: {found_item.get('title') or found_item.get('name')}")
                     else:
                         content = f"❌ Erreur lors de la suppression"
                 else:
-                    content = f"❌ Élément non trouvé : '{item_name}' dans {table}"
+                    content = f"❌ {table} non trouvé : '{item_name}'"
 
             elif name == "update_mission_status":
                 mission_name = args.get("mission_name")
