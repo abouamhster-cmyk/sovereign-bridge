@@ -528,7 +528,6 @@ async def get_whatsapp_conversations(days: int = 30):
     filtered.sort(key=lambda x: x["last_message_at"], reverse=True)
     return {"conversations": filtered[:15]}
 
-
 async def whatsapp_send_message(to: str, message: str):
     """Envoie un message WhatsApp via GreenAPI"""
     print(f"📤 Tentative d'envoi à {to}")
@@ -537,10 +536,11 @@ async def whatsapp_send_message(to: str, message: str):
         print("❌ GreenAPI non configuré")
         return False
     
-    # Nettoyer le numéro correctement
-    clean_to = to.replace("@c.us", "").replace("+", "").replace(" ", "")
+    # 🔥 FORMAT CORRECT : toujours ajouter @c.us
+    clean_to = to.replace("+", "").replace(" ", "")
+    if not clean_to.endswith("@c.us"):
+        clean_to = clean_to + "@c.us"
     
-    # Construction de l'URL et du payload
     url = f"{GREENAPI_BASE_URL}/sendMessage/{GREENAPI_API_TOKEN}"
     payload = {"chatId": clean_to, "message": message}
     
@@ -554,10 +554,11 @@ async def whatsapp_send_message(to: str, message: str):
             print(f"📤 Response body: {response.text[:200]}")
             
             if response.status_code == 200:
-                print(f"✅ Message envoyé à {clean_to}")
+                result = response.json()
+                print(f"✅ Message envoyé à {clean_to}, idMessage: {result.get('idMessage')}")
                 return True
             else:
-                print(f"❌ Erreur GreenAPI: {response.status_code}")
+                print(f"❌ Erreur GreenAPI: {response.status_code} - {response.text[:100]}")
                 return False
     except Exception as e:
         print(f"❌ Erreur envoi: {type(e).__name__} - {e}")
