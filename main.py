@@ -4082,10 +4082,12 @@ async def chat_endpoint(request: ChatRequest):
                                 doc_info += f"   📅 Échéance: {d['due_date']}\n"
                             if d.get('created_at'):
                                 doc_info += f"   🕐 Créé: {d['created_at'][:10]}\n"
-                            if d.get('file_url'):
-                                doc_info += f"   📎 [Fichier]({d['file_url']})\n"
-                            if d.get('url'):
-                                doc_info += f"   🔗 [Lien externe]({d['url']})\n"
+                            
+                            # 🔥 CORRECTION : Chercher le lien dans file_url OU url
+                            file_link = d.get('file_url') or d.get('url')
+                            if file_link:
+                                doc_info += f"   📎 [Fichier]({file_link})\n"
+                            
                             if d.get('notes'):
                                 doc_info += f"   📝 Notes: {d['notes'][:100]}\n"
                             doc_list.append(doc_info)
