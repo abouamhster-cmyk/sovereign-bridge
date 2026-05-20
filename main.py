@@ -16,6 +16,13 @@ from openai import OpenAI
 from supabase import create_client, Client
 from pywebpush import webpush, WebPushException
 import httpx
+import imaplib
+import email
+from email.header import decode_header
+import base64
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from email.mime.text import MIMEText
 
 
 # =====================================================
@@ -695,6 +702,9 @@ VAPID_CLAIMS = {"sub": "mailto:jbillcataria@gmail.com"}
 GREENAPI_ID_INSTANCE = os.environ.get("GREENAPI_ID_INSTANCE")
 GREENAPI_API_TOKEN = os.environ.get("GREENAPI_API_TOKEN")
 GREENAPI_BASE_URL = f"https://api.green-api.com/waInstance{GREENAPI_ID_INSTANCE}" if GREENAPI_ID_INSTANCE else None
+# Configuration Gmail
+GMAIL_SERVICE_ACCOUNT_JSON = os.environ.get("GMAIL_SERVICE_ACCOUNT_JSON")
+GMAIL_USER_ID = os.environ.get("GMAIL_USER_ID", "me")
 
 
 # Debug GreenAPI
@@ -2726,6 +2736,37 @@ tools = [
     {
         "type": "function",
         "function": {
+            "name": "get_emails",
+            "description": "Récupère les emails non lus de la boîte Gmail.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "description": "Nombre maximum d'emails à afficher (défaut: 10)"},
+                    "unread_only": {"type": "boolean", "description": "Afficher uniquement les non lus (défaut: true)"}
+                },
+                "required": []
+            }
+        }
+    },
+
+    {
+        "type": "function",
+        "function": {
+            "name": "mark_email_read",
+            "description": "Marque un email comme lu.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message_id": {"type": "string", "description": "ID du message à marquer comme lu"}
+                },
+                "required": ["message_id"]
+            }
+        }
+    },
+
+    {
+        "type": "function",
+        "function": {
             "name": "delete_task",
             "description": "Supprime une tâche.",
             "parameters": {
@@ -4447,6 +4488,32 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                 else:
                     content = f"❌ {result.get('error')}"
                 logger.info(f"📝 Update {table}: {item_name}")
+
+            elif name == "get_emails":
+                limit = args.get("limit", 10)
+                unread_only = args.get("unread_only", True)
+                
+                result = await get_gmail_messages(limit, unread_only)
+                
+                if result.get("success") and result.get("messages"):
+                    emails = result["messages"]
+                    email_list = []
+                    for i, e in enumerate(emails[:10], 1):
+                        email_list.append(f"{i}. **{e['from']}**\n   📧 {e['subject']}\n   📝 {e['snippet'][:80]}...")
+                    
+                    content = f"📧 **{result['count']} email(s) non lu(s) :**\n\n" + "\n".join(email_list)
+                    content += "\n\n💡 Pour répondre, dis-moi 'réponds à l'email [numéro]'"
+                else:
+                    content = "📧 Aucun email non lu"
+            
+            elif name == "mark_email_read":
+                message_id = args.get("message_id")
+                
+                success = await mark_gmail_as_read(message_id)
+                if success:
+                    content = f"✅ Email marqué comme lu"
+                else:
+                    content = f"❌ Erreur lors du marquage"
             
             elif name == "list_documents":
                 limit = args.get("limit", 10)
@@ -10689,3 +10756,160 @@ Retourne UNIQUEMENT la suggestion, rien d'autre."""
         ]
         import random
         return {"success": True, "suggestion": random.choice(fallbacks)}
+
+
+
+def get_gmail_service():
+    """Initialise le service Gmail"""
+    if not GMAIL_SERVICE_ACCOUNT_JSON:
+        logger.warning("⚠️ GMAIL_SERVICE_ACCOUNT_JSON non configuré")
+        return None
+    
+    try:
+        service_account_info = json.loads(GMAIL_SERVICE_ACCOUNT_JSON)
+        creds = service_account.Credentials.from_service_account_info(
+            service_account_info,
+            scopes=['https://www.googleapis.com/auth/gmail.readonly',
+                    'https://www.googleapis.com/auth/gmail.send']
+        )
+        service = build('gmail', 'v1', credentials=creds)
+        logger.info("✅ Gmail service initialisé")
+        return service
+    except Exception as e:
+        logger.error(f"❌ Erreur auth Gmail: {e}")
+        return None
+
+async def get_gmail_messages(max_results: int = 10, unread_only: bool = True):
+    """Récupère les messages Gmail"""
+    service = get_gmail_service()
+    if not service:
+        return {"success": False, "error": "Gmail non configuré", "messages": []}
+    
+    try:
+        query = "is:unread" if unread_only else ""
+        
+        results = service.users().messages().list(
+            userId=GMAIL_USER_ID,
+            maxResults=max_results,
+            q=query
+        ).execute()
+        
+        messages = []
+        for msg in results.get('messages', []):
+            msg_data = service.users().messages().get(
+                userId=GMAIL_USER_ID,
+                id=msg['id'],
+                format='metadata',
+                metadataHeaders=['From', 'Subject', 'Date']
+            ).execute()
+            
+            headers = msg_data.get('payload', {}).get('headers', [])
+            
+            subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'Sans sujet')
+            from_addr = next((h['value'] for h in headers if h['name'] == 'From'), 'Inconnu')
+            date = next((h['value'] for h in headers if h['name'] == 'Date'), 'Date inconnue')
+            snippet = msg_data.get('snippet', '')[:150]
+            
+            messages.append({
+                "id": msg['id'],
+                "from": from_addr,
+                "subject": subject,
+                "snippet": snippet,
+                "date": date
+            })
+        
+        return {"success": True, "messages": messages, "count": len(messages)}
+    
+    except Exception as e:
+        logger.error(f"Erreur Gmail: {e}")
+        return {"success": False, "error": str(e), "messages": []}
+
+async def mark_gmail_as_read(message_id: str):
+    """Marque un message comme lu"""
+    service = get_gmail_service()
+    if not service:
+        return False
+    
+    try:
+        service.users().messages().modify(
+            userId=GMAIL_USER_ID,
+            id=message_id,
+            body={'removeLabelIds': ['UNREAD']}
+        ).execute()
+        return True
+    except Exception as e:
+        logger.error(f"Erreur mark read: {e}")
+        return False
+
+
+
+
+
+
+# Configuration Gmail IMAP
+GMAIL_EMAIL = os.environ.get("GMAIL_EMAIL", "abouamhster@gmail.com")
+GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD")  # Le mot de passe d'application
+
+async def get_gmail_messages_imap(limit: int = 10):
+    """Récupère les emails via IMAP (plus simple)"""
+    if not GMAIL_APP_PASSWORD:
+        return {"success": False, "error": "Gmail IMAP non configuré", "messages": []}
+    
+    try:
+        # Connexion IMAP
+        mail = imaplib.IMAP4_SSL("imap.gmail.com")
+        mail.login(GMAIL_EMAIL, GMAIL_APP_PASSWORD)
+        mail.select("INBOX")
+        
+        # Rechercher les emails non lus
+        status, messages = mail.search(None, 'UNSEEN')
+        
+        if status != 'OK':
+            return {"success": True, "messages": [], "count": 0}
+        
+        email_ids = messages[0].split()
+        email_ids = email_ids[-limit:]  # Les plus récents
+        
+        emails = []
+        for e_id in reversed(email_ids):
+            status, msg_data = mail.fetch(e_id, '(RFC822)')
+            for response_part in msg_data:
+                if isinstance(response_part, tuple):
+                    msg = email.message_from_bytes(response_part[1])
+                    
+                    # Décoder le sujet
+                    subject, encoding = decode_header(msg.get("Subject", "Sans sujet"))[0]
+                    if isinstance(subject, bytes):
+                        subject = subject.decode(encoding or 'utf-8', errors='ignore')
+                    
+                    # Décoder l'expéditeur
+                    from_addr, encoding = decode_header(msg.get("From", "Inconnu"))[0]
+                    if isinstance(from_addr, bytes):
+                        from_addr = from_addr.decode(encoding or 'utf-8', errors='ignore')
+                    
+                    # Extraire le corps
+                    body = ""
+                    if msg.is_multipart():
+                        for part in msg.walk():
+                            if part.get_content_type() == "text/plain":
+                                body = part.get_payload(decode=True).decode('utf-8', errors='ignore')[:200]
+                                break
+                    else:
+                        body = msg.get_payload(decode=True).decode('utf-8', errors='ignore')[:200]
+                    
+                    emails.append({
+                        "id": e_id.decode(),
+                        "from": from_addr,
+                        "subject": subject,
+                        "snippet": body[:150],
+                        "date": msg.get("Date", "Date inconnue")
+                    })
+        
+        mail.close()
+        mail.logout()
+        
+        return {"success": True, "messages": emails, "count": len(emails)}
+    
+    except Exception as e:
+        logger.error(f"Erreur IMAP Gmail: {e}")
+        return {"success": False, "error": str(e), "messages": []}
