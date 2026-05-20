@@ -2616,6 +2616,30 @@ tools = [
     },
 
     # -------------------------------------------------
+    # add_spending
+    # -------------------------------------------------
+
+    {
+        "type": "function",
+        "function": {
+            "name": "add_spending",
+            "description": "Ajoute une dépense.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Description de la dépense"},
+                    "amount": {"type": "number", "description": "Montant en CFA"},
+                    "category": {"type": "string", "enum": ["materials", "construction", "labor", "livestock", "crops", "transport", "equipment", "food", "other"], "description": "Catégorie de la dépense"},
+                    "project": {"type": "string", "description": "Projet associé (Ifè Farm, Love & Fire, etc.)"},
+                    "date": {"type": "string", "description": "Date de la dépense (format YYYY-MM-DD)"},
+                    "notes": {"type": "string", "description": "Notes supplémentaires"}
+                },
+                "required": ["title", "amount"]
+            }
+        }
+    },
+
+    # -------------------------------------------------
     # add_win
     # -------------------------------------------------
     {
@@ -3496,6 +3520,44 @@ async def add_win(user_id: str, title: str, category: str = "personal", celebrat
     except Exception as e:
         logger.error(f"Erreur add_win: {e}")
         return {"success": False, "error": str(e)}
+
+
+async def add_spending(user_id: str, title: str, amount: float, category: str = "other", 
+                        project: str = None, date: str = None, notes: str = "") -> Dict:
+    """Ajoute une dépense"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        valid_categories = ["materials", "construction", "labor", "livestock", "crops", 
+                           "transport", "equipment", "food", "other"]
+        if category not in valid_categories:
+            category = "other"
+        
+        if not date:
+            date = datetime.now().date().isoformat()
+        
+        spending_data = {
+            "title": title,
+            "amount": float(amount),
+            "category": category,
+            "project": project or "Général",
+            "date": date,
+            "notes": notes,
+            "user_id": user_id,
+            "created_at": datetime.now().isoformat()
+        }
+        
+        result = supabase.table("spending").insert(spending_data).execute()
+        
+        if hasattr(result, 'error') and result.error:
+            return {"success": False, "error": str(result.error)}
+        
+        return {"success": True, "message": f"💰 Dépense ajoutée: {amount} CFA - {title}", "data": result.data[0] if result.data else None}
+    
+    except Exception as e:
+        logger.error(f"Erreur add_spending: {e}")
+        return {"success": False, "error": str(e)}
         
 # =====================================================
 # API ROUTES - CHAT AMÉLIORÉ AVEC MÉMOIRE
@@ -3657,6 +3719,21 @@ async def chat_endpoint(request: ChatRequest):
                 else:
                     content = f"❌ {result.get('error')}"
                 logger.info(f"🏆 Add win: {title}")
+
+            elif name == "add_spending":
+                title = args.get("title")
+                amount = args.get("amount")
+                category = args.get("category", "other")
+                project = args.get("project")
+                date = args.get("date")
+                notes = args.get("notes", "")
+                
+                result = await add_spending(user_id, title, amount, category, project, date, notes)
+                if result.get("success"):
+                    content = f"✅ {result.get('message')}"
+                else:
+                    content = f"❌ {result.get('error')}"
+                logger.info(f"💰 Add spending: {amount} CFA - {title}")
                 
             elif name == "write_to_table":
                 target_table = args.pop("table")
