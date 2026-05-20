@@ -3283,7 +3283,6 @@ def get_revenue_by_project():
     
     return {"projects": result}
 
-
 # =====================================================
 # API ROUTES - CHAT AMÉLIORÉ AVEC MÉMOIRE
 # =====================================================
@@ -3310,7 +3309,7 @@ async def chat_endpoint(request: ChatRequest):
     if profile_context:
         enhanced_system_prompt += f"\n\n# X. CURRENT PROFILE CONTEXT\n{profile_context}"
     
-    # 🔥 AJOUT DES INSTRUCTIONS WHATSAPP DANS LE PROMPT
+    # AJOUT DES INSTRUCTIONS WHATSAPP DANS LE PROMPT
     whatsapp_instructions = """
     
 # WHATSAPP SPECIFIC RULES:
@@ -3414,7 +3413,7 @@ async def chat_endpoint(request: ChatRequest):
                 table = args.get("table")
                 filters = args.get("filters", {})
                 
-                # 🔥 CORRECTION SPÉCIALE POUR WHATSAPP
+                # CORRECTION SPÉCIALE POUR WHATSAPP
                 if table == "whatsapp_messages":
                     # Si l'IA demande "unread", on la redirige vers "replied": False
                     if filters.get("status") == "unread":
@@ -3451,12 +3450,12 @@ async def chat_endpoint(request: ChatRequest):
                 content = json.dumps(result, ensure_ascii=False)
                 logger.info(f"📋 Tâches prioritaires: {len(result)}")
 
-           elif name == "whatsapp_send_reply":
+            elif name == "whatsapp_send_reply":
                 to = args.get("to", "")
                 message = args.get("message", "")
                 message_id = args.get("message_id")
                 
-                # 🔥 AJOUTE CE LOG POUR DEBUG
+                # AJOUTE CE LOG POUR DEBUG
                 logger.info(f"📱 whatsapp_send_reply appelé avec to={to}, message={message}")
                 
                 if not to or not message:
@@ -3582,31 +3581,27 @@ async def chat_endpoint(request: ChatRequest):
         logger.error(f"❌ Erreur chat: {e}")
         error_str = str(e)
 
-        # 🔥 SI L'ERREUR EST LIÉE À WHATSAPP, RÉESSAYER
-        if "whatsapp" in str(e).lower() or "email" in str(e).lower():
+        # SI L'ERREUR EST LIÉE À WHATSAPP, RÉESSAYER
+        if "whatsapp" in error_str.lower() or "email" in error_str.lower():
             # Vérifier si le dernier message utilisateur demande d'envoyer un message
             last_user_msg = request.messages[-1].get("content", "").lower() if request.messages else ""
             
-            if "envoi" in last_user_msg and ("whatsapp" in last_user_msg or "whatsapp" in str(e).lower()):
+            if "envoi" in last_user_msg and ("whatsapp" in last_user_msg or "whatsapp" in error_str.lower()):
                 # Extraire le numéro et le message - utiliser le re global
-                phone_match = re.search(r'(\+?229\s*\d{8,10})', last_user_msg)  # ← plus d'import
+                phone_match = re.search(r'(\+?229\s*\d{8,10})', last_user_msg)
                 if phone_match:
                     phone = phone_match.group(1).replace(" ", "")
                     if not phone.endswith("@c.us"):
                         phone = phone + "@c.us"
                     
-                    # Réessayer avec whatsapp_send_reply
+                    # Réessayer avec whatsapp_send_message
                     result = await whatsapp_send_message(phone, "Bonjour !")
                     if result:
                         return {"reply": f"✅ J'ai bien envoyé 'Bonjour !' à {phone}"}
                     else:
-                        return {"reply": f"❌ Je n'ai pas pu envoyer le message. Vérifie le numéro {phone}"}            
-        # Sinon, erreur normale
-        reply = f"❌ Je n'ai pas pu faire ce que tu as demandé. Peux-tu reformuler ?"
-        return {"reply": reply}
-
-
-        # Analyser le type d'erreur
+                        return {"reply": f"❌ Je n'ai pas pu envoyer le message. Vérifie le numéro {phone}"}
+        
+        # Analyser le type d'erreur pour les emails
         if "email" in error_str.lower() or "EmailRequest" in error_str:
             reply = """❌ L'adresse email n'est pas valide ou il manque des informations.
 
@@ -3639,6 +3634,7 @@ Par exemple :
 - "Ajoute une dépense de 5000 CFA" """
 
         return {"reply": reply, "error_type": type(e).__name__, "error_message": error_str[:200]}
+
 # =====================================================
 # API ROUTES - SPECIALIZED (EXISTANT)
 # =====================================================
