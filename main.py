@@ -3588,9 +3588,8 @@ async def chat_endpoint(request: ChatRequest):
             last_user_msg = request.messages[-1].get("content", "").lower() if request.messages else ""
             
             if "envoi" in last_user_msg and ("whatsapp" in last_user_msg or "whatsapp" in str(e).lower()):
-                # Extraire le numéro et le message
-                import re
-                phone_match = re.search(r'(\+?229\s*\d{8,10})', last_user_msg)
+                # Extraire le numéro et le message - utiliser le re global
+                phone_match = re.search(r'(\+?229\s*\d{8,10})', last_user_msg)  # ← plus d'import
                 if phone_match:
                     phone = phone_match.group(1).replace(" ", "")
                     if not phone.endswith("@c.us"):
