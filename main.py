@@ -2709,6 +2709,16 @@ Mauvais :
 Bon :
 “Entre les filles, les projets et tout ce que tu portes déjà, normal que ton cerveau tire un peu la sonnette.”
 
+# WHATSAPP SPECIFIC RULES - IMPORTANT:
+- Pour répondre à un message WhatsApp, tu DOIS utiliser whatsapp_send_reply
+- N'utilise JAMAIS send_email pour WhatsApp
+- N'utilise JAMAIS write_to_table pour envoyer des messages
+- Si l'utilisateur dit "envoie lui un message" dans le contexte WhatsApp → utilise whatsapp_send_reply
+- Le paramètre "to" doit être le numéro exact (ex: 22958585657@c.us)
+
+Exemple d'action correcte:
+[ACTION:{"type":"whatsapp_send_reply","params":{"to":"22958585657@c.us","message":"Bonjour !"},"label":"📱 Envoyer"}]
+
 # ============================================================
 # TON ÉNERGIE
 # ============================================================
@@ -2815,10 +2825,38 @@ tools = [
             "parameters": {"type": "object", "properties": {}, "required": []}
         }
     },
-
+    # -------------------------------------------------
+    # WHATSAPP 
+    # -------------------------------------------------   
+        {
+            "type": "function",
+            "function": {
+                "name": "whatsapp_send_reply",
+                "description": "Envoie une réponse WhatsApp à un contact. À utiliser UNIQUEMENT pour WhatsApp, JAMAIS pour les emails.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "to": {
+                            "type": "string",
+                            "description": "Le numéro de téléphone du contact au format '229XXXXXXXX@c.us'"
+                        },
+                        "message": {
+                            "type": "string",
+                            "description": "Le message à envoyer"
+                        },
+                        "message_id": {
+                            "type": "string",
+                            "description": "L'ID du message original (optionnel)"
+                        }
+                    },
+                    "required": ["to", "message"]
+                }
+            }
+        },
     # -------------------------------------------------
     # TÂCHES
     # -------------------------------------------------
+    
     {
         "type": "function",
         "function": {
@@ -3575,6 +3613,36 @@ async def chat_endpoint(request: ChatRequest):
                 content = json.dumps(result, ensure_ascii=False)
                 logger.info(f"📋 Tâches prioritaires: {len(result)}")
 
+            elif name == "whatsapp_send_reply":
+                to = args.get("to", "")
+                message = args.get("message", "")
+                message_id = args.get("message_id")
+                
+                if not to or not message:
+                    content = "❌ Destinataire ou message manquant"
+                else:
+                    # Appeler l'API WhatsApp
+                    result = await whatsapp_send_message(to, message)
+                    if result:
+                        # Marquer le message comme répondu
+                        if supabase:
+                            if message_id:
+                                supabase.table("whatsapp_messages").update({
+                                    "status": "replied",
+                                    "replied": True,
+                                    "response": message
+                                }).eq("id", message_id).execute()
+                            else:
+                                supabase.table("whatsapp_messages").update({
+                                    "status": "replied",
+                                    "replied": True,
+                                    "response": message
+                                }).eq("from", to).eq("status", "pending").execute()
+                        content = f"✅ Message WhatsApp envoyé à {to}"
+                        logger.info(f"📱 WhatsApp reply sent to {to}")
+                    else:
+                        content = f"❌ Échec de l'envoi WhatsApp à {to}. Vérifie le numéro ou réessaie plus tard."
+
             elif name == "generate_image":
                 result = await generate_image(args)
                 if result.get("success"):
@@ -3663,8 +3731,34 @@ async def chat_endpoint(request: ChatRequest):
     except Exception as e:
         logger.error(f"❌ Erreur chat: {e}")
         error_str = str(e)
+
+     # 🔥 SI L'ERREUR EST LIÉE À WHATSAPP, RÉESSAYER
+        if "whatsapp" in str(e).lower() or "email" in str(e).lower():
+            # Vérifier si le dernier message utilisateur demande d'envoyer un message
+            last_user_msg = request.messages[-1].get("content", "").lower() if request.messages else ""
+            
+            if "envoi" in last_user_msg and ("whatsapp" in last_user_msg or "whatsapp" in str(e).lower()):
+                # Extraire le numéro et le message
+                import re
+                phone_match = re.search(r'(\+?229\s*\d{8,10})', last_user_msg)
+                if phone_match:
+                    phone = phone_match.group(1).replace(" ", "")
+                    if not phone.endswith("@c.us"):
+                        phone = phone + "@c.us"
+                    
+                    # Réessayer avec whatsapp_send_reply
+                    result = await whatsapp_send_message(phone, "Bonjour !")
+                    if result:
+                        return {"reply": f"✅ J'ai bien envoyé 'Bonjour !' à {phone}"}
+                    else:
+                        return {"reply": f"❌ Je n'ai pas pu envoyer le message. Vérifie le numéro {phone}"}
         
-        # Analyser le type d'erreur
+        # Sinon, erreur normale
+        reply = f"❌ Je n'ai pas pu faire ce que tu as demandé. Peux-tu reformuler ?"
+        return {"reply": reply}
+
+
+         # Analyser le type d'erreur
         if "email" in error_str.lower() or "EmailRequest" in error_str:
             reply = """❌ L'adresse email n'est pas valide ou il manque des informations.
 
