@@ -2616,6 +2616,27 @@ tools = [
     },
 
     # -------------------------------------------------
+    # add_revenue"
+    # -------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "add_revenue",
+            "description": "Ajoute un revenu.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string", "description": "Source du revenu (ex: vente, prestation, salaire)"},
+                    "amount": {"type": "number", "description": "Montant en CFA"},
+                    "project": {"type": "string", "description": "Projet associé (Ifè Farm, Love & Fire, etc.)"},
+                    "date": {"type": "string", "description": "Date du revenu (format YYYY-MM-DD)"},
+                    "notes": {"type": "string", "description": "Notes supplémentaires"}
+                },
+                "required": ["source", "amount"]
+            }
+        }
+    },
+    # -------------------------------------------------
     # add_spending
     # -------------------------------------------------
 
@@ -3558,6 +3579,38 @@ async def add_spending(user_id: str, title: str, amount: float, category: str = 
     except Exception as e:
         logger.error(f"Erreur add_spending: {e}")
         return {"success": False, "error": str(e)}
+
+
+async def add_revenue(user_id: str, source: str, amount: float, project: str = None, 
+                       date: str = None, notes: str = "") -> Dict:
+    """Ajoute un revenu"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        if not date:
+            date = datetime.now().date().isoformat()
+        
+        revenue_data = {
+            "source": source,
+            "amount": float(amount),
+            "project": project or "Général",
+            "date": date,
+            "notes": notes,
+            "user_id": user_id,
+            "created_at": datetime.now().isoformat()
+        }
+        
+        result = supabase.table("revenue").insert(revenue_data).execute()
+        
+        if hasattr(result, 'error') and result.error:
+            return {"success": False, "error": str(result.error)}
+        
+        return {"success": True, "message": f"💰 Revenu ajouté: {amount} CFA - {source}", "data": result.data[0] if result.data else None}
+    
+    except Exception as e:
+        logger.error(f"Erreur add_revenue: {e}")
+        return {"success": False, "error": str(e)}
         
 # =====================================================
 # API ROUTES - CHAT AMÉLIORÉ AVEC MÉMOIRE
@@ -3706,6 +3759,20 @@ async def chat_endpoint(request: ChatRequest):
                 result = db_query(table, filters, args.get("limit", 50))
                 content = json.dumps(result, ensure_ascii=False)
                 logger.info(f"📖 Lecture {table}: {result.get('count', 0)} lignes")
+
+            elif name == "add_revenue":
+                source = args.get("source")
+                amount = args.get("amount")
+                project = args.get("project")
+                date = args.get("date")
+                notes = args.get("notes", "")
+                
+                result = await add_revenue(user_id, source, amount, project, date, notes)
+                if result.get("success"):
+                    content = f"✅ {result.get('message')}"
+                else:
+                    content = f"❌ {result.get('error')}"
+                logger.info(f"💰 Add revenue: {amount} CFA - {source}")
 
             elif name == "add_win":
                 title = args.get("title")
