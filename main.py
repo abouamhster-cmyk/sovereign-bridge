@@ -3582,7 +3582,7 @@ async def chat_endpoint(request: ChatRequest):
         logger.error(f"❌ Erreur chat: {e}")
         error_str = str(e)
 
-     # 🔥 SI L'ERREUR EST LIÉE À WHATSAPP, RÉESSAYER
+        # 🔥 SI L'ERREUR EST LIÉE À WHATSAPP, RÉESSAYER
         if "whatsapp" in str(e).lower() or "email" in str(e).lower():
             # Vérifier si le dernier message utilisateur demande d'envoyer un message
             last_user_msg = request.messages[-1].get("content", "").lower() if request.messages else ""
@@ -3600,14 +3600,13 @@ async def chat_endpoint(request: ChatRequest):
                     if result:
                         return {"reply": f"✅ J'ai bien envoyé 'Bonjour !' à {phone}"}
                     else:
-                        return {"reply": f"❌ Je n'ai pas pu envoyer le message. Vérifie le numéro {phone}"}
-        
+                        return {"reply": f"❌ Je n'ai pas pu envoyer le message. Vérifie le numéro {phone}"}            
         # Sinon, erreur normale
         reply = f"❌ Je n'ai pas pu faire ce que tu as demandé. Peux-tu reformuler ?"
         return {"reply": reply}
 
 
-         # Analyser le type d'erreur
+        # Analyser le type d'erreur
         if "email" in error_str.lower() or "EmailRequest" in error_str:
             reply = """❌ L'adresse email n'est pas valide ou il manque des informations.
 
