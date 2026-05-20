@@ -2664,6 +2664,23 @@ tools = [
         }
     },
 
+
+    {
+        "type": "function",
+        "function": {
+            "name": "update_item",
+            "description": "Met à jour un élément existant (tâche, mission, document, événement, etc.)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "table": {"type": "string", "enum": ["tasks", "missions", "family_events", "documents", "wins", "spending", "revenue"], "description": "La table concernée"},
+                    "name": {"type": "string", "description": "Nom/titre de l'élément à modifier"},
+                    "updates": {"type": "object", "description": "Champs à mettre à jour (ex: {\"url\": \"https://...\", \"status\": \"done\"})"}
+                },
+                "required": ["table", "name", "updates"]
+            }
+        }
+    },
     # -------------------------------------------------
     # update_document
     # -------------------------------------------------
@@ -3931,6 +3948,75 @@ async def update_document(user_id: str, document_id: str = None, name: str = Non
     except Exception as e:
         logger.error(f"Erreur update_document: {e}")
         return {"success": False, "error": str(e)}
+
+async def update_item(user_id: str, table: str, item_id: str = None, name: str = None, updates: dict = None) -> Dict:
+    """Met à jour un élément dans n'importe quelle table (tasks, missions, family_events, documents, etc.)"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    # Tables autorisées
+    allowed_tables = ["tasks", "missions", "family_events", "documents", "wins", "spending", "revenue"]
+    if table not in allowed_tables:
+        return {"success": False, "error": f"Table '{table}' non autorisée"}
+    
+    try:
+        # Trouver l'élément par ID ou par nom
+        if item_id:
+            result = supabase.table(table).select("*").eq("id", item_id).eq("user_id", user_id).execute()
+        elif name:
+            # Recherche approximative par nom (différent selon la table)
+            if table == "tasks" or table == "missions":
+                result = supabase.table(table).select("*").eq("user_id", user_id).ilike("name", f"%{name}%").execute()
+            elif table == "documents":
+                result = supabase.table(table).select("*").eq("user_id", user_id).ilike("name", f"%{name}%").execute()
+            elif table == "family_events":
+                result = supabase.table(table).select("*").eq("user_id", user_id).ilike("title", f"%{name}%").execute()
+            elif table == "wins":
+                result = supabase.table(table).select("*").eq("user_id", user_id).ilike("title", f"%{name}%").execute()
+            else:
+                result = supabase.table(table).select("*").eq("user_id", user_id).execute()
+        else:
+            return {"success": False, "error": "Il faut fournir un ID ou un nom"}
+        
+        if not result.data:
+            return {"success": False, "error": f"Élément non trouvé: {name or item_id} dans {table}"}
+        
+        item = result.data[0]
+        
+        # Appliquer les mises à jour
+        update_data = {}
+        allowed_fields = get_allowed_fields_for_table(table)
+        for field, value in updates.items():
+            if field in allowed_fields:
+                update_data[field] = value
+        
+        if not update_data:
+            return {"success": False, "error": "Aucune mise à jour valide fournie"}
+        
+        update_data["updated_at"] = datetime.now().isoformat()
+        
+        # Mettre à jour
+        update_result = supabase.table(table).update(update_data).eq("id", item["id"]).execute()
+        
+        return {"success": True, "message": f"Élément mis à jour dans {table}", "data": update_result.data[0] if update_result.data else None}
+    
+    except Exception as e:
+        logger.error(f"Erreur update_item: {e}")
+        return {"success": False, "error": str(e)}
+
+
+def get_allowed_fields_for_table(table: str) -> list:
+    """Retourne les champs autorisés pour la mise à jour selon la table"""
+    fields_map = {
+        "tasks": ["title", "status", "priority", "due_date", "project", "notes"],
+        "missions": ["name", "status", "priority", "deadline", "notes", "revenue_potential"],
+        "family_events": ["title", "child_name", "category", "date", "priority", "status", "notes"],
+        "documents": ["name", "type", "status", "due_date", "url", "file_url", "notes"],
+        "wins": ["title", "category", "celebration_emoji", "notes"],
+        "spending": ["title", "amount", "category", "project", "notes"],
+        "revenue": ["source", "amount", "project", "notes"]
+    }
+    return fields_map.get(table, ["notes"])
         
 # =====================================================
 # API ROUTES - CHAT AMÉLIORÉ AVEC MÉMOIRE
@@ -4104,6 +4190,21 @@ async def chat_endpoint(request: ChatRequest):
                 result = db_query(table, filters, args.get("limit", 50))
                 content = json.dumps(result, ensure_ascii=False)
                 logger.info(f"📖 Lecture {table}: {result.get('count', 0)} lignes")
+
+            elif name == "update_item":
+                table = args.get("table")
+                name = args.get("name")
+                updates = args.get("updates", {})
+                
+                result = await update_item(user_id, table, name=name, updates=updates)
+                if result.get("success"):
+                    content = f"✅ {result.get('message')}"
+                    # Afficher les modifications
+                    for field, value in updates.items():
+                        content += f"\n   • {field}: {value}"
+                else:
+                    content = f"❌ {result.get('error')}"
+                logger.info(f"📝 Update {table}: {name}")
 
             elif name == "add_revenue":
                 source = args.get("source")
