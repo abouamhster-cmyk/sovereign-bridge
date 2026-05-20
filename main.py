@@ -4267,7 +4267,12 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                 item_name = args.get("name")
                 updates = args.get("updates", {})
                 
-                result = await update_item(user_id, table, name=item_name, updates=updates)
+                # Version 1 : utiliser tous les paramètres nommés
+                result = await update_item(user_id=user_id, table=table, name=item_name, updates=updates)
+                
+                # OU Version 2 : utiliser les paramètres positionnels correctement
+                # result = await update_item(user_id, table, item_name, None, updates)
+                
                 if result.get("success"):
                     content = f"✅ {result.get('message')}"
                     for field, value in updates.items():
