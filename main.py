@@ -2615,6 +2615,30 @@ tools = [
         }
     },
 
+    # -------------------------------------------------
+    # add_document
+    # -------------------------------------------------
+
+    {
+        "type": "function",
+        "function": {
+            "name": "add_document",
+            "description": "Ajoute un document (proposition, contrat, grant, facture, etc.)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Nom du document"},
+                    "doc_type": {"type": "string", "enum": ["proposal", "contract", "grant", "invoice", "legal", "admin", "other"], "description": "Type de document"},
+                    "status": {"type": "string", "enum": ["draft", "review", "ready", "submitted", "approved", "rejected"], "description": "Statut"},
+                    "due_date": {"type": "string", "description": "Date d'échéance (YYYY-MM-DD)"},
+                    "url": {"type": "string", "description": "URL du document (optionnel)"},
+                    "notes": {"type": "string", "description": "Notes supplémentaires"}
+                },
+                "required": ["name"]
+            }
+        }
+    },
+
 
    # -------------------------------------------------
     # add_revenue
@@ -3683,6 +3707,45 @@ async def add_mission(user_id: str, name: str, category: str = "business",
     except Exception as e:
         logger.error(f"Erreur add_mission: {e}")
         return {"success": False, "error": str(e)}
+
+
+async def add_document(user_id: str, name: str, doc_type: str = "other", 
+                        status: str = "draft", due_date: str = None, 
+                        url: str = None, notes: str = "") -> Dict:
+    """Ajoute un document"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        valid_types = ["proposal", "contract", "grant", "invoice", "legal", "admin", "other"]
+        if doc_type not in valid_types:
+            doc_type = "other"
+        
+        valid_statuses = ["draft", "review", "ready", "submitted", "approved", "rejected"]
+        if status not in valid_statuses:
+            status = "draft"
+        
+        document_data = {
+            "name": name,
+            "type": doc_type,
+            "status": status,
+            "due_date": due_date,
+            "url": url,
+            "notes": notes,
+            "user_id": user_id,
+            "created_at": datetime.now().isoformat()
+        }
+        
+        result = supabase.table("documents").insert(document_data).execute()
+        
+        if hasattr(result, 'error') and result.error:
+            return {"success": False, "error": str(result.error)}
+        
+        return {"success": True, "message": f"📄 Document ajouté: {name}", "data": result.data[0] if result.data else None}
+    
+    except Exception as e:
+        logger.error(f"Erreur add_document: {e}")
+        return {"success": False, "error": str(e)}
 # =====================================================
 # API ROUTES - CHAT AMÉLIORÉ AVEC MÉMOIRE
 # =====================================================
@@ -3857,6 +3920,21 @@ async def chat_endpoint(request: ChatRequest):
                 else:
                     content = f"❌ {result.get('error')}"
                 logger.info(f"🏆 Add win: {title}")
+
+            elif name == "add_document":
+                name = args.get("name")
+                doc_type = args.get("doc_type", "other")
+                status = args.get("status", "draft")
+                due_date = args.get("due_date")
+                url = args.get("url")
+                notes = args.get("notes", "")
+                
+                result = await add_document(user_id, name, doc_type, status, due_date, url, notes)
+                if result.get("success"):
+                    content = f"✅ {result.get('message')}"
+                else:
+                    content = f"❌ {result.get('error')}"
+                logger.info(f"📄 Add document: {name}")
 
             elif name == "add_mission":
                 name = args.get("name")
