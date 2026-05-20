@@ -3949,7 +3949,7 @@ async def update_document(user_id: str, document_id: str = None, name: str = Non
         logger.error(f"Erreur update_document: {e}")
         return {"success": False, "error": str(e)}
 
-async def update_item(user_id: str, table: str, item_id: str = None, name: str = None, updates: dict = None) -> Dict:
+async def update_item(user_id: str, table: str, name: str = None, item_id: str = None, updates: dict = None):
     """Met à jour un élément dans n'importe quelle table (tasks, missions, family_events, documents, etc.)"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
@@ -4036,22 +4036,28 @@ async def chat_endpoint(request: ChatRequest):
     user_id = require_user_id(request.user_id)
     
     # Vérifier s'il y a un email en attente de confirmation pour cet utilisateur
+    logger.info(f"🔍 pending_emails: {pending_emails}")
+    logger.info(f"🔍 user_id: {user_id}")
+    
     if user_id and user_id in pending_emails:
+        logger.info(f"🔍 Email trouvé en attente")
         last_message = request.messages[-1].get("content", "").lower()
+        logger.info(f"🔍 Dernier message: '{last_message}'")
         pending = pending_emails[user_id]
         
-        if last_message in ["oui", "yes", "ok", "envoie", "envoyer"]:
-            # Envoyer l'email avec la fonction simplifiée
+        if last_message in ["oui", "yes", "ok", "envoie", "envoyer", "faut envoyer", "je confirme", "vas y"]:
+            logger.info(f"🔍 Confirmation reçue, envoi en cours...")
             email_result = await send_email_simple(
                 to=pending["to"],
                 subject=pending["subject"],
                 body=pending["body"]
             )
+            logger.info(f"🔍 Résultat: {email_result}")
             
             if email_result.get("success"):
-                reply = f"✅ Email envoyé à {pending['to']} avec le sujet '{pending['subject']}'"
+                reply = f"✅ Email envoyé à {pending['to']}"
             else:
-                reply = f"❌ Erreur lors de l'envoi: {email_result.get('error')}"
+                reply = f"❌ Erreur: {email_result.get('error')}"
             del pending_emails[user_id]
             return {"reply": reply}
         
