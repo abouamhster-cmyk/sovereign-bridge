@@ -2616,6 +2616,24 @@ tools = [
     },
 
     # -------------------------------------------------
+    # list_documents
+    # -------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "list_documents",
+            "description": "Liste les documents de l'utilisateur.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "description": "Nombre maximum de documents à afficher"},
+                    "status": {"type": "string", "enum": ["draft", "review", "ready", "submitted", "approved", "rejected"], "description": "Filtrer par statut"}
+                },
+                "required": []
+            }
+        }
+    },
+    # -------------------------------------------------
     # add_document
     # -------------------------------------------------
 
@@ -3746,6 +3764,38 @@ async def add_document(user_id: str, name: str, doc_type: str = "other",
     except Exception as e:
         logger.error(f"Erreur add_document: {e}")
         return {"success": False, "error": str(e)}
+
+
+async def list_documents(user_id: str, limit: int = 10, status: str = None) -> Dict:
+    """Liste les documents de l'utilisateur"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré", "documents": []}
+    
+    try:
+        query = supabase.table("documents").select("*").eq("user_id", user_id).order("created_at", desc=True).limit(limit)
+        
+        if status:
+            query = query.eq("status", status)
+        
+        result = query.execute()
+        
+        documents = []
+        for doc in result.data:
+            documents.append({
+                "id": doc.get("id"),
+                "name": doc.get("name"),
+                "type": doc.get("type"),
+                "status": doc.get("status"),
+                "due_date": doc.get("due_date"),
+                "created_at": doc.get("created_at")
+            })
+        
+        return {"success": True, "documents": documents, "count": len(documents)}
+    
+    except Exception as e:
+        logger.error(f"Erreur list_documents: {e}")
+        return {"success": False, "error": str(e), "documents": []}
+        
 # =====================================================
 # API ROUTES - CHAT AMÉLIORÉ AVEC MÉMOIRE
 # =====================================================
@@ -3907,6 +3957,19 @@ async def chat_endpoint(request: ChatRequest):
                 else:
                     content = f"❌ {result.get('error')}"
                 logger.info(f"💰 Add revenue: {amount} CFA - {source}")
+
+            elif name == "list_documents":
+                limit = args.get("limit", 10)
+                status = args.get("status")
+                
+                result = await list_documents(user_id, limit, status)
+                if result.get("success") and result.get("documents"):
+                    docs = result["documents"]
+                    doc_list = "\n".join([f"• **{d['name']}** ({d['type']}) - {d['status']}" for d in docs[:10]])
+                    content = f"📄 **Documents ({len(docs)}):**\n{doc_list}"
+                else:
+                    content = "📄 Aucun document trouvé"
+                logger.info(f"📄 List documents: {result.get('count', 0)} found")
 
             elif name == "add_win":
                 title = args.get("title")
