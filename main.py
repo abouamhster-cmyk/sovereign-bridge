@@ -4041,12 +4041,13 @@ async def chat_endpoint(request: ChatRequest):
         pending = pending_emails[user_id]
         
         if last_message in ["oui", "yes", "ok", "envoie", "envoyer"]:
-            # Envoyer l'email
-            email_result = await send_email(EmailRequest(
+            # Envoyer l'email avec la fonction simplifiée
+            email_result = await send_email_simple(
                 to=pending["to"],
                 subject=pending["subject"],
                 body=pending["body"]
-            ))
+            )
+            
             if email_result.get("success"):
                 reply = f"✅ Email envoyé à {pending['to']} avec le sujet '{pending['subject']}'"
             else:
@@ -5968,6 +5969,43 @@ async def send_email(request: Request):
         logger.error(f"Erreur envoi email: {e}")
         return {"success": False, "error": str(e)}
 
+
+async def send_email_simple(to: str, subject: str, body: str) -> Dict:
+    """Envoie un email via Brevo (version simplifiée sans Request)"""
+    if not BREVO_API_KEY:
+        return {"success": False, "error": "Service email non configuré"}
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://api.brevo.com/v3/smtp/email",
+                headers={
+                    "api-key": BREVO_API_KEY,
+                    "Content-Type": "application/json",
+                    "Accept": "application/json"
+                },
+                json={
+                    "sender": {
+                        "name": BREVO_SENDER_NAME,
+                        "email": BREVO_SENDER_EMAIL
+                    },
+                    "to": [{"email": to, "name": to.split("@")[0]}],
+                    "subject": subject,
+                    "htmlContent": body,
+                },
+                timeout=30.0
+            )
+            
+            if response.status_code == 201:
+                logger.info(f"📧 Email envoyé à {to}")
+                return {"success": True, "message": "Email envoyé", "to": to}
+            else:
+                logger.error(f"Erreur Brevo: {response.text}")
+                return {"success": False, "error": response.text}
+                
+    except Exception as e:
+        logger.error(f"Erreur envoi email: {e}")
+        return {"success": False, "error": str(e)}
 
 # =====================================================
 # WEBHOOKS
