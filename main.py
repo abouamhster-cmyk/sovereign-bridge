@@ -2682,6 +2682,23 @@ tools = [
             }
         }
     },
+
+
+    {
+        "type": "function",
+        "function": {
+            "name": "update_mission_status",
+            "description": "Change le statut d'une mission (active, paused, complete, etc.).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "mission_name": {"type": "string", "description": "Nom de la mission"},
+                    "status": {"type": "string", "enum": ["idea", "planning", "active", "waiting", "paused", "complete"], "description": "Nouveau statut"}
+                },
+                "required": ["mission_name", "status"]
+            }
+        }
+    },
     
     {
         "type": "function",
@@ -2695,6 +2712,22 @@ tools = [
                     "priority": {"type": "string", "enum": ["critical", "high", "normal", "low"], "description": "Nouvelle priorité"}
                 },
                 "required": ["task_name", "priority"]
+            }
+        }
+    },
+
+    {
+        "type": "function",
+        "function": {
+            "name": "update_mission_priority",
+            "description": "Change la priorité d'une mission.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "mission_name": {"type": "string", "description": "Nom de la mission"},
+                    "priority": {"type": "string", "enum": ["critical", "high", "normal", "low"], "description": "Nouvelle priorité"}
+                },
+                "required": ["mission_name", "priority"]
             }
         }
     },
@@ -4356,6 +4389,60 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                 else:
                     content = f"❌ {result.get('error')}"
                 logger.info(f"🎯 Add mission: {name}")
+
+            elif name == "update_mission_status":
+                mission_name = args.get("mission_name")
+                status = args.get("status")
+                
+                logger.info(f"🎯 Update mission status: {mission_name} to {status}")
+                
+                all_missions = db_query("missions", {"user_id": user_id}, limit=100)
+                found_mission = None
+                
+                if all_missions.get("data"):
+                    mission_name_lower = mission_name.lower()
+                    for m in all_missions["data"]:
+                        name_lower = m.get("name", "").lower()
+                        if mission_name_lower in name_lower or name_lower in mission_name_lower:
+                            found_mission = m
+                            break
+                
+                if found_mission:
+                    update_result = db_update("missions", found_mission["id"], {"status": status})
+                    if update_result.get("success"):
+                        content = f"✅ Statut de la mission '{found_mission['name']}' changé en **{status}**"
+                    else:
+                        content = f"❌ Erreur lors de la mise à jour"
+                else:
+                    content = f"❌ Mission non trouvée : '{mission_name}'"
+
+            elif name == "update_mission_priority":
+                mission_name = args.get("mission_name")
+                priority = args.get("priority")
+                
+                logger.info(f"🎯 Update mission priority: {mission_name} to {priority}")
+                
+                # Récupérer toutes les missions
+                all_missions = db_query("missions", {"user_id": user_id}, limit=100)
+                found_mission = None
+                
+                if all_missions.get("data"):
+                    mission_name_lower = mission_name.lower()
+                    for m in all_missions["data"]:
+                        name_lower = m.get("name", "").lower()
+                        if mission_name_lower in name_lower or name_lower in mission_name_lower:
+                            found_mission = m
+                            break
+                
+                if found_mission:
+                    update_result = db_update("missions", found_mission["id"], {"priority": priority})
+                    if update_result.get("success"):
+                        content = f"✅ Priorité de la mission '{found_mission['name']}' changée en **{priority}**"
+                        logger.info(f"✅ Mission priority updated: {found_mission['name']} -> {priority}")
+                    else:
+                        content = f"❌ Erreur lors de la mise à jour de la priorité"
+                else:
+                    content = f"❌ Mission non trouvée : '{mission_name}'"
             
             elif name == "add_spending":
                 title = args.get("title")
