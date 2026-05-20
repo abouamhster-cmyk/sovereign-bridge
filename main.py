@@ -2653,6 +2653,28 @@ tools = [
             "parameters": {"type": "object", "properties": {}, "required": []}
         }
     },
+
+    # -------------------------------------------------
+    # ADD CHILD
+    # -------------------------------------------------   
+
+    {
+        "type": "function",
+        "function": {
+            "name": "add_child",
+            "description": "Ajoute un enfant au profil utilisateur.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Nom complet de l'enfant"},
+                    "nickname": {"type": "string", "description": "Surnom (optionnel)"},
+                    "birthday": {"type": "string", "description": "Date d'anniversaire (format YYYY-MM-DD, optionnel)"},
+                    "notes": {"type": "string", "description": "Notes supplémentaires (optionnel)"}
+                },
+                "required": ["name"]
+            }
+        }
+    },
     # -------------------------------------------------
     # WHATSAPP 
     # -------------------------------------------------   
@@ -3320,6 +3342,42 @@ async def update_user_profile_field(user_id: str, field: str, value: Any) -> Dic
         logger.error(f"Erreur update_profile: {e}")
         return {"success": False, "error": str(e)}
 
+
+async def add_child_to_profile(user_id: str, name: str, nickname: str = "", birthday: str = None, notes: str = "") -> Dict:
+    """Ajoute un enfant au profil utilisateur"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        # Récupérer le profil actuel
+        result = supabase.table("user_profile").select("children").eq("user_id", user_id).execute()
+        
+        if not result.data:
+            children = []
+        else:
+            children = result.data[0].get("children", [])
+        
+        # Ajouter le nouvel enfant
+        new_child = {
+            "name": name,
+            "nickname": nickname,
+            "birthday": birthday,
+            "notes": notes
+        }
+        children.append(new_child)
+        
+        # Mettre à jour
+        update_result = supabase.table("user_profile").update({"children": children}).eq("user_id", user_id).execute()
+        
+        if hasattr(update_result, 'error') and update_result.error:
+            return {"success": False, "error": str(update_result.error)}
+        
+        return {"success": True, "message": f"👶 Enfant '{name}' ajouté", "children": children}
+    
+    except Exception as e:
+        logger.error(f"Erreur add_child: {e}")
+        return {"success": False, "error": str(e)}
+        
 # =====================================================
 # API ROUTES - CHAT AMÉLIORÉ AVEC MÉMOIRE
 # =====================================================
@@ -3476,7 +3534,19 @@ async def chat_endpoint(request: ChatRequest):
                 else:
                     content = f"❌ Erreur: {result.get('error', 'inconnue')}"
                 logger.info(f"✍️ Écriture dans {target_table}: {result['success']}")
-
+                
+            elif name == "add_child":
+                name = args.get("name")
+                nickname = args.get("nickname", "")
+                birthday = args.get("birthday")
+                notes = args.get("notes", "")
+                
+                result = await add_child_to_profile(user_id, name, nickname, birthday, notes)
+                if result.get("success"):
+                    content = f"✅ {result.get('message')}"
+                else:
+                    content = f"❌ {result.get('error')}"
+                logger.info(f"👶 Add child: {name}")
 
             elif name == "update_profile":
                 field = args.get("field")
