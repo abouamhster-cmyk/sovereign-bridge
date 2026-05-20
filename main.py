@@ -2616,6 +2616,30 @@ tools = [
     },
 
     # -------------------------------------------------
+    # add_family_event
+    # -------------------------------------------------
+
+    {
+        "type": "function",
+        "function": {
+            "name": "add_family_event",
+            "description": "Ajoute un événement familial (école, santé, activité, voyage, papiers, routine, fournitures).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Titre de l'événement"},
+                    "child_name": {"type": "string", "description": "Nom de l'enfant concerné (optionnel)"},
+                    "category": {"type": "string", "enum": ["school", "health", "activity", "travel", "document", "routine", "supplies"], "description": "Catégorie de l'événement"},
+                    "date": {"type": "string", "description": "Date de l'événement (format YYYY-MM-DD)"},
+                    "priority": {"type": "string", "enum": ["critical", "high", "normal", "low"], "description": "Priorité"},
+                    "notes": {"type": "string", "description": "Notes supplémentaires"}
+                },
+                "required": ["title"]
+            }
+        }
+    },
+
+    # -------------------------------------------------
     # ÉCRITURE DE DONNÉES
     # -------------------------------------------------
     {
@@ -3377,6 +3401,49 @@ async def add_child_to_profile(user_id: str, name: str, nickname: str = "", birt
     except Exception as e:
         logger.error(f"Erreur add_child: {e}")
         return {"success": False, "error": str(e)}
+
+
+
+async def add_family_event(user_id: str, title: str, child_name: str = None, 
+                           category: str = "routine", date: str = None, 
+                           priority: str = "normal", notes: str = "") -> Dict:
+    """Ajoute un événement familial"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        # Catégories valides
+        valid_categories = ["school", "health", "activity", "travel", "document", "routine", "supplies"]
+        if category not in valid_categories:
+            category = "routine"
+        
+        # Priorités valides
+        valid_priorities = ["critical", "high", "normal", "low"]
+        if priority not in valid_priorities:
+            priority = "normal"
+        
+        event_data = {
+            "title": title,
+            "child_name": child_name,
+            "category": category,
+            "priority": priority,
+            "status": "pending",
+            "date": date,
+            "notes": notes,
+            "user_id": user_id,
+            "created_at": datetime.now().isoformat()
+        }
+        
+        result = supabase.table("family_events").insert(event_data).execute()
+        
+        if hasattr(result, 'error') and result.error:
+            return {"success": False, "error": str(result.error)}
+        
+        return {"success": True, "message": f"📅 Événement familial ajouté: {title}", "data": result.data[0] if result.data else None}
+    
+    except Exception as e:
+        logger.error(f"Erreur add_family_event: {e}")
+        return {"success": False, "error": str(e)}
         
 # =====================================================
 # API ROUTES - CHAT AMÉLIORÉ AVEC MÉMOIRE
@@ -3534,6 +3601,22 @@ async def chat_endpoint(request: ChatRequest):
                 else:
                     content = f"❌ Erreur: {result.get('error', 'inconnue')}"
                 logger.info(f"✍️ Écriture dans {target_table}: {result['success']}")
+
+
+            elif name == "add_family_event":
+                title = args.get("title")
+                child_name = args.get("child_name")
+                category = args.get("category", "routine")
+                date = args.get("date")
+                priority = args.get("priority", "normal")
+                notes = args.get("notes", "")
+                
+                result = await add_family_event(user_id, title, child_name, category, date, priority, notes)
+                if result.get("success"):
+                    content = f"✅ {result.get('message')}"
+                else:
+                    content = f"❌ {result.get('error')}"
+                logger.info(f"📅 Add family event: {title}")
                 
             elif name == "add_child":
                 name = args.get("name")
