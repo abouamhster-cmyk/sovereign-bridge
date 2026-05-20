@@ -2642,6 +2642,46 @@ Exemple de RÉPONSE CORRECTE :
 
 MAUVAIS EXEMPLE (à ne jamais faire) :
 "Je vais bientôt envoyer l'email..." ← JAMAIS !
+
+# STYLE DE RÉPONSE NATUREL
+
+Quand tu réponds à Rebecca :
+
+1. **Sois concise mais chaleureuse**
+   - "C'est fait !" plutôt que "L'opération a été réalisée avec succès"
+   - "Je m'en occupe" plutôt que "Je vais procéder à l'exécution"
+
+2. **Évite les répétitions**
+   - Ne redis pas la demande de Rebecca dans ta réponse
+   - Vas droit au but
+
+3. **Utilise des émoticônes avec parcimonie**
+   - ✅ pour confirmation
+   - 😊 pour les moments agréables
+   - 🔥 pour les réussites
+   - Ne force pas les émoticônes
+
+4. **Propose des suivis naturels**
+   - "Tu veux faire autre chose ?" plutôt que "Souhaites-tu effectuer une autre action ?"
+
+5. **Admets quand tu ne peux pas faire**
+   - "Je n'arrive pas à faire ça pour l'instant. Peux-tu reformuler ?"
+   - Ne jamais inventer une action réussie
+
+6. **Sois humaine**
+   - Utilise "je" et "tu"
+   - Sois fluide, pas robotique
+
+EXEMPLES DE BONNES RÉPONSES :
+- "✅ Tâche marquée comme terminée !"
+- "✅ Email envoyé à Jean."
+- "❌ Je n'ai pas trouvé la tâche 'Appeler'. Peux-tu être plus précis ?"
+- "C'est fait ! Tu veux faire autre chose ?"
+
+EXEMPLES À ÉVITER :
+- "La tâche a été marquée comme terminée avec succès dans le système."
+- "Je vais procéder à l'envoi de l'email comme demandé."
+- "Souhaites-tu que j'effectue une autre action pour toi ?"
 # ============================================================
 # RÈGLE FINALE
 # ============================================================
@@ -2683,7 +2723,48 @@ tools = [
         }
     },
 
-
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_task",
+            "description": "Supprime une tâche.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_name": {"type": "string", "description": "Nom de la tâche à supprimer"}
+                },
+                "required": ["task_name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_mission",
+            "description": "Supprime une mission.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "mission_name": {"type": "string", "description": "Nom de la mission à supprimer"}
+                },
+                "required": ["mission_name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_document",
+            "description": "Supprime un document.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "document_name": {"type": "string", "description": "Nom du document à supprimer"}
+                },
+                "required": ["document_name"]
+            }
+        }
+    },
     {
         "type": "function",
         "function": {
@@ -2696,6 +2777,23 @@ tools = [
                     "status": {"type": "string", "enum": ["idea", "planning", "active", "waiting", "paused", "complete"], "description": "Nouveau statut"}
                 },
                 "required": ["mission_name", "status"]
+            }
+        }
+    },
+
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_item",
+            "description": "Supprime un élément (tâche, mission, document, événement, etc.)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "table": {"type": "string", "enum": ["tasks", "missions", "documents", "family_events", "wins"], "description": "La table concernée"},
+                    "name": {"type": "string", "description": "Nom/titre de l'élément à supprimer"},
+                    "item_id": {"type": "string", "description": "ID de l'élément (optionnel si le nom est fourni)"}
+                },
+                "required": ["table", "name"]
             }
         }
     },
@@ -4389,6 +4487,44 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                 else:
                     content = f"❌ {result.get('error')}"
                 logger.info(f"🎯 Add mission: {name}")
+
+            elif name == "delete_item":
+                table = args.get("table")
+                item_name = args.get("name")
+                item_id = args.get("item_id")
+                
+                logger.info(f"🗑️ Delete {table}: {item_name}")
+                
+                # Chercher l'élément
+                if item_id:
+                    result = db_query(table, {"id": item_id, "user_id": user_id}, limit=1)
+                else:
+                    # Récupérer tous les éléments
+                    all_items = db_query(table, {"user_id": user_id}, limit=100)
+                    found_item = None
+                    
+                    if all_items.get("data"):
+                        item_name_lower = item_name.lower()
+                        for item in all_items["data"]:
+                            title = item.get("title") or item.get("name") or ""
+                            if item_name_lower in title.lower():
+                                found_item = item
+                                break
+                
+                if found_item or (item_id and result.get("data")):
+                    item = found_item or result["data"][0]
+                    item_title = item.get("title") or item.get("name") or item_name
+                    
+                    # Supprimer
+                    delete_result = db_delete(table, item["id"])
+                    
+                    if delete_result.get("success"):
+                        content = f"✅ {table[:-1].capitalize()} supprimé(e) : **{item_title}**"
+                        logger.info(f"✅ Deleted {table}: {item_title}")
+                    else:
+                        content = f"❌ Erreur lors de la suppression"
+                else:
+                    content = f"❌ Élément non trouvé : '{item_name}' dans {table}"
 
             elif name == "update_mission_status":
                 mission_name = args.get("mission_name")
