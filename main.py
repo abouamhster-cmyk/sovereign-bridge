@@ -2623,7 +2623,17 @@ Exemple de RÉPONSE CORRECTE :
 
 NE JAMAIS répondre uniquement par du texte sans l'action.
 
+# GESTION DES TÂCHES ET MISSIONS :
 
+Pour modifier l'état d'une tâche ou d'une mission, utilise update_item.
+
+Exemples :
+- "Marque la tâche 'Appeler comptable' comme faite" → update_item(table="tasks", name="Appeler comptable", updates={"status": "done"})
+- "Change la priorité de la mission 'Love & Fire' en haute" → update_item(table="missions", name="Love & Fire", updates={"priority": "high"})
+- "Ajoute un lien au document 'Contrat' → update_item(table="documents", name="Contrat", updates={"url": "https://..."})
+
+NE JAMAIS répondre avec du texte quand une action de modification est demandée. Utilise TOUJOURS update_item.
+ 
 # RÈGLE ABSOLUE POUR LES EMAILS :
 Quand un utilisateur demande d'envoyer un email, tu DOIS :
 1. Ne PAS répondre avec du texte comme "Je vais envoyer..."
@@ -2675,8 +2685,38 @@ tools = [
             }
         }
     },
-
-
+    
+    {
+        "type": "function",
+        "function": {
+            "name": "update_task_priority",
+            "description": "Change la priorité d'une tâche.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_name": {"type": "string", "description": "Nom de la tâche"},
+                    "priority": {"type": "string", "enum": ["critical", "high", "normal", "low"], "description": "Nouvelle priorité"}
+                },
+                "required": ["task_name", "priority"]
+            }
+        }
+    },
+    
+    {
+        "type": "function",
+        "function": {
+            "name": "complete_task",
+            "description": "Marque une tâche comme terminée (status='done').",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_name": {"type": "string", "description": "Nom de la tâche à marquer comme faite"},
+                    "task_id": {"type": "string", "description": "ID de la tâche (optionnel si le nom est fourni)"}
+                },
+                "required": ["task_name"]
+            }
+        }
+    },
     {
         "type": "function",
         "function": {
@@ -4332,7 +4372,27 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                 else:
                     content = f"❌ {result.get('error')}"
                 logger.info(f"💰 Add spending: {amount} CFA - {title}")
-            
+
+            elif name == "update_task_priority":
+                task_name = args.get("task_name")
+                priority = args.get("priority")
+                
+                # Chercher la tâche
+                result = db_query("tasks", {"user_id": user_id}, limit=50)
+                if result.get("success") and result.get("data"):
+                    matching = [t for t in result["data"] if task_name.lower() in t.get("title", "").lower()]
+                    if matching:
+                        task = matching[0]
+                        update_result = db_update("tasks", task["id"], {"priority": priority})
+                        if update_result.get("success"):
+                            content = f"✅ Priorité de la tâche '{task['title']}' changée en **{priority}**"
+                        else:
+                            content = f"❌ Erreur lors de la mise à jour"
+                    else:
+                        content = f"❌ Tâche '{task_name}' non trouvée"
+                else:
+                    content = f"❌ Tâche non trouvée"
+                    
             elif name == "add_revenue":
                 source = args.get("source")
                 amount = args.get("amount")
@@ -4385,6 +4445,40 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                 else:
                     content = f"❌ {result.get('error')}"
                 logger.info(f"👤 Update profile: {field}")
+
+            elif name == "complete_task":
+                task_name = args.get("task_name")
+                task_id = args.get("task_id")
+                
+                if task_id:
+                    # Chercher par ID
+                    result = db_query("tasks", {"id": task_id, "user_id": user_id}, limit=1)
+                else:
+                    # Chercher par nom (approximatif)
+                    result = db_query("tasks", {"user_id": user_id}, limit=50)
+                    if result.get("success") and result.get("data"):
+                        # Trouver la tâche dont le titre contient le nom
+                        matching = [t for t in result["data"] if task_name.lower() in t.get("title", "").lower()]
+                        if matching:
+                            result["data"] = matching[:1]
+                        else:
+                            result["data"] = []
+                
+                if result.get("success") and result.get("data"):
+                    task = result["data"][0]
+                    task_id = task["id"]
+                    task_title = task["title"]
+                    
+                    # Mettre à jour le statut
+                    update_result = db_update("tasks", task_id, {"status": "done"})
+                    
+                    if update_result.get("success"):
+                        content = f"✅ Tâche marquée comme terminée : **{task_title}**"
+                        logger.info(f"✅ Complete task: {task_title}")
+                    else:
+                        content = f"❌ Erreur lors de la mise à jour de la tâche"
+                else:
+                    content = f"❌ Tâche non trouvée : '{task_name}'"
             
             elif name == "whatsapp_send_reply":
                 to = args.get("to", "")
