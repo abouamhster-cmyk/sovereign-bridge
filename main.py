@@ -22,6 +22,7 @@ import httpx
 # FASTAPI INITIALIZATION
 # =====================================================
 app = FastAPI()
+pending_emails = {}
 
 app.add_middleware(
     CORSMiddleware,
@@ -694,7 +695,6 @@ VAPID_CLAIMS = {"sub": "mailto:jbillcataria@gmail.com"}
 GREENAPI_ID_INSTANCE = os.environ.get("GREENAPI_ID_INSTANCE")
 GREENAPI_API_TOKEN = os.environ.get("GREENAPI_API_TOKEN")
 GREENAPI_BASE_URL = f"https://api.green-api.com/waInstance{GREENAPI_ID_INSTANCE}" if GREENAPI_ID_INSTANCE else None
-pending_emails = {}
 
 
 # Debug GreenAPI
@@ -3877,16 +3877,20 @@ async def list_documents(user_id: str, limit: int = 10, status: str = None, show
 async def chat_endpoint(request: ChatRequest):
     logger.info(f"📨 Reçu: {len(request.messages)} messages")
     
-    # Vérifier s'il y a un email en attente de confirmation
-    # Récupérer l'ID de conversation (depuis le premier message ou généré)
-    conversation_id = None
-    if request.messages and len(request.messages) > 0:
-        # Essaye de récupérer l'ID depuis les métadonnées
-        conversation_id = request.messages[-1].get("conversation_id", None)
+    # Construire les messages avec support vision
+    messages_payload = []
     
-    if conversation_id and conversation_id in pending_emails:
+    # Ajouter la date du jour
+    today_date = datetime.now().strftime("%B %d, %Y")
+    date_context = f"\n\nToday is {today_date}. Use this information to provide relevant context."
+    
+    # Ajouter le système prompt avec mémoire
+    user_id = require_user_id(request.user_id)
+    
+    # Vérifier s'il y a un email en attente de confirmation pour cet utilisateur
+    if user_id and user_id in pending_emails:
         last_message = request.messages[-1].get("content", "").lower()
-        pending = pending_emails[conversation_id]
+        pending = pending_emails[user_id]
         
         if last_message in ["oui", "yes", "ok", "envoie", "envoyer"]:
             # Envoyer l'email
@@ -3899,23 +3903,14 @@ async def chat_endpoint(request: ChatRequest):
                 reply = f"✅ Email envoyé à {pending['to']} avec le sujet '{pending['subject']}'"
             else:
                 reply = f"❌ Erreur lors de l'envoi: {email_result.get('error')}"
-            del pending_emails[conversation_id]
+            del pending_emails[user_id]
             return {"reply": reply}
         
         elif last_message in ["non", "no", "annule", "annuler"]:
             reply = "❌ Envoi annulé. Tu peux me redemander avec les modifications souhaitées."
-            del pending_emails[conversation_id]
+            del pending_emails[user_id]
             return {"reply": reply}
-    
-    # Construire les messages avec support vision
-    messages_payload = []
-    
-    # Ajouter la date du jour
-    today_date = datetime.now().strftime("%B %d, %Y")
-    date_context = f"\n\nToday is {today_date}. Use this information to provide relevant context."
-    
-    # Ajouter le système prompt avec mémoire
-    user_id = require_user_id(request.user_id)
+
     
     memory_context = await get_user_memory_context(user_id)
     
@@ -4335,11 +4330,8 @@ async def chat_endpoint(request: ChatRequest):
                 subject = args.get("subject", "")
                 body = args.get("body", "")
                 
-                # Récupérer l'ID de conversation (à adapter selon comment tu le stockes)
-                conversation_id = request.messages[-1].get("conversation_id", str(uuid.uuid4()))
-                
-                # Stocker l'email en attente de confirmation
-                pending_emails[conversation_id] = {
+                # Utiliser user_id comme clé de stockage
+                pending_emails[user_id] = {
                     "to": to,
                     "subject": subject,
                     "body": body
@@ -4360,7 +4352,7 @@ async def chat_endpoint(request: ChatRequest):
             Réponds par 'oui' pour envoyer, 'non' pour annuler.
             """
                 content = preview
-                logger.info(f"📧 Email en attente de confirmation pour {to}")
+                logger.info(f"📧 Email en attente de confirmation pour {to} (user_id: {user_id})")
             
             elif name == "create_task":
                 result = await create_task_from_conversation(ExecuteTaskRequest(
