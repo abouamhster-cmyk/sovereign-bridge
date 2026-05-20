@@ -451,16 +451,28 @@ async def whatsapp_send_message(to: str, message: str):
     print(f"📤 Tentative d'envoi à {to}")
     
     if not GREENAPI_ID_INSTANCE or not GREENAPI_API_TOKEN:
-        print("❌ GreenAPI non configuré - variables manquantes")
+        print("❌ GreenAPI non configuré")
         return False
     
-    clean_to = to.replace("@c.us", "").replace("+", "").replace(" ", "")
+    # Nettoyer et formater le numéro
+    clean_to = to.replace("@c.us", "").replace(" ", "")
+    if not clean_to.startswith("+"):
+        clean_to = "+" + clean_to
+    if not clean_to.endswith("@c.us"):
+        # Pour GreenAPI, il faut le format sans @c.us
+        pass
+    
     url = f"{GREENAPI_BASE_URL}/sendMessage/{GREENAPI_API_TOKEN}"
-    payload = {"chatId": f"{clean_to}@c.us", "message": message}
+    payload = {"chatId": clean_to, "message": message}
+    
+    print(f"📤 URL: {url}")
+    print(f"📤 Payload: {payload}")
     
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(url, json=payload)
+            print(f"📤 Response status: {response.status_code}")
+            print(f"📤 Response body: {response.text[:200]}")
             
             if response.status_code == 200:
                 print(f"✅ Message envoyé à {clean_to}: {message[:50]}...")
@@ -471,7 +483,6 @@ async def whatsapp_send_message(to: str, message: str):
     except Exception as e:
         print(f"❌ Erreur envoi: {type(e).__name__} - {e}")
         return False
-
 
 @app.post("/api/whatsapp/reply")
 async def whatsapp_reply(request: Dict[str, Any]):
@@ -3440,18 +3451,31 @@ async def chat_endpoint(request: ChatRequest):
                 content = json.dumps(result, ensure_ascii=False)
                 logger.info(f"📋 Tâches prioritaires: {len(result)}")
 
-            elif name == "whatsapp_send_reply":
+           elif name == "whatsapp_send_reply":
                 to = args.get("to", "")
                 message = args.get("message", "")
                 message_id = args.get("message_id")
                 
+                # 🔥 AJOUTE CE LOG POUR DEBUG
+                logger.info(f"📱 whatsapp_send_reply appelé avec to={to}, message={message}")
+                
                 if not to or not message:
                     content = "❌ Destinataire ou message manquant"
                 else:
-                    # Appeler l'API WhatsApp
+                    # S'assurer que le numéro a le bon format
+                    if not to.endswith("@c.us"):
+                        if to.startswith("+"):
+                            to = to[1:] + "@c.us"
+                        elif not to.startswith("229"):
+                            to = "229" + to + "@c.us"
+                        else:
+                            to = to + "@c.us"
+                    
+                    logger.info(f"📱 Numéro formaté: {to}")
+                    
                     result = await whatsapp_send_message(to, message)
                     if result:
-                        # Marquer le message comme répondu
+                        # Marquer comme répondu
                         if supabase:
                             if message_id:
                                 supabase.table("whatsapp_messages").update({
@@ -3466,9 +3490,8 @@ async def chat_endpoint(request: ChatRequest):
                                     "response": message
                                 }).eq("from", to).eq("status", "pending").execute()
                         content = f"✅ Message WhatsApp envoyé à {to}"
-                        logger.info(f"📱 WhatsApp reply sent to {to}")
                     else:
-                        content = f"❌ Échec de l'envoi WhatsApp à {to}. Vérifie le numéro ou réessaie plus tard."
+                        content = f"❌ Échec de l'envoi. Vérifie que le numéro {to} est valide."
 
             elif name == "generate_image":
                 result = await generate_image(args)
