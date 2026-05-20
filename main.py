@@ -2616,6 +2616,26 @@ tools = [
     },
 
     # -------------------------------------------------
+    # add_win
+    # -------------------------------------------------
+    {
+        "type": "function",
+        "function": {
+            "name": "add_win",
+            "description": "Ajoute une victoire pour célébrer un succès.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Description de la victoire"},
+                    "category": {"type": "string", "enum": ["business", "family", "personal", "money", "health", "farm", "other"], "description": "Catégorie de la victoire"},
+                    "celebration_emoji": {"type": "string", "description": "Émoji pour célébrer (ex: 🎉, 🏆, 💪, 🔥, 👑)"},
+                    "notes": {"type": "string", "description": "Notes supplémentaires"}
+                },
+                "required": ["title"]
+            }
+        }
+    },
+    # -------------------------------------------------
     # add_family_event
     # -------------------------------------------------
 
@@ -3444,6 +3464,38 @@ async def add_family_event(user_id: str, title: str, child_name: str = None,
     except Exception as e:
         logger.error(f"Erreur add_family_event: {e}")
         return {"success": False, "error": str(e)}
+
+
+async def add_win(user_id: str, title: str, category: str = "personal", celebration_emoji: str = "🎉", notes: str = "") -> Dict:
+    """Ajoute une victoire"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        valid_categories = ["business", "family", "personal", "money", "health", "farm", "other"]
+        if category not in valid_categories:
+            category = "personal"
+        
+        win_data = {
+            "title": title,
+            "category": category,
+            "celebration_emoji": celebration_emoji,
+            "notes": notes,
+            "date": datetime.now().date().isoformat(),
+            "user_id": user_id,
+            "created_at": datetime.now().isoformat()
+        }
+        
+        result = supabase.table("wins").insert(win_data).execute()
+        
+        if hasattr(result, 'error') and result.error:
+            return {"success": False, "error": str(result.error)}
+        
+        return {"success": True, "message": f"🏆 Victoire ajoutée: {title}", "data": result.data[0] if result.data else None}
+    
+    except Exception as e:
+        logger.error(f"Erreur add_win: {e}")
+        return {"success": False, "error": str(e)}
         
 # =====================================================
 # API ROUTES - CHAT AMÉLIORÉ AVEC MÉMOIRE
@@ -3592,6 +3644,19 @@ async def chat_endpoint(request: ChatRequest):
                 result = db_query(table, filters, args.get("limit", 50))
                 content = json.dumps(result, ensure_ascii=False)
                 logger.info(f"📖 Lecture {table}: {result.get('count', 0)} lignes")
+
+            elif name == "add_win":
+                title = args.get("title")
+                category = args.get("category", "personal")
+                celebration_emoji = args.get("celebration_emoji", "🎉")
+                notes = args.get("notes", "")
+                
+                result = await add_win(user_id, title, category, celebration_emoji, notes)
+                if result.get("success"):
+                    content = f"✅ {result.get('message')}"
+                else:
+                    content = f"❌ {result.get('error')}"
+                logger.info(f"🏆 Add win: {title}")
                 
             elif name == "write_to_table":
                 target_table = args.pop("table")
