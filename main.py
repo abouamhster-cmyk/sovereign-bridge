@@ -4475,6 +4475,7 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                         content += f"\n\n... et {len(docs) - 10} autre(s) document(s)"
                 else:
                     content = "📄 Aucun document trouvé"
+
             
             elif name == "add_mission":
                 name = args.get("name")
@@ -4488,34 +4489,90 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                     content = f"❌ {result.get('error')}"
                 logger.info(f"🎯 Add mission: {name}")
 
+            elif name == "add_document":
+                name = args.get("name")
+                doc_type = args.get("doc_type", "other")
+                status = args.get("status", "draft")
+                due_date = args.get("due_date")
+                url = args.get("url")
+                notes = args.get("notes", "")
+                
+                logger.info(f"📄 Add document: {name}")
+                
+                # Vérifier si un document avec ce nom existe déjà
+                existing = db_query("documents", {"user_id": user_id, "name": name}, limit=1)
+                if existing.get("data"):
+                    content = f"⚠️ Un document '{name}' existe déjà. Utilise 'update_document' pour le modifier."
+                else:
+                    result = await add_document(user_id, name, doc_type, status, due_date, url, notes)
+                    if result.get("success"):
+                        content = f"✅ Document ajouté : {name}"
+                    else:
+                        content = f"❌ Erreur: {result.get('error')}"
+
+
             elif name == "delete_task":
                 task_name = args.get("task_name")
-                # Chercher et supprimer la tâche
+                
+                logger.info(f"🗑️ Delete task: {task_name}")
+                
                 all_tasks = db_query("tasks", {"user_id": user_id}, limit=100)
-                found = None
-                for t in all_tasks.get("data", []):
-                    if task_name.lower() in t.get("title", "").lower():
-                        found = t
-                        break
-                if found:
-                    db_delete("tasks", found["id"])
-                    content = f"✅ Tâche supprimée : {found['title']}"
+                found_tasks = []
+                
+                if all_tasks.get("data"):
+                    task_name_lower = task_name.lower()
+                    for t in all_tasks["data"]:
+                        title_lower = t.get("title", "").lower()
+                        if task_name_lower in title_lower or title_lower in task_name_lower:
+                            found_tasks.append(t)
+                
+                if not found_tasks:
+                    content = f"❌ Tâche non trouvée : '{task_name}'"
                 else:
-                    content = f"❌ Tâche non trouvée : {task_name}"
+                    deleted_count = 0
+                    for task in found_tasks:
+                        delete_result = db_delete("tasks", task["id"])
+                        if delete_result.get("success"):
+                            deleted_count += 1
+                    
+                    if deleted_count == 1:
+                        content = f"✅ Tâche supprimée : {found_tasks[0]['title']}"
+                    else:
+                        content = f"✅ {deleted_count} tâches supprimées (contenant '{task_name}')"
+                    
+                    logger.info(f"✅ Deleted {deleted_count} task(s)")
             
             elif name == "delete_document":
                 doc_name = args.get("document_name")
+                
+                logger.info(f"🗑️ Delete document: {doc_name}")
+                
+                # Récupérer tous les documents
                 all_docs = db_query("documents", {"user_id": user_id}, limit=100)
-                found = None
-                for d in all_docs.get("data", []):
-                    if doc_name.lower() in d.get("name", "").lower():
-                        found = d
-                        break
-                if found:
-                    db_delete("documents", found["id"])
-                    content = f"✅ Document supprimé : {found['name']}"
+                found_docs = []
+                
+                if all_docs.get("data"):
+                    doc_name_lower = doc_name.lower()
+                    for d in all_docs["data"]:
+                        name_lower = d.get("name", "").lower()
+                        if doc_name_lower in name_lower or name_lower in doc_name_lower:
+                            found_docs.append(d)
+                
+                if not found_docs:
+                    content = f"❌ Document non trouvé : '{doc_name}'"
                 else:
-                    content = f"❌ Document non trouvé : {doc_name}"
+                    deleted_count = 0
+                    for doc in found_docs:
+                        delete_result = db_delete("documents", doc["id"])
+                        if delete_result.get("success"):
+                            deleted_count += 1
+                    
+                    if deleted_count == 1:
+                        content = f"✅ Document supprimé : {found_docs[0]['name']}"
+                    else:
+                        content = f"✅ {deleted_count} documents supprimés (contenant '{doc_name}')"
+                    
+                    logger.info(f"✅ Deleted {deleted_count} document(s)")
 
             elif name == "delete_item":
                 table = args.get("table")
@@ -4610,6 +4667,37 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                 else:
                     content = f"❌ {result.get('error')}"
                 logger.info(f"💰 Add spending: {amount} CFA - {title}")
+
+            elif name == "delete_mission":
+                mission_name = args.get("mission_name")
+                
+                logger.info(f"🗑️ Delete mission: {mission_name}")
+                
+                all_missions = db_query("missions", {"user_id": user_id}, limit=100)
+                found_missions = []
+                
+                if all_missions.get("data"):
+                    mission_name_lower = mission_name.lower()
+                    for m in all_missions["data"]:
+                        name_lower = m.get("name", "").lower()
+                        if mission_name_lower in name_lower or name_lower in mission_name_lower:
+                            found_missions.append(m)
+                
+                if not found_missions:
+                    content = f"❌ Mission non trouvée : '{mission_name}'"
+                else:
+                    deleted_count = 0
+                    for mission in found_missions:
+                        delete_result = db_delete("missions", mission["id"])
+                        if delete_result.get("success"):
+                            deleted_count += 1
+                    
+                    if deleted_count == 1:
+                        content = f"✅ Mission supprimée : {found_missions[0]['name']}"
+                    else:
+                        content = f"✅ {deleted_count} missions supprimées (contenant '{mission_name}')"
+                    
+                    logger.info(f"✅ Deleted {deleted_count} mission(s)")
 
             elif name == "update_task_priority":
                 task_name = args.get("task_name")
