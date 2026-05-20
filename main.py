@@ -1317,7 +1317,6 @@ async def get_contact_number(contact_name: str, user_id: Optional[str] = None) -
 
 def extract_phone_from_text(text: str) -> str:
     """Extrait un numéro de téléphone du texte"""
-    import re
     patterns = [
         r'(\+229\s*\d{2}\s*\d{2}\s*\d{2}\s*\d{2})',  # +229 XX XX XX XX
         r'(\+229\s*\d{8})',                           # +229XXXXXXXX
@@ -1387,7 +1386,6 @@ async def download_image_from_url(url: str) -> str:
 
 def extract_text_from_message(content: str) -> tuple[str, List[str]]:
     """Extrait le texte et les URLs d'images d'un message"""
-    import re
     text_parts = []
     image_urls = []
     all_file_urls = []
@@ -1414,7 +1412,6 @@ async def process_document(file_url: str) -> str:
         return None
     
     try:
-        import re
         
         match = re.search(r'/chat-files/(.+)$', file_url)
         if not match:
@@ -4096,7 +4093,6 @@ async def chat_endpoint(request: ChatRequest):
     last_message_lower = last_message.lower()
     
     if "envoie un email" in last_message_lower or "envoyer un email" in last_message_lower:
-        import re
         email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', last_message)
         subject_match = re.search(r'sujet[\s:]+["\']?([^"\'\n]+)', last_message)
         body_match = re.search(r'corps[\s:]+["\']?([^"\'\n]+)', last_message)
@@ -9561,7 +9557,6 @@ async def text_to_speech(request: Dict[str, Any]):
         return {"success": False, "error": "ElevenLabs non configuré", "fallback": True}
     
     try:
-        import re
         # Nettoyer le texte des balises et caractères spéciaux
         clean_text = re.sub(r'\[ACTION:[^\]]*\]', '', text)
         clean_text = re.sub(r'\*\*.*?\*\*', '', clean_text)
@@ -9663,7 +9658,6 @@ async def deepgram_speak(request: Dict[str, Any]):
         return {"success": False, "error": "Deepgram non configuré"}
     
     try:
-        import re
         clean_text = re.sub(r'\[ACTION:[^\]]*\]', '', text)
         clean_text = re.sub(r'\*\*.*?\*\*', '', clean_text)
         clean_text = re.sub(r'[✅🎯✨⚠️📋🎉]', '', clean_text)
