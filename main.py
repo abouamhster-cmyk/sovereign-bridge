@@ -4456,37 +4456,28 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
 
             elif name == "complete_task":
                 task_name = args.get("task_name")
-                task_id = args.get("task_id")
                 
                 logger.info(f"📋 Complete task: {task_name}")
                 
-                # Chercher la tâche
-                if task_id:
-                    result = db_query("tasks", {"id": task_id, "user_id": user_id}, limit=1)
-                else:
-                    # Chercher par nom (recherche exacte d'abord, puis approximative)
-                    result = db_query("tasks", {"user_id": user_id, "title": task_name}, limit=1)
-                    if not result.get("data"):
-                        # Recherche approximative
-                        all_tasks = db_query("tasks", {"user_id": user_id}, limit=100)
-                        if all_tasks.get("data"):
-                            matching = [t for t in all_tasks["data"] if task_name.lower() in t.get("title", "").lower()]
-                            if matching:
-                                result = {"success": True, "data": matching[:1]}
+                # Récupérer toutes les tâches
+                all_tasks = db_query("tasks", {"user_id": user_id}, limit=100)
+                found_task = None
                 
-                if result.get("success") and result.get("data"):
-                    task = result["data"][0]
-                    task_id = task["id"]
-                    task_title = task["title"]
-                    
-                    # Mettre à jour le statut
-                    update_result = db_update("tasks", task_id, {"status": "done"})
-                    
+                if all_tasks.get("data"):
+                    task_name_lower = task_name.lower()
+                    for t in all_tasks["data"]:
+                        title_lower = t.get("title", "").lower()
+                        # Vérifier si le nom demandé est contenu dans le titre
+                        if task_name_lower in title_lower or title_lower in task_name_lower:
+                            found_task = t
+                            break
+                
+                if found_task:
+                    update_result = db_update("tasks", found_task["id"], {"status": "done"})
                     if update_result.get("success"):
-                        content = f"✅ Tâche marquée comme terminée : **{task_title}**"
-                        logger.info(f"✅ Task completed: {task_title}")
+                        content = f"✅ Tâche marquée comme terminée : **{found_task['title']}**"
                     else:
-                        content = f"❌ Erreur lors de la mise à jour de la tâche"
+                        content = f"❌ Erreur lors de la mise à jour"
                 else:
                     content = f"❌ Tâche non trouvée : '{task_name}'"
             
