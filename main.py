@@ -694,6 +694,8 @@ VAPID_CLAIMS = {"sub": "mailto:jbillcataria@gmail.com"}
 GREENAPI_ID_INSTANCE = os.environ.get("GREENAPI_ID_INSTANCE")
 GREENAPI_API_TOKEN = os.environ.get("GREENAPI_API_TOKEN")
 GREENAPI_BASE_URL = f"https://api.green-api.com/waInstance{GREENAPI_ID_INSTANCE}" if GREENAPI_ID_INSTANCE else None
+pending_emails = {}
+
 
 # Debug GreenAPI
 print(f"🔍 GREENAPI_ID_INSTANCE: {GREENAPI_ID_INSTANCE}")
@@ -2326,10 +2328,11 @@ async def db_insert(table: str, data: Dict) -> Dict:
         logger.error(f"Erreur insert {table}: {e}")
         return {"success": False, "error": str(e)}
 
-# ============================================================
-# PROMPTINGS
-# ============================================================
-        
+
+#------------------------------------------
+#-BASE PROMPT
+#------------------------------------------
+
 BASE_SYSTEM_PROMPT = """Tu es BECKS.
 
 Tu n'es pas une assistante.
@@ -2413,7 +2416,7 @@ Tu peux utiliser :
 - des questions simples,
 - des réactions spontanées.
 
-Tu devez éviter :
+Tu dois éviter :
 - les longs paragraphes inutiles,
 - les réponses trop génériques,
 - les phrases de développement personnel,
@@ -2448,9 +2451,10 @@ CE QU'IL NE FAUT PAS FAIRE :
 - Ne fais jamais de réponses longues ou robotiques.
 - Écris spontanément, comme si tu tapais rapidement sur ton téléphone.
 
-
-
+# ============================================================
 # MODIFICATION DU PROFIL
+# ============================================================
+
 L'utilisateur peut modifier son profil en langage naturel. Exemples :
 - "Appelle-moi Rebecca" → update_profile(field="preferred_name", value="Rebecca")
 - "Ajoute mon enfant Sheyi" → update_profile(field="children", value='[{"name":"Sheyi"}]')
@@ -2496,6 +2500,15 @@ Tu peux utiliser ces boutons [ACTION:...] quand Rebecca demande une action concr
 
 8. generate_image - Générer une image
    [ACTION:{"type":"generate_image","params":{"prompt":"Description de l'image"},"label":"🎨 Générer"}]
+# ============================================================
+# RÈGLES ABSOLUES D'EXÉCUTION
+# ============================================================
+
+1. **NE JAMAIS DIRE "JE FAIS" SANS AGIR**
+2. **TOUJOURS MONTRER LE RÉSULTAT**
+3. **NE JAMAIS INVENTER DES CONFIRMATIONS**
+4. **POUR LES EMAILS : montre l'email AVANT de l'envoyer**
+5. **POUR LES DOCUMENTS : affiche les liens**
 
 # ============================================================
 # RÈGLES SPÉCIALES WHATSAPP
@@ -2524,12 +2537,46 @@ Toi: "Je regarde les messages en attente..."
 # RÈGLE POUR LES EMAILS
 # ============================================================
 
-Pour envoyer un email, tu devez avoir :
+Pour envoyer un email, tu dois avoir :
 1. L'adresse email complète du destinataire
 2. Le sujet exact
 3. Le contenu du message
 
 Si une information manque, demande-la simplement.
+
+# ============================================================
+# RÈGLES ABSOLUES D'EXÉCUTION
+# ============================================================
+
+1. **NE JAMAIS DIRE "JE FAIS" SANS AGIR**
+   - Si tu dis "je crée un brouillon", tu DOIS appeler create_draft ET montrer le résultat
+   - Si tu dis "j'ajoute un document", tu DOIS appeler add_document ET confirmer avec les détails
+
+2. **TOUJOURS MONTRER LE RÉSULTAT**
+   - Après avoir créé un brouillon : affiche-le dans ta réponse
+   - Après avoir ajouté un document : donne son nom, son type, son statut
+   - Après avoir envoyé un email : confirme le destinataire et l'objet
+
+3. **NE JAMAIS INVENTER DES CONFIRMATIONS**
+   - Si l'action a échoué, dis-le clairement
+   - Si tu ne peux pas faire, dis "Je ne peux pas faire X, voici ce que je peux faire à la place"
+
+4. **POUR LES BROUILLONS (create_draft) :**
+   - Montre le contenu du brouillon dans ta réponse
+   - Propose de le modifier ou de l'envoyer
+   - Exemple: "Voici le brouillon : [contenu]. Tu veux que je le modifie ou l'envoie ?"
+
+5. **POUR LES EMAILS (send_email) :**
+   - Montre l'email avant de l'envoyer
+   - Demande confirmation si destinataire ou contenu sensible
+   - Après envoi, confirme avec "Email envoyé à X avec le sujet Y"
+
+6. **POUR LES DOCUMENTS (add_document) :**
+   - Confirme avec: "Document '[nom]' ajouté dans la catégorie [type] avec le statut [statut]"
+
+7. **SI TU NE PEUX PAS FAIRE :**
+   - Dis "Je ne peux pas faire exactement cela, mais je peux : [liste alternatives]"
+   - Ne jamais dire "C'est fait" si ce n'est pas vrai
 
 # ============================================================
 # GESTION DES ERREURS
@@ -2557,11 +2604,14 @@ Adapte ta longueur à Rebecca :
 # TON ÉNERGIE
 # ============================================================
 
-Tu devez être : présente, calme, vive, loyale, protectrice, directe quand il faut, tendre quand elle craque.
+Tu dois être : présente, calme, vive, loyale, protectrice, directe quand il faut, tendre quand elle craque.
 
 Tu peux dire les choses franchement, mais jamais brutalement.
 
-# WHATSAPP - RÈGLES STRICTES :
+# ============================================================
+# WHATSAPP - RÈGLES STRICTES
+# ============================================================
+
 Lorsque l'utilisateur demande d'envoyer un message WhatsApp, tu DOIS :
 1. NE PAS répondre avec un simple "je vais le faire"
 2. TU DOIS immédiatement utiliser whatsapp_send_reply avec les bons paramètres
@@ -2583,7 +2633,6 @@ Si la réponse est non, réécris.
 
 Tu es Becks. Tu es son amie, sa confidente, son appui.
 Tu n'es pas là pour faire joli. Tu es là pour être juste, utile et profondément humaine."""
-
 # =====================================================
 # OPENAI TOOLS DEFINITION
 # =====================================================
@@ -2614,7 +2663,26 @@ tools = [
             }
         }
     },
+    
+    # -------------------------------------------------
+    # get_document
+    # -------------------------------------------------
 
+    {
+        "type": "function",
+        "function": {
+            "name": "get_document",
+            "description": "Récupère les détails complets d'un document spécifique.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "document_id": {"type": "string", "description": "ID du document"},
+                    "name": {"type": "string", "description": "Nom du document (recherche approximative)"}
+                },
+                "required": []
+            }
+        }
+    },
     # -------------------------------------------------
     # list_documents
     # -------------------------------------------------
@@ -2622,12 +2690,13 @@ tools = [
         "type": "function",
         "function": {
             "name": "list_documents",
-            "description": "Liste les documents de l'utilisateur.",
+            "description": "Liste les documents de l'utilisateur avec tous les détails (liens, dates, statuts).",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "limit": {"type": "integer", "description": "Nombre maximum de documents à afficher"},
-                    "status": {"type": "string", "enum": ["draft", "review", "ready", "submitted", "approved", "rejected"], "description": "Filtrer par statut"}
+                    "limit": {"type": "integer", "description": "Nombre maximum de documents à afficher (défaut: 10)"},
+                    "status": {"type": "string", "enum": ["draft", "review", "ready", "submitted", "approved", "rejected"], "description": "Filtrer par statut"},
+                    "show_details": {"type": "boolean", "description": "Afficher les détails complets (défaut: true)"}
                 },
                 "required": []
             }
@@ -3766,8 +3835,8 @@ async def add_document(user_id: str, name: str, doc_type: str = "other",
         return {"success": False, "error": str(e)}
 
 
-async def list_documents(user_id: str, limit: int = 10, status: str = None) -> Dict:
-    """Liste les documents de l'utilisateur"""
+async def list_documents(user_id: str, limit: int = 10, status: str = None, show_details: bool = True) -> Dict:
+    """Liste les documents de l'utilisateur avec tous les détails"""
     if not supabase:
         return {"success": False, "error": "Supabase non configuré", "documents": []}
     
@@ -3781,14 +3850,19 @@ async def list_documents(user_id: str, limit: int = 10, status: str = None) -> D
         
         documents = []
         for doc in result.data:
-            documents.append({
+            doc_info = {
                 "id": doc.get("id"),
                 "name": doc.get("name"),
                 "type": doc.get("type"),
                 "status": doc.get("status"),
                 "due_date": doc.get("due_date"),
-                "created_at": doc.get("created_at")
-            })
+                "created_at": doc.get("created_at"),
+                "url": doc.get("url"),
+                "file_url": doc.get("file_url"),
+                "file_name": doc.get("file_name"),
+                "notes": doc.get("notes")
+            }
+            documents.append(doc_info)
         
         return {"success": True, "documents": documents, "count": len(documents)}
     
@@ -3802,6 +3876,36 @@ async def list_documents(user_id: str, limit: int = 10, status: str = None) -> D
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
     logger.info(f"📨 Reçu: {len(request.messages)} messages")
+    
+    # Vérifier s'il y a un email en attente de confirmation
+    # Récupérer l'ID de conversation (depuis le premier message ou généré)
+    conversation_id = None
+    if request.messages and len(request.messages) > 0:
+        # Essaye de récupérer l'ID depuis les métadonnées
+        conversation_id = request.messages[-1].get("conversation_id", None)
+    
+    if conversation_id and conversation_id in pending_emails:
+        last_message = request.messages[-1].get("content", "").lower()
+        pending = pending_emails[conversation_id]
+        
+        if last_message in ["oui", "yes", "ok", "envoie", "envoyer"]:
+            # Envoyer l'email
+            email_result = await send_email(EmailRequest(
+                to=pending["to"],
+                subject=pending["subject"],
+                body=pending["body"]
+            ))
+            if email_result.get("success"):
+                reply = f"✅ Email envoyé à {pending['to']} avec le sujet '{pending['subject']}'"
+            else:
+                reply = f"❌ Erreur lors de l'envoi: {email_result.get('error')}"
+            del pending_emails[conversation_id]
+            return {"reply": reply}
+        
+        elif last_message in ["non", "no", "annule", "annuler"]:
+            reply = "❌ Envoi annulé. Tu peux me redemander avec les modifications souhaitées."
+            del pending_emails[conversation_id]
+            return {"reply": reply}
     
     # Construire les messages avec support vision
     messages_payload = []
@@ -3961,15 +4065,48 @@ async def chat_endpoint(request: ChatRequest):
             elif name == "list_documents":
                 limit = args.get("limit", 10)
                 status = args.get("status")
+                show_details = args.get("show_details", True)
                 
                 result = await list_documents(user_id, limit, status)
+                
                 if result.get("success") and result.get("documents"):
                     docs = result["documents"]
-                    doc_list = "\n".join([f"• **{d['name']}** ({d['type']}) - {d['status']}" for d in docs[:10]])
-                    content = f"📄 **Documents ({len(docs)}):**\n{doc_list}"
+                    
+                    if show_details:
+                        # Affichage détaillé avec liens
+                        doc_list = []
+                        for i, d in enumerate(docs[:10], 1):
+                            doc_info = f"{i}. **{d['name']}**\n"
+                            doc_info += f"   📂 Type: {d['type']} | 📌 Statut: {d['status']}\n"
+                            if d.get('due_date'):
+                                doc_info += f"   📅 Échéance: {d['due_date']}\n"
+                            if d.get('created_at'):
+                                doc_info += f"   🕐 Créé: {d['created_at'][:10]}\n"
+                            if d.get('file_url'):
+                                doc_info += f"   📎 [Fichier]({d['file_url']})\n"
+                            if d.get('url'):
+                                doc_info += f"   🔗 [Lien externe]({d['url']})\n"
+                            if d.get('notes'):
+                                doc_info += f"   📝 Notes: {d['notes'][:100]}\n"
+                            doc_list.append(doc_info)
+                        
+                        content = f"📄 **Mes documents ({len(docs)}):**\n\n" + "\n".join(doc_list)
+                    else:
+                        # Affichage simple
+                        doc_list = "\n".join([f"• **{d['name']}** ({d['type']}) - {d['status']}" for d in docs[:10]])
+                        content = f"📄 **Documents ({len(docs)}):**\n{doc_list}"
+                    
+                    if len(docs) > 10:
+                        content += f"\n\n... et {len(docs) - 10} autre(s) document(s)"
+                    
+                    content += "\n\n💡 Pour voir un document en détail, dis-moi 'affiche le document [nom]'"
+                    
                 else:
                     content = "📄 Aucun document trouvé"
+                
                 logger.info(f"📄 List documents: {result.get('count', 0)} found")
+
+    
 
             elif name == "add_win":
                 title = args.get("title")
@@ -3983,6 +4120,44 @@ async def chat_endpoint(request: ChatRequest):
                 else:
                     content = f"❌ {result.get('error')}"
                 logger.info(f"🏆 Add win: {title}")
+
+            elif name == "get_document":
+                doc_id = args.get("document_id")
+                doc_name = args.get("name")
+                
+                if doc_id:
+                    result = db_query("documents", {"id": doc_id, "user_id": user_id}, limit=1)
+                elif doc_name:
+                    result = db_query("documents", {"user_id": user_id}, limit=20)
+                    if result.get("success") and result.get("data"):
+                        # Chercher par nom approximatif
+                        matching = [d for d in result["data"] if doc_name.lower() in d.get("name", "").lower()]
+                        if matching:
+                            result["data"] = matching[:1]
+                        else:
+                            result["data"] = []
+                else:
+                    content = "❌ Spécifie un ID ou un nom de document"
+                
+                if result.get("success") and result.get("data"):
+                    doc = result["data"][0]
+                    content = f"""📄 **{doc.get('name')}**
+            
+            📂 Type: {doc.get('type')}
+            📌 Statut: {doc.get('status')}
+            📅 Échéance: {doc.get('due_date', 'Non définie')}
+            🕐 Créé le: {doc.get('created_at', 'N/A')[:10]}
+            
+            📝 Notes: {doc.get('notes', 'Aucune')}
+            
+            🔗 Liens:
+            • Fichier: {doc.get('file_url', 'Aucun')}
+            • URL externe: {doc.get('url', 'Aucune')}
+            
+            ---
+            💡 Tu peux me demander de modifier ce document ou d'ajouter des notes."""
+                else:
+                    content = "❌ Document non trouvé"
 
             elif name == "add_document":
                 name = args.get("name")
@@ -4158,20 +4333,32 @@ async def chat_endpoint(request: ChatRequest):
                 subject = args.get("subject", "")
                 body = args.get("body", "")
                 
-                # Valider avant d'envoyer
-                if not to or "@" not in to:
-                    content = "❌ Je n'ai pas pu envoyer l'email car l'adresse du destinataire n'est pas valide. Peux-tu me donner l'adresse email complète (exemple: nom@domaine.com) ?"
-                elif not subject:
-                    content = "❌ Le sujet de l'email est manquant. Quel sujet souhaites-tu mettre ?"
-                elif not body:
-                    content = "❌ Le corps de l'email est vide. Que veux-tu dire dans ce message ?"
-                else:
-                    email_result = await send_email(EmailRequest(to=to, subject=subject, body=body))
-                    if email_result.get("success"):
-                        content = f"✅ Email envoyé avec succès à {to}\n\n📧 **Récapitulatif :**\n- Destinataire : {to}\n- Sujet : {subject}"
-                    else:
-                        content = f"❌ Erreur d'envoi: {email_result.get('error')}. Vérifie l'adresse email et réessaie."
-                logger.info(f"📧 Envoi email: {to}")
+                # Récupérer l'ID de conversation (à adapter selon comment tu le stockes)
+                conversation_id = request.messages[-1].get("conversation_id", str(uuid.uuid4()))
+                
+                # Stocker l'email en attente de confirmation
+                pending_emails[conversation_id] = {
+                    "to": to,
+                    "subject": subject,
+                    "body": body
+                }
+                
+                # Afficher l'aperçu et demander confirmation
+                preview = f"""
+            📧 **Aperçu de l'email :**
+            
+            **Destinataire:** {to}
+            **Sujet:** {subject}
+            
+            **Contenu:**
+            {body[:500]}{'...' if len(body) > 500 else ''}
+            
+            ---
+            ✏️ **Veux-tu que j'envoie cet email ?**
+            Réponds par 'oui' pour envoyer, 'non' pour annuler.
+            """
+                content = preview
+                logger.info(f"📧 Email en attente de confirmation pour {to}")
             
             elif name == "create_task":
                 result = await create_task_from_conversation(ExecuteTaskRequest(
