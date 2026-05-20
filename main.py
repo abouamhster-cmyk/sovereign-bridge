@@ -2448,6 +2448,14 @@ CE QU'IL NE FAUT PAS FAIRE :
 - Ne fais jamais de réponses longues ou robotiques.
 - Écris spontanément, comme si tu tapais rapidement sur ton téléphone.
 
+
+
+# MODIFICATION DU PROFIL
+L'utilisateur peut modifier son profil en langage naturel. Exemples :
+- "Appelle-moi Rebecca" → update_profile(field="preferred_name", value="Rebecca")
+- "Ajoute mon enfant Sheyi" → update_profile(field="children", value='[{"name":"Sheyi"}]')
+- "Mon objectif est de lancer la ferme" → update_profile(field="current_goals", value='[{"goal":"Lancer la ferme"}]')
+
 # ============================================================
 # QUAND REBECCA DEMANDE DE L'ACTION
 # ============================================================
@@ -2643,6 +2651,31 @@ tools = [
             "name": "get_financial_summary",
             "description": "Retourne le résumé financier (revenus, dépenses, solde)",
             "parameters": {"type": "object", "properties": {}, "required": []}
+        }
+    },
+    # -------------------------------------------------
+    # WHATSAPP 
+    # -------------------------------------------------   
+    {
+        "type": "function",
+        "function": {
+            "name": "update_profile",
+            "description": "Met à jour le profil utilisateur (nom, enfants, projets, objectifs).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "field": {
+                        "type": "string",
+                        "enum": ["preferred_name", "full_name", "birthday", "children", "projects", "current_goals"],
+                        "description": "Le champ à modifier"
+                    },
+                    "value": {
+                        "type": "string",
+                        "description": "La nouvelle valeur (pour les champs simples) ou JSON (pour les champs complexes comme children)"
+                    }
+                },
+                "required": ["field", "value"]
+            }
         }
     },
     # -------------------------------------------------
@@ -3264,6 +3297,28 @@ def get_revenue_by_project():
         result[project] = result.get(project, 0) + r.get("amount", 0)
     
     return {"projects": result}
+async def update_user_profile_field(user_id: str, field: str, value: Any) -> Dict:
+    """Met à jour un champ spécifique du profil utilisateur"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        # Vérifier que le champ est autorisé
+        allowed_fields = ["preferred_name", "full_name", "birthday", "children", "projects", "current_goals"]
+        if field not in allowed_fields:
+            return {"success": False, "error": f"Champ '{field}' non autorisé. Champs autorisés: {allowed_fields}"}
+        
+        # Mettre à jour
+        result = supabase.table("user_profile").update({field: value}).eq("user_id", user_id).execute()
+        
+        if hasattr(result, 'error') and result.error:
+            return {"success": False, "error": str(result.error)}
+        
+        return {"success": True, "message": f"Profil mis à jour: {field} = {value}"}
+    
+    except Exception as e:
+        logger.error(f"Erreur update_profile: {e}")
+        return {"success": False, "error": str(e)}
 
 # =====================================================
 # API ROUTES - CHAT AMÉLIORÉ AVEC MÉMOIRE
@@ -3421,6 +3476,25 @@ async def chat_endpoint(request: ChatRequest):
                 else:
                     content = f"❌ Erreur: {result.get('error', 'inconnue')}"
                 logger.info(f"✍️ Écriture dans {target_table}: {result['success']}")
+
+
+            elif name == "update_profile":
+                field = args.get("field")
+                value = args.get("value")
+                
+                # Parser la valeur si c'est du JSON
+                if field in ["children", "projects", "current_goals"]:
+                    try:
+                        value = json.loads(value)
+                    except:
+                        pass
+                
+                result = await update_user_profile_field(user_id, field, value)
+                if result.get("success"):
+                    content = f"✅ {result.get('message')}"
+                else:
+                    content = f"❌ {result.get('error')}"
+                logger.info(f"👤 Update profile: {field} -> {value[:50] if isinstance(value, str) else value}")
                 
             elif name == "get_financial_summary":
                 result = get_financial_summary(user_id)
