@@ -4377,21 +4377,33 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                 task_name = args.get("task_name")
                 priority = args.get("priority")
                 
+                logger.info(f"📋 Update priority for task: {task_name} to {priority}")
+                
                 # Chercher la tâche
-                result = db_query("tasks", {"user_id": user_id}, limit=50)
+                result = db_query("tasks", {"user_id": user_id, "title": task_name}, limit=1)
+                if not result.get("data"):
+                    # Recherche approximative
+                    all_tasks = db_query("tasks", {"user_id": user_id}, limit=100)
+                    if all_tasks.get("data"):
+                        matching = [t for t in all_tasks["data"] if task_name.lower() in t.get("title", "").lower()]
+                        if matching:
+                            result = {"success": True, "data": matching[:1]}
+                
                 if result.get("success") and result.get("data"):
-                    matching = [t for t in result["data"] if task_name.lower() in t.get("title", "").lower()]
-                    if matching:
-                        task = matching[0]
-                        update_result = db_update("tasks", task["id"], {"priority": priority})
-                        if update_result.get("success"):
-                            content = f"✅ Priorité de la tâche '{task['title']}' changée en **{priority}**"
-                        else:
-                            content = f"❌ Erreur lors de la mise à jour"
+                    task = result["data"][0]
+                    task_id = task["id"]
+                    task_title = task["title"]
+                    
+                    # Mettre à jour la priorité
+                    update_result = db_update("tasks", task_id, {"priority": priority})
+                    
+                    if update_result.get("success"):
+                        content = f"✅ Priorité de la tâche '{task_title}' changée en **{priority}**"
+                        logger.info(f"✅ Task priority updated: {task_title} -> {priority}")
                     else:
-                        content = f"❌ Tâche '{task_name}' non trouvée"
+                        content = f"❌ Erreur lors de la mise à jour de la priorité"
                 else:
-                    content = f"❌ Tâche non trouvée"
+                    content = f"❌ Tâche non trouvée : '{task_name}'"
                     
             elif name == "add_revenue":
                 source = args.get("source")
@@ -4450,19 +4462,21 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                 task_name = args.get("task_name")
                 task_id = args.get("task_id")
                 
+                logger.info(f"📋 Complete task: {task_name}")
+                
+                # Chercher la tâche
                 if task_id:
-                    # Chercher par ID
                     result = db_query("tasks", {"id": task_id, "user_id": user_id}, limit=1)
                 else:
-                    # Chercher par nom (approximatif)
-                    result = db_query("tasks", {"user_id": user_id}, limit=50)
-                    if result.get("success") and result.get("data"):
-                        # Trouver la tâche dont le titre contient le nom
-                        matching = [t for t in result["data"] if task_name.lower() in t.get("title", "").lower()]
-                        if matching:
-                            result["data"] = matching[:1]
-                        else:
-                            result["data"] = []
+                    # Chercher par nom (recherche exacte d'abord, puis approximative)
+                    result = db_query("tasks", {"user_id": user_id, "title": task_name}, limit=1)
+                    if not result.get("data"):
+                        # Recherche approximative
+                        all_tasks = db_query("tasks", {"user_id": user_id}, limit=100)
+                        if all_tasks.get("data"):
+                            matching = [t for t in all_tasks["data"] if task_name.lower() in t.get("title", "").lower()]
+                            if matching:
+                                result = {"success": True, "data": matching[:1]}
                 
                 if result.get("success") and result.get("data"):
                     task = result["data"][0]
@@ -4474,7 +4488,7 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                     
                     if update_result.get("success"):
                         content = f"✅ Tâche marquée comme terminée : **{task_title}**"
-                        logger.info(f"✅ Complete task: {task_title}")
+                        logger.info(f"✅ Task completed: {task_title}")
                     else:
                         content = f"❌ Erreur lors de la mise à jour de la tâche"
                 else:
