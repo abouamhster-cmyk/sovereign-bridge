@@ -537,43 +537,10 @@ async def whatsapp_send_message(to: str, message: str):
         print("❌ GreenAPI non configuré")
         return False
     
-    # 🔥 CORRECTION : Nettoyer le numéro correctement
-    # Enlever @c.us si présent, enlever le +, enlever les espaces
+    # Nettoyer le numéro correctement
     clean_to = to.replace("@c.us", "").replace("+", "").replace(" ", "")
     
-    # 🔥 NE PAS RAJOUTER @c.us - GreenAPI l'accepte sans
-    url = f"{GREENAPI_BASE_URL}/sendMessage/{GREENAPI_API_TOKEN}"
-    payload = {"chatId": clean_to, "message": message}
-    
-    print(f"📤 URL: {url}")
-    print(f"📤 Payload: {payload}")
-    
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(url, json=payload)
-            print(f"📤 Response status: {response.status_code}")
-            print(f"📤 Response body: {response.text[:200]}")
-            
-            if response.status_code == 200:
-                print(f"✅ Message envoyé à {clean_to}")
-                return True
-            else:
-                print(f"❌ Erreur GreenAPI: {response.status_code}")
-                return False
-    except Exception as e:
-        print(f"❌ Erreur envoi: {type(e).__name__} - {e}")
-        return False    """Envoie un message WhatsApp via GreenAPI"""
-    print(f"📤 Tentative d'envoi à {to}")
-    
-    if not GREENAPI_ID_INSTANCE or not GREENAPI_API_TOKEN:
-        print("❌ GreenAPI non configuré")
-        return False
-    
-    # 🔥 CORRECTION : Nettoyer le numéro correctement
-    # Enlever @c.us si présent, enlever le +, enlever les espaces
-    clean_to = to.replace("@c.us", "").replace("+", "").replace(" ", "")
-    
-    # 🔥 NE PAS RAJOUTER @c.us - GreenAPI l'accepte sans
+    # Construction de l'URL et du payload
     url = f"{GREENAPI_BASE_URL}/sendMessage/{GREENAPI_API_TOKEN}"
     payload = {"chatId": clean_to, "message": message}
     
@@ -595,7 +562,6 @@ async def whatsapp_send_message(to: str, message: str):
     except Exception as e:
         print(f"❌ Erreur envoi: {type(e).__name__} - {e}")
         return False
-
 
 @app.post("/api/whatsapp/send-image")
 async def whatsapp_send_image(request: Dict[str, Any]):
