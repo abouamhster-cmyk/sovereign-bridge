@@ -2623,6 +2623,18 @@ Exemple de RÉPONSE CORRECTE :
 
 NE JAMAIS répondre uniquement par du texte sans l'action.
 
+
+# RÈGLE ABSOLUE POUR LES EMAILS :
+Quand un utilisateur demande d'envoyer un email, tu DOIS :
+1. Ne PAS répondre avec du texte comme "Je vais envoyer..."
+2. Appeler IMMÉDIATEMENT le tool send_email avec les paramètres
+3. Le tool affichera l'aperçu et demandera confirmation
+
+Exemple de RÉPONSE CORRECTE :
+(N'appelle pas send_email toi-même, c'est le tool qui gère)
+
+MAUVAIS EXEMPLE (à ne jamais faire) :
+"Je vais bientôt envoyer l'email..." ← JAMAIS !
 # ============================================================
 # RÈGLE FINALE
 # ============================================================
@@ -4018,6 +4030,7 @@ def get_allowed_fields_for_table(table: str) -> list:
     }
     return fields_map.get(table, ["notes"])
         
+
 # =====================================================
 # API ROUTES - CHAT AMÉLIORÉ AVEC MÉMOIRE
 # =====================================================
@@ -4025,27 +4038,61 @@ def get_allowed_fields_for_table(table: str) -> list:
 async def chat_endpoint(request: ChatRequest):
     logger.info(f"📨 Reçu: {len(request.messages)} messages")
     
-    # Construire les messages avec support vision
-    messages_payload = []
-    
-    # Ajouter la date du jour
-    today_date = datetime.now().strftime("%B %d, %Y")
-    date_context = f"\n\nToday is {today_date}. Use this information to provide relevant context."
-    
-    # Ajouter le système prompt avec mémoire
+    # Récupérer l'utilisateur
     user_id = require_user_id(request.user_id)
     
-    # Vérifier s'il y a un email en attente de confirmation pour cet utilisateur
+    # Récupérer le dernier message
+    last_message = request.messages[-1].get("content", "") if request.messages else ""
+    
+    # =====================================================
+    # INTERCEPTION DES DEMANDES D'EMAIL (avant l'IA)
+    # =====================================================
+    last_message_lower = last_message.lower()
+    
+    if "envoie un email" in last_message_lower or "envoyer un email" in last_message_lower:
+        import re
+        email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', last_message)
+        subject_match = re.search(r'sujet[\s:]+["\']?([^"\'\n]+)', last_message)
+        body_match = re.search(r'corps[\s:]+["\']?([^"\'\n]+)', last_message)
+        
+        if email_match:
+            to = email_match.group(0)
+            subject = subject_match.group(1) if subject_match else "Message de Sovereign"
+            body = body_match.group(1) if body_match else last_message
+            
+            # Nettoyer le corps
+            body = re.sub(r'(envoie un email|envoyer un email).*?corps[\s:]+', '', body, flags=re.IGNORECASE)
+            
+            pending_emails[user_id] = {"to": to, "subject": subject, "body": body}
+            
+            preview = f"""
+📧 **Aperçu de l'email :**
+
+**Destinataire:** {to}
+**Sujet:** {subject}
+
+**Contenu:**
+{body[:500]}
+
+---
+✏️ **Veux-tu que j'envoie cet email ?**
+Réponds par 'oui' pour envoyer, 'non' pour annuler.
+"""
+            return {"reply": preview}
+    
+    # =====================================================
+    # VÉRIFICATION DES EMAILS EN ATTENTE
+    # =====================================================
     logger.info(f"🔍 pending_emails: {pending_emails}")
     logger.info(f"🔍 user_id: {user_id}")
     
     if user_id and user_id in pending_emails:
         logger.info(f"🔍 Email trouvé en attente")
-        last_message = request.messages[-1].get("content", "").lower()
-        logger.info(f"🔍 Dernier message: '{last_message}'")
+        last_response = request.messages[-1].get("content", "").lower()
+        logger.info(f"🔍 Dernier message: '{last_response}'")
         pending = pending_emails[user_id]
         
-        if last_message in ["oui", "yes", "ok", "envoie", "envoyer", "faut envoyer", "je confirme", "vas y"]:
+        if last_response in ["oui", "yes", "ok", "envoie", "envoyer", "faut envoyer", "je confirme", "vas y", "envoie le mail"]:
             logger.info(f"🔍 Confirmation reçue, envoi en cours...")
             email_result = await send_email_simple(
                 to=pending["to"],
@@ -4061,14 +4108,22 @@ async def chat_endpoint(request: ChatRequest):
             del pending_emails[user_id]
             return {"reply": reply}
         
-        elif last_message in ["non", "no", "annule", "annuler"]:
-            reply = "❌ Envoi annulé. Tu peux me redemander avec les modifications souhaitées."
+        elif last_response in ["non", "no", "annule", "annuler"]:
+            reply = "❌ Envoi annulé."
             del pending_emails[user_id]
             return {"reply": reply}
-
     
+    # =====================================================
+    # CONSTRUCTION DES MESSAGES POUR L'IA
+    # =====================================================
+    messages_payload = []
+    
+    # Date du jour
+    today_date = datetime.now().strftime("%B %d, %Y")
+    date_context = f"\n\nToday is {today_date}. Use this information to provide relevant context."
+    
+    # Contexte mémoire
     memory_context = await get_user_memory_context(user_id)
-    
     profile_context_result = await get_profile_context(user_id=user_id)
     profile_context = profile_context_result.get("context", "")
     
@@ -4076,7 +4131,7 @@ async def chat_endpoint(request: ChatRequest):
     if profile_context:
         enhanced_system_prompt += f"\n\n# X. CURRENT PROFILE CONTEXT\n{profile_context}"
     
-    # AJOUT DES INSTRUCTIONS WHATSAPP DANS LE PROMPT
+    # Instructions WhatsApp
     whatsapp_instructions = """
     
 # WHATSAPP SPECIFIC RULES:
@@ -4084,32 +4139,27 @@ async def chat_endpoint(request: ChatRequest):
 - NEVER use status="unread" because this column doesn't exist
 - Use "replied": False for pending messages
 - Use "replied": True for answered messages
-- The whatsapp_messages table has these columns: from, from_name, message, status, replied, importance, summary, is_greeting, created_at
 """
     enhanced_system_prompt += whatsapp_instructions
     
     messages_payload.append({"role": "system", "content": enhanced_system_prompt})
     
-    # Définir file_urls en dehors de la boucle
+    # Traitement des fichiers
     all_file_urls = []
     
     for msg in request.messages:
         role = msg.get("role", "user")
         content = msg.get("content", "")
         
-        # Extraire le texte et les images
         extract_result = extract_text_from_message(content)
         text_content = extract_result[0]
         image_urls = extract_result[1] if len(extract_result) > 1 else []
         file_urls = extract_result[2] if len(extract_result) > 2 else []
         
-        # Accumuler toutes les URLs de fichiers
         all_file_urls.extend(file_urls)
         
-        # Si c'est un message utilisateur avec des images → format vision
         if role == "user" and image_urls:
             vision_content = [{"type": "text", "text": text_content}]
-            
             for img_url in image_urls:
                 base64_image = await download_image_from_url(img_url)
                 if base64_image:
@@ -4122,40 +4172,31 @@ async def chat_endpoint(request: ChatRequest):
                         "type": "text",
                         "text": f"[Image non accessible: {img_url}]"
                     })
-            
-            messages_payload.append({
-                "role": role,
-                "content": vision_content
-            })
+            messages_payload.append({"role": role, "content": vision_content})
         else:
             messages_payload.append({"role": role, "content": text_content})
     
-    # Vérifier les documents
-    last_message = request.messages[-1].get("content", "") if request.messages else ""
+    # Extraction des documents
     logger.info(f"📨 Dernier message: {last_message[:200]}...")
-    
     document_text = None
     
     if all_file_urls:
-        logger.info(f"📎 Tous les fichiers détectés: {all_file_urls}")
         for doc_url in all_file_urls:
             if doc_url.lower().endswith(('.pdf', '.txt', '.docx', '.doc')):
-                logger.info(f"📄 Tentative d'extraction: {doc_url[:100]}...")
                 doc_text = await process_document(doc_url)
                 if doc_text:
                     document_text = doc_text
-                    logger.info(f"✅ Document extrait avec succès: {len(doc_text)} caractères")
                     break
-                else:
-                    logger.warning(f"❌ Échec extraction document: {doc_url[:100]}...")
     
     if document_text:
-        logger.info(f"📄 Ajout du document au contexte ({len(document_text)} caractères)")
         messages_payload.append({
             "role": "user",
             "content": f"[CONTENU DU DOCUMENT EXTRAIT]\n{document_text}\n\nQuestion ou demande associée : {last_message[:500]}"
         })
     
+    # =====================================================
+    # APPEL À L'IA
+    # =====================================================
     try:
         response = client.chat.completions.create(
             model="gpt-4o",
@@ -4180,67 +4221,55 @@ async def chat_endpoint(request: ChatRequest):
                 table = args.get("table")
                 filters = args.get("filters", {})
                 
-                # CORRECTION SPÉCIALE POUR WHATSAPP
                 if table == "whatsapp_messages":
-                    # Si l'IA demande "unread", on la redirige vers "replied": False
                     if filters.get("status") == "unread":
                         filters.pop("status", None)
                         filters["replied"] = False
-                        logger.info(f"🔄 WhatsApp: status=unread → replied=False")
-                    
-                    # Si l'IA demande "pending", on la redirige vers "replied": False
                     if filters.get("status") == "pending":
                         filters.pop("status", None)
                         filters["replied"] = False
-                        logger.info(f"🔄 WhatsApp: status=pending → replied=False")
                 
                 result = db_query(table, filters, args.get("limit", 50))
                 content = json.dumps(result, ensure_ascii=False)
                 logger.info(f"📖 Lecture {table}: {result.get('count', 0)} lignes")
+            
+            elif name == "send_email":
+                to = args.get("to", "")
+                subject = args.get("subject", "")
+                body = args.get("body", "")
+                
+                pending_emails[user_id] = {"to": to, "subject": subject, "body": body}
+                
+                preview = f"""
+📧 **Aperçu de l'email :**
 
+**Destinataire:** {to}
+**Sujet:** {subject}
+
+**Contenu:**
+{body[:500]}{'...' if len(body) > 500 else ''}
+
+---
+✏️ **Veux-tu que j'envoie cet email ?**
+Réponds par 'oui' pour envoyer, 'non' pour annuler.
+"""
+                content = preview
+                logger.info(f"📧 Email en attente pour {to}")
+            
             elif name == "update_item":
                 table = args.get("table")
-                name = args.get("name")
+                item_name = args.get("name")
                 updates = args.get("updates", {})
                 
-                result = await update_item(user_id, table, name=name, updates=updates)
+                result = await update_item(user_id, table, name=item_name, updates=updates)
                 if result.get("success"):
                     content = f"✅ {result.get('message')}"
-                    # Afficher les modifications
                     for field, value in updates.items():
                         content += f"\n   • {field}: {value}"
                 else:
                     content = f"❌ {result.get('error')}"
-                logger.info(f"📝 Update {table}: {name}")
-
-            elif name == "add_revenue":
-                source = args.get("source")
-                amount = args.get("amount")
-                project = args.get("project")
-                date = args.get("date")
-                notes = args.get("notes", "")
-                
-                result = await add_revenue(user_id, source, amount, project, date, notes)
-                if result.get("success"):
-                    content = f"✅ {result.get('message')}"
-                else:
-                    content = f"❌ {result.get('error')}"
-                logger.info(f"💰 Add revenue: {amount} CFA - {source}")
-
-            elif name == "update_document":
-                name = args.get("name")
-                updates = args.get("updates", {})
-                
-                result = await update_document(user_id, name=name, updates=updates)
-                if result.get("success"):
-                    content = f"✅ {result.get('message')}"
-                    # Afficher le lien ajouté si présent
-                    if updates.get("url"):
-                        content += f"\n🔗 Lien ajouté : {updates['url']}"
-                else:
-                    content = f"❌ {result.get('error')}"
-                logger.info(f"📝 Update document: {name}")
-
+                logger.info(f"📝 Update {table}: {item_name}")
+            
             elif name == "list_documents":
                 limit = args.get("limit", 10)
                 status = args.get("status")
@@ -4250,306 +4279,134 @@ async def chat_endpoint(request: ChatRequest):
                 
                 if result.get("success") and result.get("documents"):
                     docs = result["documents"]
+                    doc_list = []
+                    for i, d in enumerate(docs[:10], 1):
+                        doc_info = f"{i}. **{d['name']}**\n"
+                        doc_info += f"   📂 Type: {d['type']} | 📌 Statut: {d['status']}\n"
+                        if d.get('due_date'):
+                            doc_info += f"   📅 Échéance: {d['due_date']}\n"
+                        file_link = d.get('file_url') or d.get('url')
+                        if file_link:
+                            doc_info += f"   📎 [Fichier]({file_link})\n"
+                        if d.get('notes'):
+                            doc_info += f"   📝 Notes: {d['notes'][:100]}\n"
+                        doc_list.append(doc_info)
                     
-                    if show_details:
-                        # Affichage détaillé avec liens
-                        doc_list = []
-                        for i, d in enumerate(docs[:10], 1):
-                            doc_info = f"{i}. **{d['name']}**\n"
-                            doc_info += f"   📂 Type: {d['type']} | 📌 Statut: {d['status']}\n"
-                            if d.get('due_date'):
-                                doc_info += f"   📅 Échéance: {d['due_date']}\n"
-                            if d.get('created_at'):
-                                doc_info += f"   🕐 Créé: {d['created_at'][:10]}\n"
-                            
-                            # 🔥 CORRECTION : Chercher le lien dans file_url OU url
-                            file_link = d.get('file_url') or d.get('url')
-                            if file_link:
-                                doc_info += f"   📎 [Fichier]({file_link})\n"
-                            
-                            if d.get('notes'):
-                                doc_info += f"   📝 Notes: {d['notes'][:100]}\n"
-                            doc_list.append(doc_info)
-                        
-                        content = f"📄 **Mes documents ({len(docs)}):**\n\n" + "\n".join(doc_list)
-                    else:
-                        # Affichage simple
-                        doc_list = "\n".join([f"• **{d['name']}** ({d['type']}) - {d['status']}" for d in docs[:10]])
-                        content = f"📄 **Documents ({len(docs)}):**\n{doc_list}"
-                    
+                    content = f"📄 **Mes documents ({len(docs)}):**\n\n" + "\n".join(doc_list)
                     if len(docs) > 10:
                         content += f"\n\n... et {len(docs) - 10} autre(s) document(s)"
-                    
-                    content += "\n\n💡 Pour voir un document en détail, dis-moi 'affiche le document [nom]'"
-                    
                 else:
                     content = "📄 Aucun document trouvé"
-                
-                logger.info(f"📄 List documents: {result.get('count', 0)} found")
-
-    
-
-            elif name == "add_win":
-                title = args.get("title")
-                category = args.get("category", "personal")
-                celebration_emoji = args.get("celebration_emoji", "🎉")
-                notes = args.get("notes", "")
-                
-                result = await add_win(user_id, title, category, celebration_emoji, notes)
-                if result.get("success"):
-                    content = f"✅ {result.get('message')}"
-                else:
-                    content = f"❌ {result.get('error')}"
-                logger.info(f"🏆 Add win: {title}")
-
-            elif name == "get_document":
-                doc_id = args.get("document_id")
-                doc_name = args.get("name")
-                
-                if doc_id:
-                    result = db_query("documents", {"id": doc_id, "user_id": user_id}, limit=1)
-                elif doc_name:
-                    result = db_query("documents", {"user_id": user_id}, limit=20)
-                    if result.get("success") and result.get("data"):
-                        # Chercher par nom approximatif
-                        matching = [d for d in result["data"] if doc_name.lower() in d.get("name", "").lower()]
-                        if matching:
-                            result["data"] = matching[:1]
-                        else:
-                            result["data"] = []
-                else:
-                    content = "❌ Spécifie un ID ou un nom de document"
-                
-                if result.get("success") and result.get("data"):
-                    doc = result["data"][0]
-                    content = f"""📄 **{doc.get('name')}**
             
-            📂 Type: {doc.get('type')}
-            📌 Statut: {doc.get('status')}
-            📅 Échéance: {doc.get('due_date', 'Non définie')}
-            🕐 Créé le: {doc.get('created_at', 'N/A')[:10]}
-            
-            📝 Notes: {doc.get('notes', 'Aucune')}
-            
-            🔗 Liens:
-            • Fichier: {doc.get('file_url', 'Aucun')}
-            • URL externe: {doc.get('url', 'Aucune')}
-            
-            ---
-            💡 Tu peux me demander de modifier ce document ou d'ajouter des notes."""
-                else:
-                    content = "❌ Document non trouvé"
-
-            elif name == "add_document":
-                name = args.get("name")
-                doc_type = args.get("doc_type", "other")
-                status = args.get("status", "draft")
-                due_date = args.get("due_date")
-                url = args.get("url")
-                notes = args.get("notes", "")
-                
-                result = await add_document(user_id, name, doc_type, status, due_date, url, notes)
-                if result.get("success"):
-                    content = f"✅ {result.get('message')}"
-                else:
-                    content = f"❌ {result.get('error')}"
-                logger.info(f"📄 Add document: {name}")
-
             elif name == "add_mission":
                 name = args.get("name")
                 category = args.get("category", "business")
                 priority = args.get("priority", "normal")
-                status = args.get("status", "idea")
-                deadline = args.get("deadline")
-                revenue_potential = args.get("revenue_potential", 3)
-                notes = args.get("notes", "")
                 
-                result = await add_mission(user_id, name, category, priority, status, deadline, revenue_potential, notes)
+                result = await add_mission(user_id, name, category, priority)
                 if result.get("success"):
                     content = f"✅ {result.get('message')}"
                 else:
                     content = f"❌ {result.get('error')}"
                 logger.info(f"🎯 Add mission: {name}")
-
+            
             elif name == "add_spending":
                 title = args.get("title")
                 amount = args.get("amount")
                 category = args.get("category", "other")
-                project = args.get("project")
-                date = args.get("date")
-                notes = args.get("notes", "")
                 
-                result = await add_spending(user_id, title, amount, category, project, date, notes)
+                result = await add_spending(user_id, title, amount, category)
                 if result.get("success"):
                     content = f"✅ {result.get('message')}"
                 else:
                     content = f"❌ {result.get('error')}"
                 logger.info(f"💰 Add spending: {amount} CFA - {title}")
+            
+            elif name == "add_revenue":
+                source = args.get("source")
+                amount = args.get("amount")
                 
-            elif name == "write_to_table":
-                target_table = args.pop("table")
-                result = await db_insert(target_table, args)
-                if result["success"]:
-                    content = f"✅ Enregistrement réussi dans {target_table}"
+                result = await add_revenue(user_id, source, amount)
+                if result.get("success"):
+                    content = f"✅ {result.get('message')}"
                 else:
-                    content = f"❌ Erreur: {result.get('error', 'inconnue')}"
-                logger.info(f"✍️ Écriture dans {target_table}: {result['success']}")
-
-
+                    content = f"❌ {result.get('error')}"
+                logger.info(f"💰 Add revenue: {amount} CFA - {source}")
+            
+            elif name == "add_win":
+                title = args.get("title")
+                
+                result = await add_win(user_id, title)
+                if result.get("success"):
+                    content = f"✅ {result.get('message')}"
+                else:
+                    content = f"❌ {result.get('error')}"
+                logger.info(f"🏆 Add win: {title}")
+            
             elif name == "add_family_event":
                 title = args.get("title")
                 child_name = args.get("child_name")
-                category = args.get("category", "routine")
-                date = args.get("date")
-                priority = args.get("priority", "normal")
-                notes = args.get("notes", "")
                 
-                result = await add_family_event(user_id, title, child_name, category, date, priority, notes)
+                result = await add_family_event(user_id, title, child_name)
                 if result.get("success"):
                     content = f"✅ {result.get('message')}"
                 else:
                     content = f"❌ {result.get('error')}"
                 logger.info(f"📅 Add family event: {title}")
-                
+            
             elif name == "add_child":
                 name = args.get("name")
-                nickname = args.get("nickname", "")
-                birthday = args.get("birthday")
-                notes = args.get("notes", "")
                 
-                result = await add_child_to_profile(user_id, name, nickname, birthday, notes)
+                result = await add_child_to_profile(user_id, name)
                 if result.get("success"):
                     content = f"✅ {result.get('message')}"
                 else:
                     content = f"❌ {result.get('error')}"
                 logger.info(f"👶 Add child: {name}")
-
+            
             elif name == "update_profile":
                 field = args.get("field")
                 value = args.get("value")
-                
-                # Parser la valeur si c'est du JSON
-                if field in ["children", "projects", "current_goals"]:
-                    try:
-                        value = json.loads(value)
-                    except:
-                        pass
                 
                 result = await update_user_profile_field(user_id, field, value)
                 if result.get("success"):
                     content = f"✅ {result.get('message')}"
                 else:
                     content = f"❌ {result.get('error')}"
-                logger.info(f"👤 Update profile: {field} -> {value[:50] if isinstance(value, str) else value}")
-                
-            elif name == "get_financial_summary":
-                result = get_financial_summary(user_id)
-                content = json.dumps(result, ensure_ascii=False)
-                logger.info(f"💰 Résumé financier: {result['net_balance']} XOF")
-                
-            elif name == "get_priority_tasks":
-                result = get_priority_tasks(args.get("limit", 10), user_id=user_id)
-                content = json.dumps(result, ensure_ascii=False)
-                logger.info(f"📋 Tâches prioritaires: {len(result)}")
-
+                logger.info(f"👤 Update profile: {field}")
+            
             elif name == "whatsapp_send_reply":
                 to = args.get("to", "")
                 message = args.get("message", "")
-                message_id = args.get("message_id")
                 
-                # AJOUTE CE LOG POUR DEBUG
-                logger.info(f"📱 whatsapp_send_reply appelé avec to={to}, message={message}")
+                if not to.endswith("@c.us"):
+                    to = to + "@c.us"
                 
-                if not to or not message:
-                    content = "❌ Destinataire ou message manquant"
+                result = await whatsapp_send_message(to, message)
+                if result:
+                    content = f"✅ Message WhatsApp envoyé à {to}"
                 else:
-                    # S'assurer que le numéro a le bon format
-                    if not to.endswith("@c.us"):
-                        if to.startswith("+"):
-                            to = to[1:] + "@c.us"
-                        elif not to.startswith("229"):
-                            to = "229" + to + "@c.us"
-                        else:
-                            to = to + "@c.us"
-                    
-                    logger.info(f"📱 Numéro formaté: {to}")
-                    
-                    result = await whatsapp_send_message(to, message)
-                    if result:
-                        # Marquer comme répondu
-                        if supabase:
-                            if message_id:
-                                supabase.table("whatsapp_messages").update({
-                                    "status": "replied",
-                                    "replied": True,
-                                    "response": message
-                                }).eq("id", message_id).execute()
-                            else:
-                                supabase.table("whatsapp_messages").update({
-                                    "status": "replied",
-                                    "replied": True,
-                                    "response": message
-                                }).eq("from", to).eq("status", "pending").execute()
-                        content = f"✅ Message WhatsApp envoyé à {to}"
-                    else:
-                        content = f"❌ Échec de l'envoi. Vérifie que le numéro {to} est valide."
-
-            elif name == "generate_image":
-                result = await generate_image(args)
-                if result.get("success"):
-                    image_url = result.get("image_url")
-                    revised_prompt = result.get("revised_prompt", "")
-                    content = f"![Image générée]({image_url})\n\n*{revised_prompt}*"
-                    logger.info(f"🎨 Image générée: {args['prompt'][:50]}...")
-                else:
-                    content = f"❌ Erreur: {result.get('error', 'inconnue')}"
-            
-            elif name == "save_memory":
-                result = await save_user_memory(args.get("category"), args.get("key"), args.get("value"), user_id=user_id)
-                content = f"✅ Information mémorisée: {args['key']} = {args['value']}" if result else "❌ Erreur mémoire"
-                logger.info(f"💾 Save memory: {args['key']} -> {args['value']}")
-
-            elif name == "send_email":
-                to = args.get("to", "")
-                subject = args.get("subject", "")
-                body = args.get("body", "")
-                
-                # Utiliser user_id comme clé de stockage
-                pending_emails[user_id] = {
-                    "to": to,
-                    "subject": subject,
-                    "body": body
-                }
-                
-                # Afficher l'aperçu et demander confirmation
-                preview = f"""
-            📧 **Aperçu de l'email :**
-            
-            **Destinataire:** {to}
-            **Sujet:** {subject}
-            
-            **Contenu:**
-            {body[:500]}{'...' if len(body) > 500 else ''}
-            
-            ---
-            ✏️ **Veux-tu que j'envoie cet email ?**
-            Réponds par 'oui' pour envoyer, 'non' pour annuler.
-            """
-                content = preview
-                logger.info(f"📧 Email en attente de confirmation pour {to} (user_id: {user_id})")
+                    content = f"❌ Échec de l'envoi"
+                logger.info(f"📱 WhatsApp reply to {to}")
             
             elif name == "create_task":
+                title = args.get("title")
+                priority = args.get("priority", "normal")
+                
                 result = await create_task_from_conversation(ExecuteTaskRequest(
-                    title=args.get("title"),
-                    due_date=args.get("due_date") or None,
-                    priority=args.get("priority", "normal"),
+                    title=title,
+                    priority=priority,
                     user_id=user_id
                 ))
                 if result.get("success"):
-                    content = f"✅ Tâche créée: {args['title']}"
+                    content = f"✅ Tâche créée: {title}"
                 else:
                     content = f"❌ Erreur création tâche"
-                logger.info(f"📋 Create task: {args['title']}")
+                logger.info(f"📋 Create task: {title}")
+            
+            elif name == "get_financial_summary":
+                result = get_financial_summary(user_id)
+                content = json.dumps(result, ensure_ascii=False)
             
             messages_payload.append({
                 "role": "tool",
@@ -4568,15 +4425,9 @@ async def chat_endpoint(request: ChatRequest):
         # Nettoyer les tags d'apprentissage
         learn_pattern = r'\[LEARN:([^:]+):([^:]+):([^\]]+)\]'
         matches = re.findall(learn_pattern, assistant_response)
-        
         for match in matches:
             category, original, correction = match
             logger.info(f"📚 Apprentissage: {category} - '{original}' -> '{correction}'")
-            
-            if category == "project":
-                record_user_correction(original, correction, "project_mapping")
-            elif category == "category":
-                record_user_correction(original, correction, "category_mapping")
         
         clean_response = re.sub(learn_pattern, '', assistant_response).strip()
         
@@ -4590,62 +4441,8 @@ async def chat_endpoint(request: ChatRequest):
     
     except Exception as e:
         logger.error(f"❌ Erreur chat: {e}")
-        error_str = str(e)
-
-        # SI L'ERREUR EST LIÉE À WHATSAPP, RÉESSAYER
-        if "whatsapp" in error_str.lower() or "email" in error_str.lower():
-            # Vérifier si le dernier message utilisateur demande d'envoyer un message
-            last_user_msg = request.messages[-1].get("content", "").lower() if request.messages else ""
-            
-            if "envoi" in last_user_msg and ("whatsapp" in last_user_msg or "whatsapp" in error_str.lower()):
-                # Extraire le numéro et le message - utiliser le re global
-                phone_match = re.search(r'(\+?229\s*\d{8,10})', last_user_msg)
-                if phone_match:
-                    phone = phone_match.group(1).replace(" ", "")
-                    if not phone.endswith("@c.us"):
-                        phone = phone + "@c.us"
-                    
-                    # Réessayer avec whatsapp_send_message
-                    result = await whatsapp_send_message(phone, "Bonjour !")
-                    if result:
-                        return {"reply": f"✅ J'ai bien envoyé 'Bonjour !' à {phone}"}
-                    else:
-                        return {"reply": f"❌ Je n'ai pas pu envoyer le message. Vérifie le numéro {phone}"}
-        
-        # Analyser le type d'erreur pour les emails
-        if "email" in error_str.lower() or "EmailRequest" in error_str:
-            reply = """❌ L'adresse email n'est pas valide ou il manque des informations.
-
-Pour envoyer un email, j'ai besoin de :
-1. L'adresse email du destinataire (exemple: jean@email.com)
-2. Le sujet du message
-3. Le contenu du message
-
-Peux-tu me donner ces informations ? Je préparerai l'email pour toi."""
-        elif "rate limit" in error_str.lower() or "429" in error_str:
-            reply = """⏳ L'IA est momentanément surchargée.
-
-Attends 30 secondes, puis réécris-moi ta demande. Je garde ton message en mémoire."""
-        elif "timeout" in error_str.lower() or "timed out" in error_str:
-            reply = """🌐 Le serveur met trop de temps à répondre.
-
-Peux-tu reformuler ta demande plus simplement ? Ou attends 1 minute avant de réessayer."""
-        elif "validation" in error_str.lower():
-            reply = """❌ Il manque des informations pour traiter ta demande.
-
-Dis-moi précisément ce que tu veux faire, et je te guiderai étape par étape."""
-        else:
-            reply = """❌ Je rencontre un problème technique.
-
-Peux-tu me dire exactement ce que tu voulais faire ? Je vais t'aider autrement.
-
-Par exemple :
-- "Envoie un email à Jean pour le devis"
-- "Crée une tâche pour la ferme"
-- "Ajoute une dépense de 5000 CFA" """
-
-        return {"reply": reply, "error_type": type(e).__name__, "error_message": error_str[:200]}
-
+        reply = "❌ Je rencontre un problème technique. Peux-tu reformuler ta demande ?"
+        return {"reply": reply, "error_type": type(e).__name__, "error_message": str(e)[:200]}
 # =====================================================
 # API ROUTES - SPECIALIZED (EXISTANT)
 # =====================================================
