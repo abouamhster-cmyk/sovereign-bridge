@@ -3858,6 +3858,22 @@ async def chat_endpoint(request: ChatRequest):
                     content = f"❌ {result.get('error')}"
                 logger.info(f"🏆 Add win: {title}")
 
+            elif name == "add_mission":
+                name = args.get("name")
+                category = args.get("category", "business")
+                priority = args.get("priority", "normal")
+                status = args.get("status", "idea")
+                deadline = args.get("deadline")
+                revenue_potential = args.get("revenue_potential", 3)
+                notes = args.get("notes", "")
+                
+                result = await add_mission(user_id, name, category, priority, status, deadline, revenue_potential, notes)
+                if result.get("success"):
+                    content = f"✅ {result.get('message')}"
+                else:
+                    content = f"❌ {result.get('error')}"
+                logger.info(f"🎯 Add mission: {name}")
+
             elif name == "add_spending":
                 title = args.get("title")
                 amount = args.get("amount")
