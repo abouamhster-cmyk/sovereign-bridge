@@ -23,3 +23,7 @@ services:
         sync: false
       - key: PYTHON_VERSION
         value: 3.11.0
+      - Key: GMAIL_EMAIL
+        value: abouamhster@gmail.com  
+      - key: GMAIL_APP_PASSWORD
+        sync: true  
