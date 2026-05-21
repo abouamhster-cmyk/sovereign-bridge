@@ -2093,6 +2093,7 @@ async def run_all_reminders():
     results["opportunities"] = await opportunities_reminder()
     results["financial_weekly"] = await financial_weekly_report()
     results["family_events"] = await family_events_reminder()
+    results["evening_comms"] = await send_evening_comms_reminder() 
     
     total_count = 0
     for key, value in results.items():
@@ -6875,7 +6876,7 @@ async def send_morning_brief(request: Dict[str, Any] = None):
         # 2. Tâches en retard
         overdue_tasks = supabase.table("tasks").select("*").eq("user_id", user_id).lt("due_date", today).neq("status", "done").execute()
         overdue_count = len(overdue_tasks.data)
-        overdue_tasks_list = overdue_tasks.data[:3]  # Les 3 plus urgentes
+        overdue_tasks_list = overdue_tasks.data[:3]
         
         # 3. Documents proches de l'échéance (7 jours)
         next_week = (datetime.now().date() + timedelta(days=7)).isoformat()
@@ -6895,7 +6896,7 @@ async def send_morning_brief(request: Dict[str, Any] = None):
         
         # 6. Humeur d'hier
         yesterday = (datetime.now().date() - timedelta(days=1)).isoformat()
-        yesterday_mood = supabase.table("mood_entries").select("mood").eq("user_id", user_id).eq("date", yesterday).eq("user_id", user_id).execute()
+        yesterday_mood = supabase.table("mood_entries").select("mood").eq("user_id", user_id).eq("date", yesterday).execute()
         yesterday_mood_value = yesterday_mood.data[0]["mood"] if yesterday_mood.data else None
         
         # 7. Prochain événement familial
@@ -6920,10 +6921,22 @@ async def send_morning_brief(request: Dict[str, Any] = None):
         
         # 11. Budget restant
         total_revenue = supabase.table("revenue").select("amount").eq("user_id", user_id).execute()
-        total_spending = supabase.table("spending").eq("user_id", user_id).select("amount").execute()
+        total_spending = supabase.table("spending").select("amount").eq("user_id", user_id).execute()
         revenue_sum = sum(r.get("amount", 0) for r in total_revenue.data)
         spending_sum = sum(s.get("amount", 0) for s in total_spending.data)
         balance = revenue_sum - spending_sum
+        
+        # ========== 12. COMMUNICATIONS EN ATTENTE (NOUVEAU) ==========
+        comms = await get_comms_summary(user_id)
+        comms_data = comms.get("data", {})
+        whatsapp_pending = comms_data.get("whatsapp", [])
+        emails_pending = comms_data.get("emails", [])
+        urgent_comms_count = comms_data.get("urgent_count", 0)
+        total_comms_pending = len(whatsapp_pending) + len(emails_pending)
+        
+        # Extraire les plus urgents pour le prompt
+        urgent_whatsapp = [w for w in whatsapp_pending if w.get("is_urgent", False)][:2]
+        urgent_emails = [e for e in emails_pending if e.get("is_urgent", False)][:2]
         
         # ========== GÉNÉRATION PAR IA ==========
         
@@ -6944,11 +6957,20 @@ CONTEXTE DU JOUR :
 - Anniversaire aujourd'hui : {birthday_today if birthday_today else "Non"}
 - Solde financier : {balance:,.0f} CFA
 
+COMMUNICATIONS EN ATTENTE :
+- Messages WhatsApp non répondus : {len(whatsapp_pending)} ({urgent_comms_count} urgent(s))
+- Emails non lus : {len(emails_pending)}
+- Total communications en attente : {total_comms_pending}
+
+URGENTS À TRAITER :
+- WhatsApp : {[w["from"] for w in urgent_whatsapp]}
+- Emails : {[e["from"].split('<')[0].strip() for e in urgent_emails]}
+
 Génère un message structuré avec :
 
 1. Une salutation adaptée à l'heure (naturelle, pas "Bonjour" systématique)
 2. Une phrase sur son état de la veille (bienveillante)
-3. Un résumé des priorités du jour (basé sur les tâches et missions)
+3. Un résumé des priorités du jour (basé sur les tâches, missions ET communications urgentes)
 4. Un conseil ou une citation inspirante qui a du SENS avec sa situation (pas générique)
 5. Une question ouverte pour l'engager
 
@@ -6979,13 +7001,33 @@ Retourne UNIQUEMENT du JSON :
         if balance < 0:
             financial_message = f"\n\n💰 Solde négatif de {abs(balance):,.0f} CFA. Une petite action aujourd'hui peut inverser la tendance."
         
+        # ========== SECTION COMMUNICATIONS (NOUVEAU) ==========
+        comms_section = ""
+        if total_comms_pending > 0:
+            comms_section = "\n\n📱 **Messages en attente :**\n"
+            if urgent_comms_count > 0:
+                comms_section += f"⚠️ {urgent_comms_count} message(s) urgent(s)\n"
+            
+            # Afficher les 2 plus urgents de chaque catégorie
+            for w in urgent_whatsapp[:2]:
+                comms_section += f"   • WhatsApp - {w['from']}: {w['message'][:40]}...\n"
+            for e in urgent_emails[:2]:
+                from_clean = e['from'].split('<')[0].strip()
+                comms_section += f"   • Email - {from_clean}: {e['subject'][:40]}\n"
+            
+            if total_comms_pending > len(urgent_whatsapp) + len(urgent_emails):
+                remaining = total_comms_pending - (len(urgent_whatsapp) + len(urgent_emails))
+                comms_section += f"   • et {remaining} autre(s) message(s)\n"
+            
+            comms_section += "\n👉 Dis-moi 'fais le point' pour voir les détails et répondre."
+        
         message = f"""{ai_content.get("greeting")} {user_name}.
 
 {ai_content.get("mood_message")}
 
 {ai_content.get("priorities_summary")}
 {birthday_message}
-{financial_message}
+{financial_message}{comms_section}
 
 💡 {ai_content.get("wisdom")}
 
@@ -7013,7 +7055,7 @@ Je suis là. 💖"""
         try:
             send_notification_sync({
                 "title": f"🌅 {user_name}",
-                "body": ai_content.get("priorities_summary", "Bonne journée !")[:80],
+                "body": f"{ai_content.get('priorities_summary', 'Bonne journée !')[:60]} | {total_comms_pending} message(s) en attente",
                 "url": "/",
                 "type": "brief",
                 "user_id": user_id
@@ -7030,7 +7072,9 @@ Je suis là. 💖"""
                 "overdue_tasks": overdue_count,
                 "active_missions": missions_count,
                 "recent_wins": wins_count,
-                "balance": balance
+                "balance": balance,
+                "pending_comms": total_comms_pending,
+                "urgent_comms": urgent_comms_count
             },
             "email_sent": email_sent,
             "push_sent": push_sent
@@ -7038,6 +7082,147 @@ Je suis là. 💖"""
         
     except Exception as e:
         logger.error(f"Erreur résumé matinal: {e}")
+        return {"success": False, "error": str(e)}
+
+
+
+@app.post("/api/proactive/evening-comms-reminder")
+async def send_evening_comms_reminder(request: Dict[str, Any] = None):
+    """
+    Envoie un rappel des communications non traitées le soir.
+    À appeler par cron-job.org entre 19h et 21h.
+    """
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        user_id = get_request_user_id(request or {})
+        now = datetime.now()
+        today = now.date().isoformat()
+        hour = now.hour
+        
+        # Vérifier si c'est l'heure (19h-21h)
+        if not (19 <= hour <= 21):
+            return {"success": True, "sent": False, "message": "Pas l'heure du rappel du soir"}
+        
+        # Vérifier si déjà envoyé aujourd'hui
+        existing = supabase.table("notifications_log").select("*")\
+            .eq("type", "evening_comms")\
+            .eq("date", today)\
+            .eq("user_id", user_id)\
+            .execute()
+        
+        if existing.data:
+            return {"success": True, "sent": False, "message": "Déjà envoyé ce soir"}
+        
+        # ========== RÉCUPÉRER LES COMMUNICATIONS ==========
+        comms = await get_comms_summary(user_id)
+        comms_data = comms.get("data", {})
+        whatsapp_list = comms_data.get("whatsapp", [])
+        emails_list = comms_data.get("emails", [])
+        urgent_count = comms_data.get("urgent_count", 0)
+        total_pending = comms_data.get("total_pending", 0)
+        
+        # Récupérer le nom de l'utilisateur
+        profile = supabase.table("user_profile").select("preferred_name").eq("user_id", user_id).execute()
+        user_name = profile.data[0].get("preferred_name", "Rebecca") if profile.data else "Rebecca"
+        
+        # ========== CONSTRUIRE LE MESSAGE ==========
+        if total_pending == 0:
+            message = f"🌙 Bonsoir {user_name}.\n\n✅ Aucun message en attente. Tu es à jour !\n\nRepose-toi bien. 👑"
+        else:
+            # Construire le message
+            message = f"🌙 Bonsoir {user_name}.\n\n"
+            message += f"📊 **Bilan de la journée :**\n"
+            
+            if urgent_count > 0:
+                message += f"⚠️ **{urgent_count} message(s) urgent(s) en attente**\n\n"
+            
+            if whatsapp_list:
+                message += f"📱 **WhatsApp ({len(whatsapp_list)} non répondus)**\n"
+                for w in whatsapp_list[:5]:
+                    urgency = "⚠️ " if w["is_urgent"] else "   "
+                    message += f"{urgency}• {w['from']}: {w['message'][:50]}...\n"
+                if len(whatsapp_list) > 5:
+                    message += f"   ... et {len(whatsapp_list) - 5} autre(s)\n"
+                message += "\n"
+            
+            if emails_list:
+                message += f"📧 **Emails ({len(emails_list)} non lus)**\n"
+                for e in emails_list[:5]:
+                    urgency = "⚠️ " if e["is_urgent"] else "   "
+                    from_clean = e['from'].split('<')[0].strip()
+                    message += f"{urgency}• {from_clean}: {e['subject']}\n"
+                if len(emails_list) > 5:
+                    message += f"   ... et {len(emails_list) - 5} autre(s)\n"
+                message += "\n"
+            
+            message += f"💡 **Demain matin**, je te rappellerai les priorités.\n"
+            message += f"📱 Dis-moi 'fais le point' pour répondre maintenant.\n\n"
+            message += f"Bonne nuit, {user_name}. 👑"
+        
+        # ========== ENVOI EMAIL ==========
+        email_sent = False
+        if BREVO_API_KEY:
+            try:
+                user_email = "jbillcataria@gmail.com"  # À remplacer par l'email de l'utilisateur
+                email_body = message.replace("\n", "<br>")
+                await send_email(EmailRequest(
+                    to=user_email,
+                    subject=f"🌙 {user_name} - Bilan du {now.strftime('%d/%m/%Y')}",
+                    body=email_body
+                ))
+                email_sent = True
+                logger.info("📧 Email bilan du soir envoyé")
+            except Exception as e:
+                logger.error(f"Erreur envoi email soir: {e}")
+        
+        # ========== ENVOI NOTIFICATION PUSH ==========
+        push_sent = False
+        try:
+            send_notification_sync({
+                "title": f"🌙 {user_name}",
+                "body": f"{total_pending} message(s) en attente dont {urgent_count} urgent(s)",
+                "url": "/chat",
+                "type": "evening_comms",
+                "user_id": user_id,
+                "requireInteraction": urgent_count > 0
+            })
+            push_sent = True
+            logger.info("🔔 Notification push bilan du soir envoyée")
+        except Exception as e:
+            logger.error(f"Erreur envoi push soir: {e}")
+        
+        # Logger l'envoi
+        supabase.table("notifications_log").insert({
+            "type": "evening_comms",
+            "date": today,
+            "user_id": user_id,
+            "sent_at": now.isoformat(),
+            "metadata": {
+                "total_pending": total_pending,
+                "urgent_count": urgent_count,
+                "whatsapp_count": len(whatsapp_list),
+                "emails_count": len(emails_list)
+            }
+        }).execute()
+        
+        return {
+            "success": True,
+            "sent": True,
+            "message": message,
+            "stats": {
+                "total_pending": total_pending,
+                "urgent_count": urgent_count,
+                "whatsapp": len(whatsapp_list),
+                "emails": len(emails_list)
+            },
+            "email_sent": email_sent,
+            "push_sent": push_sent
+        }
+        
+    except Exception as e:
+        logger.error(f"Erreur evening_comms_reminder: {e}")
         return {"success": False, "error": str(e)}
 
 # =====================================================
