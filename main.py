@@ -11758,7 +11758,371 @@ Retourne UNIQUEMENT du JSON : {{"message": "..."}}"""
     except Exception as e:
         logger.error(f"Erreur résumé soir: {e}")
         return {"success": False, "error": str(e)}
-          
+
+
+
+
+
+
+# =====================================================
+# VOCAL LIVE - WEBSOCKET (conversation en temps réel)
+# =====================================================
+
+from fastapi import WebSocket, WebSocketDisconnect
+import asyncio
+import tempfile
+
+class VoiceConnectionManager:
+    """Gère les connexions WebSocket pour le vocal en temps réel"""
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+        self.user_sessions: Dict[str, dict] = {}
+    
+    async def connect(self, websocket: WebSocket, user_id: str):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+        self.user_sessions[user_id] = {
+            "websocket": websocket,
+            "conversation_history": [],
+            "listening": True,
+            "user_id": user_id
+        }
+        logger.info(f"🎤 Connexion vocale établie pour {user_id}")
+    
+    def disconnect(self, websocket: WebSocket, user_id: str):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+        if user_id in self.user_sessions:
+            del self.user_sessions[user_id]
+        logger.info(f"🔌 Déconnexion vocale pour {user_id}")
+    
+    async def send_audio(self, user_id: str, audio_base64: str):
+        """Envoie un audio au client"""
+        if user_id in self.user_sessions:
+            try:
+                await self.user_sessions[user_id]["websocket"].send_json({
+                    "type": "audio",
+                    "data": audio_base64
+                })
+            except Exception as e:
+                logger.error(f"Erreur envoi audio à {user_id}: {e}")
+    
+    async def send_text(self, user_id: str, text: str):
+        """Envoie du texte au client (affichage)"""
+        if user_id in self.user_sessions:
+            try:
+                await self.user_sessions[user_id]["websocket"].send_json({
+                    "type": "text",
+                    "content": text
+                })
+            except Exception as e:
+                logger.error(f"Erreur envoi texte à {user_id}: {e}")
+    
+    async def send_thinking(self, user_id: str, is_thinking: bool):
+        """Indique que l'IA réfléchit"""
+        if user_id in self.user_sessions:
+            try:
+                await self.user_sessions[user_id]["websocket"].send_json({
+                    "type": "thinking",
+                    "status": is_thinking
+                })
+            except Exception as e:
+                logger.error(f"Erreur envoi thinking à {user_id}: {e}")
+
+# Instance globale du gestionnaire
+voice_manager = VoiceConnectionManager()
+
+
+async def transcribe_audio_base64(audio_base64: str) -> str:
+    """Transcrit un audio base64 avec Whisper"""
+    if not audio_base64:
+        return ""
+    
+    try:
+        import base64
+        audio_bytes = base64.b64decode(audio_base64)
+        
+        with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp:
+            tmp.write(audio_bytes)
+            tmp_path = tmp.name
+        
+        with open(tmp_path, "rb") as audio_file:
+            transcript = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file,
+                language="fr"
+            )
+        
+        os.unlink(tmp_path)
+        return transcript.text.strip()
+    except Exception as e:
+        logger.error(f"Erreur transcription audio: {e}")
+        return ""
+
+
+async def text_to_speech_live(text: str) -> str:
+    """Convertit un texte en audio base64 pour le live (rapide)"""
+    if not text:
+        return None
+    
+    # Nettoyer le texte des balises
+    clean_text = re.sub(r'\[ACTION:[^\]]*\]', '', text)
+    clean_text = re.sub(r'\*\*.*?\*\*', '', clean_text)
+    clean_text = re.sub(r'[✅🎯✨⚠️📋🎉]', '', clean_text)
+    clean_text = ' '.join(clean_text.split())
+    
+    if len(clean_text) > 500:
+        clean_text = clean_text[:500]
+    
+    # Priorité à Deepgram (plus rapide pour le live)
+    if DEEPGRAM_API_KEY:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(
+                    f"https://api.deepgram.com/v1/speak?model=aura-2-athena-en",
+                    headers={
+                        "Authorization": f"Token {DEEPGRAM_API_KEY}",
+                        "Content-Type": "application/json"
+                    },
+                    json={"text": clean_text}
+                )
+                
+                if response.status_code == 200:
+                    import base64
+                    return base64.b64encode(response.content).decode('utf-8')
+        except Exception as e:
+            logger.error(f"Erreur Deepgram live: {e}")
+    
+    # Fallback vers ElevenLabs
+    if ELEVENLABS_API_KEY:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(
+                    f"https://api.elevenlabs.io/v1/text-to-speech/{DEFAULT_VOICE_ID}",
+                    headers={
+                        "xi-api-key": ELEVENLABS_API_KEY,
+                        "Content-Type": "application/json",
+                        "Accept": "audio/mpeg"
+                    },
+                    json={
+                        "text": clean_text,
+                        "model_id": "eleven_multilingual_v2",
+                        "voice_settings": {
+                            "stability": 0.35,
+                            "similarity_boost": 0.75
+                        }
+                    }
+                )
+                
+                if response.status_code == 200:
+                    import base64
+                    return base64.b64encode(response.content).decode('utf-8')
+        except Exception as e:
+            logger.error(f"Erreur ElevenLabs live: {e}")
+    
+    # Fallback vers Edge TTS (gratuit)
+    try:
+        import urllib.parse
+        encoded_text = urllib.parse.quote(clean_text)
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            response = await client.get(
+                f"https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=6A5AA1D4EAFF4E9FB37E23D68491D6F4&Voice=fr-FR-DeniseNeural&Text={encoded_text}"
+            )
+            if response.status_code == 200:
+                import base64
+                return base64.b64encode(response.content).decode('utf-8')
+    except Exception as e:
+        logger.error(f"Erreur Edge TTS live: {e}")
+    
+    return None
+
+
+async def get_ai_response_live(user_id: str, user_message: str) -> str:
+    """Appelle GPT-4o avec le contexte de la conversation"""
+    session = voice_manager.user_sessions.get(user_id, {})
+    history = session.get("conversation_history", [])
+    
+    # Récupérer le contexte mémoire
+    memory_context = await get_user_memory_context(user_id)
+    profile_context = await get_profile_context(user_id=user_id)
+    
+    # Construire le système prompt
+    system_prompt = BASE_SYSTEM_PROMPT
+    if memory_context:
+        system_prompt += memory_context
+    if profile_context:
+        system_prompt += f"\n\n# PROFIL: {profile_context}"
+    
+    # Instructions pour le mode vocal
+    system_prompt += """
+    
+# MODE VOCAL EN TEMPS RÉEL
+- Réponds de manière CONCISE (max 2-3 phrases si possible)
+- Sois naturelle, comme dans une conversation téléphonique
+- N'utilise PAS de listes ou de formatage complexe
+- Évite les émojis
+- Vas droit au but
+    
+    """
+    
+    messages = [
+        {"role": "system", "content": system_prompt},
+        *history[-10:],  # Derniers 10 messages de la session
+        {"role": "user", "content": user_message}
+    ]
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages,
+            max_tokens=300,  # Réponses courtes pour le vocal
+            temperature=0.7
+        )
+        
+        assistant_response = response.choices[0].message.content
+        
+        # Nettoyer la réponse
+        assistant_response = re.sub(r'\[ACTION:[^\]]*\]', '', assistant_response)
+        assistant_response = assistant_response.strip()
+        
+        # Mettre à jour l'historique de la session
+        history.append({"role": "user", "content": user_message})
+        history.append({"role": "assistant", "content": assistant_response})
+        session["conversation_history"] = history[-20:]  # Garder 20 messages max
+        voice_manager.user_sessions[user_id] = session
+        
+        # Stocker aussi dans Supabase pour persistance
+        store_chat_session(user_message, assistant_response, ["voice_live"], user_id)
+        
+        return assistant_response
+        
+    except Exception as e:
+        logger.error(f"Erreur AI live: {e}")
+        return "Désolée, j'ai un petit problème technique. Tu peux reformuler ?"
+
+
+@app.websocket("/ws/voice/{user_id}")
+async def voice_websocket(websocket: WebSocket, user_id: str):
+    """
+    WebSocket pour conversation vocale en temps réel.
+    Utilisation: ws://server/ws/voice/{user_id}
+    """
+    await voice_manager.connect(websocket, user_id)
+    
+    # Message de bienvenue vocal
+    try:
+        welcome_text = "Bonjour, je suis là. Parle-moi quand tu veux."
+        welcome_audio = await text_to_speech_live(welcome_text)
+        if welcome_audio:
+            await voice_manager.send_audio(user_id, welcome_audio)
+        await voice_manager.send_text(user_id, welcome_text)
+    except Exception as e:
+        logger.error(f"Erreur welcome message: {e}")
+    
+    try:
+        while True:
+            # Recevoir les données du client
+            data = await websocket.receive_json()
+            
+            if data.get("type") == "audio_chunk":
+                # Audio envoyé par le client
+                audio_base64 = data.get("audio", "")
+                is_final = data.get("is_final", False)
+                
+                if not audio_base64:
+                    continue
+                
+                # Transcrire l'audio
+                transcript = await transcribe_audio_base64(audio_base64)
+                
+                if transcript and len(transcript.strip()) > 5:
+                    logger.info(f"🎤 [{user_id}] User said: {transcript}")
+                    
+                    # Envoyer un indicateur "réflexion"
+                    await voice_manager.send_thinking(user_id, True)
+                    
+                    # Appeler GPT-4o
+                    response_text = await get_ai_response_live(user_id, transcript)
+                    
+                    logger.info(f"🤖 [{user_id}] Becks said: {response_text[:100]}...")
+                    
+                    # Convertir la réponse en audio
+                    response_audio = await text_to_speech_live(response_text)
+                    
+                    # Envoyer l'audio au client
+                    if response_audio:
+                        await voice_manager.send_audio(user_id, response_audio)
+                    
+                    # Envoyer aussi le texte (pour l'affichage)
+                    await voice_manager.send_text(user_id, response_text)
+                    
+                    # Fin de réflexion
+                    await voice_manager.send_thinking(user_id, False)
+            
+            elif data.get("type") == "wake_word":
+                # Détection du wake word "Hey Sovereign"
+                logger.info(f"🎤 Wake word détecté pour {user_id}")
+                await websocket.send_json({"type": "ready", "message": "Je t'écoute..."})
+                
+                # Réponse vocale de confirmation
+                confirm_text = "Je t'écoute"
+                confirm_audio = await text_to_speech_live(confirm_text)
+                if confirm_audio:
+                    await voice_manager.send_audio(user_id, confirm_audio)
+            
+            elif data.get("type") == "ping":
+                # Keep-alive
+                await websocket.send_json({"type": "pong"})
+            
+            elif data.get("type") == "reset_conversation":
+                # Réinitialiser l'historique de la conversation
+                if user_id in voice_manager.user_sessions:
+                    voice_manager.user_sessions[user_id]["conversation_history"] = []
+                    await websocket.send_json({"type": "reset_ok", "message": "Conversation réinitialisée"})
+                    logger.info(f"🔄 Conversation réinitialisée pour {user_id}")
+    
+    except WebSocketDisconnect:
+        voice_manager.disconnect(websocket, user_id)
+        logger.info(f"🔌 WebSocket déconnecté pour {user_id}")
+    
+    except Exception as e:
+        logger.error(f"❌ Erreur WebSocket pour {user_id}: {e}")
+        voice_manager.disconnect(websocket, user_id)
+
+
+# =====================================================
+# ENDPOINT DE TEST POUR LE VOCAL LIVE
+# =====================================================
+
+@app.post("/api/voice/live/test")
+async def test_voice_live(request: Dict[str, Any]):
+    """Test simple de la transcription + TTS"""
+    text = request.get("text", "")
+    if not text:
+        return {"success": False, "error": "Texte requis"}
+    
+    # Tester la TTS
+    audio = await text_to_speech_live(text)
+    
+    return {
+        "success": True,
+        "text": text,
+        "audio_generated": audio is not None,
+        "audio_length": len(audio) if audio else 0
+    }
+
+
+@app.get("/api/voice/live/status")
+async def voice_live_status():
+    """Vérifie l'état du service vocal"""
+    return {
+        "success": True,
+        "active_connections": len(voice_manager.active_connections),
+        "active_sessions": len(voice_manager.user_sessions),
+        "deepgram_available": DEEPGRAM_API_KEY is not None,
+        "elevenlabs_available": ELEVENLABS_API_KEY is not None
+    }
+    
 @app.get("/api/comms/test")
 async def test_comms_summary(user_id: Optional[str] = None):
     """Endpoint de test pour voir le résumé brut"""
