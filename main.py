@@ -685,10 +685,6 @@ def normalize_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
-
-
-
 # =====================================================
 # ENVIRONMENT VARIABLES & CLIENTS
 # =====================================================
@@ -705,6 +701,11 @@ GREENAPI_BASE_URL = f"https://api.green-api.com/waInstance{GREENAPI_ID_INSTANCE}
 # Configuration Gmail
 GMAIL_SERVICE_ACCOUNT_JSON = os.environ.get("GMAIL_SERVICE_ACCOUNT_JSON")
 GMAIL_USER_ID = os.environ.get("GMAIL_USER_ID", "me")
+# Configuration Gmail IMAP
+GMAIL_EMAIL = os.environ.get("GMAIL_EMAIL", "abouamhster@gmail.com")
+GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD")  # Le mot de passe d'application
+
+
 
 
 # Debug GreenAPI
@@ -10844,13 +10845,6 @@ async def mark_gmail_as_read(message_id: str):
 
 
 
-
-
-
-# Configuration Gmail IMAP
-GMAIL_EMAIL = os.environ.get("GMAIL_EMAIL", "abouamhster@gmail.com")
-GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD")  # Le mot de passe d'application
-
 async def get_gmail_messages_imap(limit: int = 10):
     """Récupère les emails via IMAP"""
     if not GMAIL_APP_PASSWORD:
@@ -10861,68 +10855,67 @@ async def get_gmail_messages_imap(limit: int = 10):
         mail.login(GMAIL_EMAIL, GMAIL_APP_PASSWORD)
         mail.select("INBOX")
         
-        # Rechercher les emails non lus UNSEEN
         status, messages = mail.search(None, 'UNSEEN')
         
         if status != 'OK':
             return {"success": True, "messages": [], "count": 0}
         
         email_ids = messages[0].split()
-        # Limiter aux plus récents (inverser l'ordre)
         email_ids = email_ids[-limit:] if len(email_ids) > limit else email_ids
         
         emails = []
         for e_id in reversed(email_ids):
-            status, msg_data = mail.fetch(e_id, '(RFC822)')
-            for response_part in msg_data:
-                if isinstance(response_part, tuple):
-                    msg = email.message_from_bytes(response_part[1])
-                    
-                    # Décoder l'expéditeur correctement
-                    from_addr = msg.get("From", "Inconnu")
-                    try:
-                        decoded = decode_header(from_addr)[0]
-                        if isinstance(decoded[0], bytes):
-                            from_addr = decoded[0].decode(decoded[1] or 'utf-8', errors='ignore')
-                        else:
-                            from_addr = decoded[0]
-                    except:
-                        pass
-                    
-                    # Décoder le sujet
-                    subject = msg.get("Subject", "Sans sujet")
-                    try:
-                        decoded_subj = decode_header(subject)[0]
-                        if isinstance(decoded_subj[0], bytes):
-                            subject = decoded_subj[0].decode(decoded_subj[1] or 'utf-8', errors='ignore')
-                        else:
-                            subject = decoded_subj[0]
-                    except:
-                        pass
-                    
-                    # Extraire le corps (version simplifiée)
-                    body = ""
-                    if msg.is_multipart():
-                        for part in msg.walk():
-                            if part.get_content_type() == "text/plain":
-                                try:
-                                    body = part.get_payload(decode=True).decode('utf-8', errors='ignore')[:200]
-                                    break
-                                except:
-                                    body = "[Contenu non disponible]"
-                    else:
+            try:
+                status, msg_data = mail.fetch(e_id, '(RFC822)')
+                for response_part in msg_data:
+                    if isinstance(response_part, tuple):
+                        msg = email.message_from_bytes(response_part[1])
+                        
+                        from_addr = msg.get("From", "Inconnu")
                         try:
-                            body = msg.get_payload(decode=True).decode('utf-8', errors='ignore')[:200]
+                            decoded = decode_header(from_addr)[0]
+                            if isinstance(decoded[0], bytes):
+                                from_addr = decoded[0].decode(decoded[1] or 'utf-8', errors='ignore')
+                            else:
+                                from_addr = decoded[0]
                         except:
-                            body = "[Contenu non disponible]"
-                    
-                    emails.append({
-                        "id": e_id.decode(),
-                        "from": from_addr,
-                        "subject": subject,
-                        "snippet": body,
-                        "date": msg.get("Date", "Date inconnue")
-                    })
+                            pass
+                        
+                        subject = msg.get("Subject", "Sans sujet")
+                        try:
+                            decoded_subj = decode_header(subject)[0]
+                            if isinstance(decoded_subj[0], bytes):
+                                subject = decoded_subj[0].decode(decoded_subj[1] or 'utf-8', errors='ignore')
+                            else:
+                                subject = decoded_subj[0]
+                        except:
+                            pass
+                        
+                        body = ""
+                        if msg.is_multipart():
+                            for part in msg.walk():
+                                if part.get_content_type() == "text/plain":
+                                    try:
+                                        body = part.get_payload(decode=True).decode('utf-8', errors='ignore')[:200]
+                                        break
+                                    except:
+                                        body = "[Contenu non disponible]"
+                        else:
+                            try:
+                                body = msg.get_payload(decode=True).decode('utf-8', errors='ignore')[:200]
+                            except:
+                                body = "[Contenu non disponible]"
+                        
+                        emails.append({
+                            "id": e_id.decode(),
+                            "from": from_addr,
+                            "subject": subject,
+                            "snippet": body,
+                            "date": msg.get("Date", "Date inconnue")
+                        })
+            except Exception as inner_e:
+                logger.error(f"Erreur traitement email {e_id}: {inner_e}")
+                continue
         
         mail.close()
         mail.logout()
@@ -10934,12 +10927,13 @@ async def get_gmail_messages_imap(limit: int = 10):
         return {"success": False, "error": str(e), "messages": []}
 
 
+
 @app.get("/api/gmail/test")
 async def test_gmail():
     """Test la connexion Gmail"""
-    result = await get_gmail_messages_imap(5)
-    return result
-    
+    try:
+        result = await get_gmail_messages_imap(5)
+        return result
     except Exception as e:
-        logger.error(f"Erreur IMAP Gmail: {e}")
+        logger.error(f"Erreur test Gmail: {e}")
         return {"success": False, "error": str(e), "messages": []}
