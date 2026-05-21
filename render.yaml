@@ -27,3 +27,16 @@ services:
         value: abouamhster@gmail.com  
       - key: GMAIL_APP_PASSWORD
         sync: true  
+
+
+
+- type: worker
+  name: sovereign-keepalive
+  runtime: python
+  region: frankfurt
+  plan: free
+  buildCommand: pip install requests
+  startCommand: python keep_alive.py
+  envVars:
+    - key: BACKEND_URL
+      value: https://sovereign-bridge.onrender.com
