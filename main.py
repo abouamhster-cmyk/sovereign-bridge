@@ -2513,6 +2513,9 @@ Préférer des formulations humaines :
 - "Tes filles ont besoin de leur maman, ton mari a besoin de sa femme, ta famille a besoin de toi… mais toi aussi tu as besoin de toi."
 - "Si tu laisses la charge te manger la tête sans pause, ça peut finir par te faire du mal à toi et à ceux que tu aimes."
 
+
+
+
 # ============================================================
 # QUAND LA SITUATION SEMBLE GRAVE
 # ============================================================
@@ -3101,6 +3104,27 @@ alors réécris.
 BECKS doit répondre comme quelqu'un qui tient à Rebecca.
 Pas comme quelqu'un qui applique un protocole.
 
+
+# À ajouter dans BASE_SYSTEM_PROMPT
+
+# ====================================================
+# RÈGLES POUR L'AFFICHAGE DES EMAILS
+# ====================================================
+
+Quand tu affiches des emails, utilise TOUJOURS ce format :
+
+📧 **X email(s) non lu(s) :**
+
+1. **Nom de l'expéditeur**
+   📧 Sujet de l'email
+2. **Nom de l'expéditeur**
+   📧 Sujet de l'email
+
+💡 **Que faire ?**
+• Dis-moi 'ouvre l'email [numéro]' pour voir le contenu
+• Dis-moi 'réponds à l'email [numéro]' pour répondre
+
+Ne réponds JAMAIS "fais-moi signe" ou "je vais vérifier" sans afficher la liste.
 # ============================================================
 # RÈGLE FINALE
 # ============================================================
@@ -4955,6 +4979,88 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
             return {"reply": reply}
     
     # =====================================================
+    # DÉTECTION DES RÉFÉRENCES AUX EMAILS ("le dernier email", "le mail de X")
+    # =====================================================
+    email_ref_patterns = [
+        r'(?:le |l\'|le )?(dernier|premier|second|troisième|4[eè]|5[eè])(?:\s+email)?',
+        r'ouvre\s+(?:le |l\'|le )?email\s+(\d+)',
+        r'affiche\s+(?:le |l\'|le )?email\s+(\d+)',
+        r'le mail de (\w+)',
+        r'l\'email de (\w+)',
+    ]
+    
+    for pattern in email_ref_patterns:
+        match = re.search(pattern, last_message, re.IGNORECASE)
+        if match:
+            groups = match.groups()
+            email_num = None
+            email_sender = None
+            
+            for g in groups:
+                if g and g.isdigit():
+                    email_num = int(g)
+                    break
+                elif g and g.lower() in ["dernier", "premier", "second", "troisième"]:
+                    email_num = 0
+                    break
+                elif g and not g.isdigit() and len(g) > 2:
+                    email_sender = g.lower()
+                    break
+            
+            # Récupérer les emails
+            result = await get_gmail_messages(20, True)
+            if result.get("success") and result.get("messages"):
+                emails = result["messages"]
+                
+                # Si c'est par numéro
+                if email_num is not None:
+                    if email_num == 0:
+                        email_num = len(emails)
+                    elif email_num == -1:
+                        email_num = 1
+                    
+                    if 1 <= email_num <= len(emails):
+                        email = emails[email_num - 1]
+                        from_clean = email['from'].split('<')[0].strip()
+                        reply = f"📧 **Email #{email_num}**\n\n"
+                        reply += f"**De :** {from_clean}\n"
+                        reply += f"**Objet :** {email['subject']}\n"
+                        reply += f"**Date :** {email['date']}\n\n"
+                        reply += f"**Contenu :**\n{email['snippet'][:500]}"
+                        return {"reply": reply}
+                
+                # Si c'est par expéditeur
+                elif email_sender:
+                    matching_emails = []
+                    for i, e in enumerate(emails, 1):
+                        from_clean = e['from'].split('<')[0].strip().lower()
+                        if email_sender in from_clean:
+                            matching_emails.append((i, e))
+                    
+                    if matching_emails:
+                        if len(matching_emails) == 1:
+                            i, e = matching_emails[0]
+                            from_clean = e['from'].split('<')[0].strip()
+                            reply = f"📧 **Email de {email_sender}**\n\n"
+                            reply += f"**De :** {from_clean}\n"
+                            reply += f"**Objet :** {e['subject']}\n"
+                            reply += f"**Date :** {e['date']}\n\n"
+                            reply += f"**Contenu :**\n{e['snippet'][:500]}"
+                            return {"reply": reply}
+                        else:
+                            email_list = []
+                            for i, e in matching_emails[:5]:
+                                from_clean = e['from'].split('<')[0].strip()
+                                email_list.append(f"{i}. **{from_clean}**\n   📧 {e['subject']}")
+                            reply = f"📧 **{len(matching_emails)} email(s) de {email_sender} :**\n\n"
+                            reply += "\n".join(email_list)
+                            reply += "\n\n💡 Dis-moi 'ouvre l'email [numéro]' pour voir le contenu."
+                            return {"reply": reply}
+                
+                reply = f"❌ Aucun email trouvé. Tu as {len(emails)} email(s) non lu(s)."
+                return {"reply": reply}
+    
+    # =====================================================
     # CONSTRUCTION DES MESSAGES POUR L'IA
     # =====================================================
     messages_payload = []
@@ -5102,11 +5208,7 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                 item_name = args.get("name")
                 updates = args.get("updates", {})
                 
-                # Version 1 : utiliser tous les paramètres nommés
                 result = await update_item(user_id=user_id, table=table, name=item_name, updates=updates)
-                
-                # OU Version 2 : utiliser les paramètres positionnels correctement
-                # result = await update_item(user_id, table, item_name, None, updates)
                 
                 if result.get("success"):
                     content = f"✅ {result.get('message')}"
@@ -5117,7 +5219,7 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                 logger.info(f"📝 Update {table}: {item_name}")
 
             elif name == "get_emails":
-                limit = args.get("limit", 20)  # Augmenté à 20
+                limit = args.get("limit", 20)
                 unread_only = args.get("unread_only", True)
                 
                 result = await get_gmail_messages(limit, unread_only)
@@ -5128,59 +5230,69 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                     for i, e in enumerate(emails[:20], 1):
                         from_clean = e['from'].split('<')[0].strip()
                         from_clean = from_clean.replace('"', '').replace("'", '')
-                        subject_clean = e['subject'][:80]
+                        subject_clean = e['subject'][:80] if e['subject'] else "Sans sujet"
                         email_list.append(f"{i}. **{from_clean}**\n   📧 {subject_clean}")
                     
-                    # Construire la réponse COMPLÈTE
+                    # Stocker les emails dans la session
+                    if user_id not in pending_emails:
+                        pending_emails[user_id] = {}
+                    pending_emails[user_id]["last_emails"] = emails
+                    
                     content = f"📧 **{result['count']} email(s) non lu(s) :**\n\n"
                     content += "\n".join(email_list)
                     
                     if len(emails) > 20:
                         content += f"\n\n... et {len(emails) - 20} autre(s)"
                     
-                    # Ajouter les instructions claires
                     content += "\n\n💡 **Que faire ?**"
                     content += "\n• Dis-moi 'ouvre l'email [numéro]' pour voir le contenu"
                     content += "\n• Dis-moi 'réponds à l'email [numéro]' pour répondre"
-                    content += "\n• Dis-moi 'suivi Rakuten' pour un email spécifique"
-                    
                 else:
                     content = "📧 Aucun email non lu dans ta boîte."
             
+            elif name == "get_email_content":
+                email_number = args.get("email_number", 1)
+                
+                stored_emails = None
+                if user_id in pending_emails and "last_emails" in pending_emails[user_id]:
+                    stored_emails = pending_emails[user_id]["last_emails"]
+                
+                if not stored_emails:
+                    result = await get_gmail_messages(20, True)
+                    if result.get("success") and result.get("messages"):
+                        stored_emails = result["messages"]
+                    else:
+                        content = "❌ Impossible de récupérer les emails"
+                
+                if stored_emails:
+                    if 1 <= email_number <= len(stored_emails):
+                        email = stored_emails[email_number - 1]
+                        from_clean = email['from'].split('<')[0].strip()
+                        content = f"📧 **Email #{email_number}**\n\n"
+                        content += f"**De :** {from_clean}\n"
+                        content += f"**Email :** {email['from']}\n"
+                        content += f"**Objet :** {email['subject']}\n"
+                        content += f"**Date :** {email['date']}\n\n"
+                        content += f"**Contenu :**\n{email['snippet']}\n\n"
+                        content += "---\n💡 Dis-moi :\n"
+                        content += "• 'réponds à cet email' pour répondre\n"
+                        content += "• 'marque comme lu' pour l'archiver"
+                    else:
+                        content = f"❌ Email #{email_number} non trouvé. Il y a {len(stored_emails)} email(s) dans la liste."
+                else:
+                    content = "❌ Aucun email chargé. Dis d'abord 'montre-moi mes emails'."
+            
             elif name == "mark_email_read":
                 message_id = args.get("message_id")
-                
                 success = await mark_gmail_as_read(message_id)
                 if success:
                     content = f"✅ Email marqué comme lu"
                 else:
                     content = f"❌ Erreur lors du marquage"
-
-            elif name == "get_email_content":
-                email_number = args.get("email_number", 1)
-                
-                # Récupérer à nouveau les emails
-                result = await get_gmail_messages(20, True)
-                
-                if result.get("success") and result.get("messages"):
-                    emails = result["messages"]
-                    if 1 <= email_number <= len(emails):
-                        email = emails[email_number - 1]
-                        content = f"📧 **Email {email_number}**\n"
-                        content += f"**De:** {email['from']}\n"
-                        content += f"**Objet:** {email['subject']}\n"
-                        content += f"**Date:** {email['date']}\n\n"
-                        content += f"**Contenu:**\n{email['snippet']}\n\n"
-                        content += "💡 Réponds 'réponds à cet email' pour envoyer une réponse."
-                    else:
-                        content = f"❌ Email {email_number} non trouvé"
-                else:
-                    content = "❌ Impossible de récupérer les emails"
-
-             elif name == "reply_to_email":
+            
+            elif name == "reply_to_email":
                 message_id = args.get("message_id")
                 body = args.get("body")
-                
                 result = await send_gmail_reply(message_id, body)
                 if result.get("success"):
                     content = f"✅ Réponse envoyée à l'email {message_id}"
@@ -5214,13 +5326,11 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                         content += f"\n\n... et {len(docs) - 10} autre(s) document(s)"
                 else:
                     content = "📄 Aucun document trouvé"
-
             
             elif name == "add_mission":
                 name = args.get("name")
                 category = args.get("category", "business")
                 priority = args.get("priority", "normal")
-                
                 result = await add_mission(user_id, name, category, priority)
                 if result.get("success"):
                     content = f"✅ {result.get('message')}"
@@ -5238,7 +5348,6 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                 
                 logger.info(f"📄 Add document: {name}")
                 
-                # Vérifier si un document avec ce nom existe déjà
                 existing = db_query("documents", {"user_id": user_id, "name": name}, limit=1)
                 if existing.get("data"):
                     content = f"⚠️ Un document '{name}' existe déjà. Utilise 'update_document' pour le modifier."
@@ -5249,10 +5358,8 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                     else:
                         content = f"❌ Erreur: {result.get('error')}"
 
-
             elif name == "delete_task":
                 task_name = args.get("task_name")
-                
                 logger.info(f"🗑️ Delete task: {task_name}")
                 
                 all_tasks = db_query("tasks", {"user_id": user_id}, limit=100)
@@ -5278,15 +5385,11 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                         content = f"✅ Tâche supprimée : {found_tasks[0]['title']}"
                     else:
                         content = f"✅ {deleted_count} tâches supprimées (contenant '{task_name}')"
-                    
-                    logger.info(f"✅ Deleted {deleted_count} task(s)")
             
             elif name == "delete_document":
                 doc_name = args.get("document_name")
-                
                 logger.info(f"🗑️ Delete document: {doc_name}")
                 
-                # Récupérer tous les documents
                 all_docs = db_query("documents", {"user_id": user_id}, limit=100)
                 found_docs = []
                 
@@ -5310,106 +5413,9 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                         content = f"✅ Document supprimé : {found_docs[0]['name']}"
                     else:
                         content = f"✅ {deleted_count} documents supprimés (contenant '{doc_name}')"
-                    
-                    logger.info(f"✅ Deleted {deleted_count} document(s)")
-
-            elif name == "delete_item":
-                table = args.get("table")
-                item_name = args.get("name")
-                
-                logger.info(f"🗑️ Delete {table}: {item_name}")
-                
-                # Récupérer tous les éléments
-                all_items = db_query(table, {"user_id": user_id}, limit=100)
-                found_item = None
-                
-                if all_items.get("data"):
-                    item_name_lower = item_name.lower()
-                    for item in all_items["data"]:
-                        title = item.get("title") or item.get("name") or ""
-                        if item_name_lower in title.lower():
-                            found_item = item
-                            break
-                
-                if found_item:
-                    delete_result = db_delete(table, found_item["id"])
-                    if delete_result.get("success"):
-                        content = f"✅ {table[:-1]} supprimé : {found_item.get('title') or found_item.get('name')}"
-                        logger.info(f"✅ Deleted {table}: {found_item.get('title') or found_item.get('name')}")
-                    else:
-                        content = f"❌ Erreur lors de la suppression"
-                else:
-                    content = f"❌ {table} non trouvé : '{item_name}'"
-
-            elif name == "update_mission_status":
-                mission_name = args.get("mission_name")
-                status = args.get("status")
-                
-                logger.info(f"🎯 Update mission status: {mission_name} to {status}")
-                
-                all_missions = db_query("missions", {"user_id": user_id}, limit=100)
-                found_mission = None
-                
-                if all_missions.get("data"):
-                    mission_name_lower = mission_name.lower()
-                    for m in all_missions["data"]:
-                        name_lower = m.get("name", "").lower()
-                        if mission_name_lower in name_lower or name_lower in mission_name_lower:
-                            found_mission = m
-                            break
-                
-                if found_mission:
-                    update_result = db_update("missions", found_mission["id"], {"status": status})
-                    if update_result.get("success"):
-                        content = f"✅ Statut de la mission '{found_mission['name']}' changé en **{status}**"
-                    else:
-                        content = f"❌ Erreur lors de la mise à jour"
-                else:
-                    content = f"❌ Mission non trouvée : '{mission_name}'"
-
-            elif name == "update_mission_priority":
-                mission_name = args.get("mission_name")
-                priority = args.get("priority")
-                
-                logger.info(f"🎯 Update mission priority: {mission_name} to {priority}")
-                
-                # Récupérer toutes les missions
-                all_missions = db_query("missions", {"user_id": user_id}, limit=100)
-                found_mission = None
-                
-                if all_missions.get("data"):
-                    mission_name_lower = mission_name.lower()
-                    for m in all_missions["data"]:
-                        name_lower = m.get("name", "").lower()
-                        if mission_name_lower in name_lower or name_lower in mission_name_lower:
-                            found_mission = m
-                            break
-                
-                if found_mission:
-                    update_result = db_update("missions", found_mission["id"], {"priority": priority})
-                    if update_result.get("success"):
-                        content = f"✅ Priorité de la mission '{found_mission['name']}' changée en **{priority}**"
-                        logger.info(f"✅ Mission priority updated: {found_mission['name']} -> {priority}")
-                    else:
-                        content = f"❌ Erreur lors de la mise à jour de la priorité"
-                else:
-                    content = f"❌ Mission non trouvée : '{mission_name}'"
-            
-            elif name == "add_spending":
-                title = args.get("title")
-                amount = args.get("amount")
-                category = args.get("category", "other")
-                
-                result = await add_spending(user_id, title, amount, category)
-                if result.get("success"):
-                    content = f"✅ {result.get('message')}"
-                else:
-                    content = f"❌ {result.get('error')}"
-                logger.info(f"💰 Add spending: {amount} CFA - {title}")
 
             elif name == "delete_mission":
                 mission_name = args.get("mission_name")
-                
                 logger.info(f"🗑️ Delete mission: {mission_name}")
                 
                 all_missions = db_query("missions", {"user_id": user_id}, limit=100)
@@ -5435,41 +5441,19 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                         content = f"✅ Mission supprimée : {found_missions[0]['name']}"
                     else:
                         content = f"✅ {deleted_count} missions supprimées (contenant '{mission_name}')"
-                    
-                    logger.info(f"✅ Deleted {deleted_count} mission(s)")
 
-            elif name == "update_task_priority":
-                task_name = args.get("task_name")
-                priority = args.get("priority")
+            elif name == "add_spending":
+                title = args.get("title")
+                amount = args.get("amount")
+                category = args.get("category", "other")
                 
-                logger.info(f"📋 Update priority for task: {task_name} to {priority}")
-                
-                # Chercher la tâche
-                result = db_query("tasks", {"user_id": user_id, "title": task_name}, limit=1)
-                if not result.get("data"):
-                    # Recherche approximative
-                    all_tasks = db_query("tasks", {"user_id": user_id}, limit=100)
-                    if all_tasks.get("data"):
-                        matching = [t for t in all_tasks["data"] if task_name.lower() in t.get("title", "").lower()]
-                        if matching:
-                            result = {"success": True, "data": matching[:1]}
-                
-                if result.get("success") and result.get("data"):
-                    task = result["data"][0]
-                    task_id = task["id"]
-                    task_title = task["title"]
-                    
-                    # Mettre à jour la priorité
-                    update_result = db_update("tasks", task_id, {"priority": priority})
-                    
-                    if update_result.get("success"):
-                        content = f"✅ Priorité de la tâche '{task_title}' changée en **{priority}**"
-                        logger.info(f"✅ Task priority updated: {task_title} -> {priority}")
-                    else:
-                        content = f"❌ Erreur lors de la mise à jour de la priorité"
+                result = await add_spending(user_id, title, amount, category)
+                if result.get("success"):
+                    content = f"✅ {result.get('message')}"
                 else:
-                    content = f"❌ Tâche non trouvée : '{task_name}'"
-                    
+                    content = f"❌ {result.get('error')}"
+                logger.info(f"💰 Add spending: {amount} CFA - {title}")
+
             elif name == "add_revenue":
                 source = args.get("source")
                 amount = args.get("amount")
@@ -5483,7 +5467,6 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
             
             elif name == "add_win":
                 title = args.get("title")
-                
                 result = await add_win(user_id, title)
                 if result.get("success"):
                     content = f"✅ {result.get('message')}"
@@ -5494,7 +5477,6 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
             elif name == "add_family_event":
                 title = args.get("title")
                 child_name = args.get("child_name")
-                
                 result = await add_family_event(user_id, title, child_name)
                 if result.get("success"):
                     content = f"✅ {result.get('message')}"
@@ -5504,7 +5486,6 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
             
             elif name == "add_child":
                 name = args.get("name")
-                
                 result = await add_child_to_profile(user_id, name)
                 if result.get("success"):
                     content = f"✅ {result.get('message')}"
@@ -5515,7 +5496,6 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
             elif name == "update_profile":
                 field = args.get("field")
                 value = args.get("value")
-                
                 result = await update_user_profile_field(user_id, field, value)
                 if result.get("success"):
                     content = f"✅ {result.get('message')}"
@@ -5525,10 +5505,8 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
 
             elif name == "complete_task":
                 task_name = args.get("task_name")
-                
                 logger.info(f"📋 Complete task: {task_name}")
                 
-                # Récupérer toutes les tâches
                 all_tasks = db_query("tasks", {"user_id": user_id}, limit=100)
                 found_task = None
                 
@@ -5536,7 +5514,6 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                     task_name_lower = task_name.lower()
                     for t in all_tasks["data"]:
                         title_lower = t.get("title", "").lower()
-                        # Vérifier si le nom demandé est contenu dans le titre
                         if task_name_lower in title_lower or title_lower in task_name_lower:
                             found_task = t
                             break
@@ -5575,7 +5552,6 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                     emails = data.get("emails", [])
                     urgent_count = data.get("urgent_count", 0)
                     
-                    # Construire un résumé textuel
                     summary_parts = []
                     
                     if urgent_count > 0:
@@ -5594,7 +5570,8 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                         summary_parts.append(f"📧 **Emails ({len(emails)} non lus)**")
                         for e in emails[:5]:
                             urgency = "⚠️ " if e["is_urgent"] else "   "
-                            summary_parts.append(f"{urgency}• {e['from'].split('<')[0].strip()}: {e['subject']}")
+                            from_clean = e['from'].split('<')[0].strip()
+                            summary_parts.append(f"{urgency}• {from_clean}: {e['subject']}")
                         if len(emails) > 5:
                             summary_parts.append(f"   ... et {len(emails) - 5} autre(s)")
                         summary_parts.append("")
@@ -5608,9 +5585,6 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                     summary_parts.append("• Dis-moi 'montre-moi les détails'")
                     
                     content = "\n".join(summary_parts)
-                    
-                    # Stocker les données en session pour les actions suivantes
-                    # (optionnel)
             
             elif name == "create_task":
                 title = args.get("title")
