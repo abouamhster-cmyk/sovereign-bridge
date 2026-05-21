@@ -5314,42 +5314,38 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                 logger.info(f"📝 Update {table}: {item_name}")
 
             elif name == "get_emails":
-                try:
-                    limit = args.get("limit", 20)
-                    result = await get_gmail_messages_imap(limit)
-                    
-                    # 🔧 CORRECTION : toujours retourner une chaîne valide, jamais None ou vide
-                    if not result:
-                        content = "❌ Impossible de récupérer les emails"
-                    elif not result.get("success"):
-                        content = f"❌ Erreur Gmail: {result.get('error', 'Erreur inconnue')}"
-                    else:
-                        emails = result.get("messages", [])
-                        if not emails or len(emails) == 0:
-                            content = "📧 Aucun email non lu dans ta boîte."
-                        else:
-                            email_list = []
-                            for i, e in enumerate(emails[:20], 1):
-                                from_clean = e.get('from', 'Inconnu').split('<')[0].strip()
-                                subject_clean = e.get('subject', 'Sans sujet')[:80]
-                                email_list.append(f"{i}. **{from_clean}**\n   📧 {subject_clean}")
-                            
-                            content = f"📧 **{len(emails)} email(s) non lu(s) :**\n\n"
-                            content += "\n".join(email_list)
-                            if len(emails) > 20:
-                                content += f"\n\n... et {len(emails) - 20} autre(s)"
-                            content += "\n\n💡 Dis-moi 'ouvre l'email [numéro]' pour voir le contenu"
-                    
-                    # 🔧 IMPORTANT : s'assurer que content n'est jamais None ou vide
-                    if not content:
+                limit = args.get("limit", 20)
+                result = await get_gmail_messages_imap(limit)
+                
+                # 🔧 CORRECTION : toujours retourner une chaîne valide, jamais None ou vide
+                if not result:
+                    content = "❌ Impossible de récupérer les emails"
+                elif not result.get("success"):
+                    content = f"❌ Erreur Gmail: {result.get('error', 'Erreur inconnue')}"
+                else:
+                    emails = result.get("messages", [])
+                    if not emails or len(emails) == 0:
                         content = "📧 Aucun email non lu dans ta boîte."
-                    
-                    # Envoyer le contenu
-                    yield f"data: {json.dumps({'content': content, 'done': False})}\n\n"
-                    
-                except Exception as e:
-                    logger.error(f"Erreur get_emails dans stream: {e}")
-                    yield f"data: {json.dumps({'content': f'❌ Erreur: {str(e)}', 'done': False})}\n\n"
+                    else:
+                        email_list = []
+                        for i, e in enumerate(emails[:20], 1):
+                            from_clean = e.get('from', 'Inconnu').split('<')[0].strip()
+                            subject_clean = e.get('subject', 'Sans sujet')[:80]
+                            email_list.append(f"{i}. **{from_clean}**\n   📧 {subject_clean}")
+                        
+                        content = f"📧 **{len(emails)} email(s) non lu(s) :**\n\n"
+                        content += "\n".join(email_list)
+                        if len(emails) > 20:
+                            content += f"\n\n... et {len(emails) - 20} autre(s)"
+                        content += "\n\n💡 Dis-moi 'ouvre l'email [numéro]' pour voir le contenu"
+                
+                # 🔧 IMPORTANT : s'assurer que content n'est jamais None ou vide
+                if not content:
+                    content = "📧 Aucun email non lu dans ta boîte."
+                
+                # 🔧 NE PAS utiliser yield ici, stocker dans content et continuer
+                # Le yield sera géré plus tard dans le streaming principal
+                
             
             elif name == "get_email_content":
                 email_number = args.get("email_number", 1)
