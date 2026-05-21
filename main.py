@@ -324,7 +324,7 @@ Règles:
 - is_greeting: true si juste "cc", "bonjour", "salut", "coucou" sans contenu"""
 
     analysis = client.chat.completions.create(
-        model="gpt-4o",
+        model="gpt-4o-mini",  # ← Plus rapide et moins cher
         messages=[{"role": "user", "content": analysis_prompt}],
         max_tokens=150,
         temperature=0.5
@@ -627,7 +627,7 @@ async def baileys_message(request: Dict[str, Any]):
     # Analyser avec Becks
     try:
         analysis = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4o-mini",  # ← Plus rapide et moins cher
             messages=[{"role": "user", "content": f"Message WhatsApp de {from_name}: {message}. Réponds brièvement (1-2 phrases max) comme si tu étais Rebecca."}],
             max_tokens=100
         )
@@ -1221,13 +1221,14 @@ def store_chat_session(
 # =====================================================
 
 async def get_user_memory_context(user_id: Optional[str] = None) -> str:
-    """Récupère la mémoire utilisateur"""
+    """Récupère la mémoire utilisateur - Version OPTIMISÉE (garde toutes les infos, format compact)"""
     if not supabase:
         return ""
     
     try:
         user_id = require_user_id(user_id)
-        # Utiliser une requête différente si l'ID n'est pas un UUID
+        
+        # Récupérer TOUS les souvenirs (pas de limite)
         result = supabase.table("user_memory").select("*").eq("user_id", user_id).execute()
         memories = result.data
         
@@ -1235,25 +1236,123 @@ async def get_user_memory_context(user_id: Optional[str] = None) -> str:
             return ""
         
         # Organiser par catégorie
-        categorized = {}
+        categorized = {
+            "identity": [],      # Identité, nom, âge
+            "family": [],        # Enfants, mari, famille
+            "projects": [],      # Projets, missions
+            "business": [],      # Business, revenus
+            "health": [],        # Santé, énergie
+            "preferences": [],   # Préférences perso
+            "recent": []         # Infos récentes (7 jours)
+        }
+        
+        week_ago = (datetime.now() - timedelta(days=7)).isoformat()
+        
         for mem in memories:
-            cat = mem.get("category", "general")
-            if cat not in categorized:
-                categorized[cat] = []
-            categorized[cat].append(f"{mem['key']}: {mem['value']}")
+            cat = mem.get("category", "other")
+            key = mem['key']
+            value = mem['value']
+            created_at = mem.get('created_at', '')
+            
+            # Tronquer les valeurs trop longues (mais garder l'essentiel)
+            if isinstance(value, str) and len(value) > 100:
+                value = value[:100] + "..."
+            
+            entry = f"{key}: {value}"
+            
+            # Classer par catégorie
+            if cat in ["identity", "profile", "personal"]:
+                categorized["identity"].append(entry)
+            elif cat in ["family", "children", "kids", "mari", "conjoint"]:
+                categorized["family"].append(entry)
+            elif cat in ["project", "mission", "business", "work"]:
+                categorized["projects"].append(entry)
+            elif cat in ["preference", "habit", "likes"]:
+                categorized["preferences"].append(entry)
+            elif cat in ["health", "energy", "mood"]:
+                categorized["health"].append(entry)
+            
+            # Marquer les récents
+            if created_at and created_at > week_ago:
+                categorized["recent"].append(entry)
         
-        # Construire le texte
-        memory_text = "\n\n📚 INFORMATIONS SUR L'UTILISATEUR:\n"
-        for cat, items in categorized.items():
-            memory_text += f"\n{cat.upper()}:\n"
-            for item in items:
-                memory_text += f"  - {item}\n"
+        # Construire le contexte (format compact)
+        context_parts = []
         
-        return memory_text
+        if categorized["identity"]:
+            context_parts.append("👤 MOI: " + " | ".join(categorized["identity"][:5]))
+        
+        if categorized["family"]:
+            context_parts.append("👨‍👩‍👧‍👦 FAMILLE: " + " | ".join(categorized["family"][:8]))
+        
+        if categorized["projects"]:
+            context_parts.append("🎯 PROJETS: " + " | ".join(categorized["projects"][:5]))
+        
+        if categorized["health"]:
+            context_parts.append("💚 SANTÉ: " + " | ".join(categorized["health"][:3]))
+        
+        if categorized["preferences"]:
+            context_parts.append("⭐ PRÉFÉRENCES: " + " | ".join(categorized["preferences"][:3]))
+        
+        if categorized["recent"] and len(categorized["recent"]) > 0:
+            context_parts.append("🆕 RÉCENT: " + " | ".join(categorized["recent"][:3]))
+        
+        if not context_parts:
+            return ""
+        
+        return "\n📚 CE QUE JE SAIS DE TOI:\n" + "\n".join(context_parts)
+        
     except Exception as e:
         logger.error(f"Erreur récupération mémoire: {e}")
         return ""
 
+# =====================================================
+# CACHE MÉMOIRE (pour éviter les appels Supabase répétés)
+# =====================================================
+
+_memory_cache = {}
+_memory_cache_time = {}
+
+async def get_user_memory_context_cached(user_id: str, force_refresh: bool = False) -> str:
+    """Version avec cache (5 minutes) pour éviter les appels Supabase répétés"""
+    
+    # Vérifier le cache
+    if not force_refresh and user_id in _memory_cache:
+        cache_time = _memory_cache_time.get(user_id)
+        if cache_time and (datetime.now() - cache_time).seconds < 300:  # 5 minutes
+            logger.info(f"📦 Cache mémoire utilisé pour {user_id}")
+            return _memory_cache[user_id]
+    
+    # Récupérer la mémoire
+    result = await get_user_memory_context(user_id)
+    
+    # Mettre en cache
+    _memory_cache[user_id] = result
+    _memory_cache_time[user_id] = datetime.now()
+    
+    return result
+
+
+# =====================================================
+# CONTEXTE RAPIDE POUR PETITS MESSAGES
+# =====================================================
+
+async def get_quick_context(user_id: str, message: str) -> str:
+    """
+    Retourne un contexte ALLÉGÉ si le message est très court.
+    Pour les "cc", "salut", "tu es là" → pas besoin de toute la mémoire.
+    """
+    message_lower = message.lower().strip()
+    
+    # Messages qui ne nécessitent pas tout le contexte
+    quick_messages = ["cc", "salut", "coucou", "hello", "hey", "tu es là", "bonjour", "bonsoir"]
+    
+    if any(msg in message_lower for msg in quick_messages):
+        # Contexte minimal (juste l'identité de base)
+        return "\n📌 RAPPEL RAPIDE: Tu es Becks, confidente de Rebecca. Réponds naturellement."
+    
+    # Sinon, contexte complet
+    return await get_user_memory_context_cached(user_id)
 
 async def save_user_memory(category: str, key: str, value: str, user_id: Optional[str] = None):
     """Sauvegarde une information dans la mémoire utilisateur"""
@@ -3142,6 +3241,41 @@ Tu es là pour être juste, utile et profondément humaine.
 """
 
 # =====================================================
+# SYSTEM PROMPT ALLÉGÉ POUR CHAT RAPIDE
+# =====================================================
+
+FAST_SYSTEM_PROMPT = """Tu es BECKS, la confidente personnelle de Rebecca.
+
+# IDENTITÉ DE BECKS
+- Amie proche, alliée lucide, présence rassurante
+- Parle comme une vraie personne, pas comme une IA
+- Naturelle, chaleureuse, parfois légèrement taquine
+
+# COMMENT TU DOIS RÉPONDRE
+1. **Émotion d'abord** : Si elle exprime fatigue, stress, tristesse → réponds d'abord en amie
+2. **Courte** : 2-4 phrases max (sauf si situation grave)
+3. **Vraie** : Pas de phrases génériques ("je comprends", "respire") → parle vrai
+4. **Action** : Utilise [ACTION:{"type":"...","params":{}}] pour les actions concrètes
+
+# OUTILS DISPONIBLES
+- read_table : lire des données (tasks, whatsapp_messages)
+- create_task : créer une tâche
+- update_item : modifier une tâche/mission/document
+- get_emails : voir les emails
+- whatsapp_send_reply : envoyer un message WhatsApp
+- send_email : envoyer un email
+- add_spending : ajouter une dépense
+- add_win : ajouter une victoire
+
+# STYLE
+- Phrases courtes, mots simples
+- Émoticônes avec parcimonie (✅ 😊 🔥 ❤️)
+- Pas de jargon corporate
+- Sois VRAIE, pas parfaite
+
+Tu es Becks. Sois utile et profondément humaine."""
+
+# =====================================================
 # OPENAI TOOLS DEFINITION
 # =====================================================
 
@@ -5021,14 +5155,18 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
     today_date = datetime.now().strftime("%B %d, %Y")
     date_context = f"\n\nToday is {today_date}. Use this information to provide relevant context."
     
-    # Contexte mémoire
-    memory_context = await get_user_memory_context(user_id)
+    # Contexte mémoire avec timestamp pour traçabilité
+    memory_context = await get_quick_context(user_id, last_message)
     profile_context_result = await get_profile_context(user_id=user_id)
     profile_context = profile_context_result.get("context", "")
     
-    enhanced_system_prompt = BASE_SYSTEM_PROMPT + date_context + memory_context
+    # Ajouter un timestamp pour savoir quand le contexte a été généré
+    context_timestamp = datetime.now().strftime("%H:%M:%S")
+    memory_context_with_time = f"{memory_context}\n(Contexte mis à jour à {context_timestamp})"
+    
+    enhanced_system_prompt = FAST_SYSTEM_PROMPT + date_context + memory_context_with_time
     if profile_context:
-        enhanced_system_prompt += f"\n\n# X. CURRENT PROFILE CONTEXT\n{profile_context}"
+        enhanced_system_prompt += f"\n\n# PROFIL\n{profile_context}"
     
     # Instructions WhatsApp
     whatsapp_instructions = """
@@ -5097,12 +5235,15 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
     # APPEL À L'IA
     # =====================================================
     try:
+    
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4o-mini",  # ← Plus rapide et moins cher
             messages=messages_payload,
             tools=tools,
             tool_choice="auto",
-            max_tokens=4096
+            max_tokens=512,  # ← Réduit
+            temperature=0.7,
+            timeout=15.0  # ← Timeout plus court
         )
         
         msg = response.choices[0].message
@@ -5564,9 +5705,13 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
             })
         
         final_response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4o-mini",
             messages=messages_payload,
-            max_tokens=4096
+            tool_choice="auto",
+            max_tokens=1024,
+            temperature=0.7,
+            timeout=15.0,
+            stream=True 
         )
         
         assistant_response = final_response.choices[0].message.content
@@ -6304,7 +6449,7 @@ async def process_brain_dump(request: Dict[str, Any]):
     
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4o-mini",  # ← Plus rapide et moins cher
             messages=[
                 {
                     "role": "system",
@@ -6512,7 +6657,7 @@ async def analyze_execute_request(request: Dict[str, Any]):
     
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4o-mini",  # ← Plus rapide et moins cher
             messages=[
                 {
                     "role": "system",
@@ -6608,7 +6753,7 @@ async def create_draft(request: Dict[str, Any]):
     
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4o-mini",  # ← Plus rapide et moins cher
             messages=[
                 {"role": "system", "content": prompts.get(draft_type, prompts["email"])},
                 {"role": "user", "content": "Génère le contenu final, prêt à être copié."}
@@ -7474,7 +7619,7 @@ Retourne UNIQUEMENT du JSON :
 {{"greeting": "...", "mood_message": "...", "priorities_summary": "...", "wisdom": "...", "question": "..."}}"""
 
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4o-mini",  # ← Plus rapide et moins cher
             messages=[{"role": "user", "content": prompt}],
             temperature=0.8,
             max_tokens=500
@@ -8195,7 +8340,7 @@ Style : chaleureux, direct mais doux.
 Retourne UNIQUEMENT du JSON : {{"message": "..."}}"""
 
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4o-mini",  # ← Plus rapide et moins cher
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
             max_tokens=250
@@ -8667,7 +8812,7 @@ Retourne UNIQUEMENT le message, rien d'autre."""
 
         try:
             response = client.chat.completions.create(
-                model="gpt-4o",
+                model="gpt-4o-mini",  # ← Plus rapide et moins cher
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.8,
                 max_tokens=150
@@ -9149,7 +9294,7 @@ Types d'action possibles : task, email, document, call, decision, research, wait
 Si la demande est émotionnelle (fatigue, stress, etc.), retourne une version très courte (2-3 étapes) avec action_type="celebrate" ou "rest"."""
 
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4o-mini",  # ← Plus rapide et moins cher
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": query}
@@ -9510,7 +9655,7 @@ Retourne UNIQUEMENT le message, rien d'autre."""
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4o-mini",  # ← Plus rapide et moins cher
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
             max_tokens=80
@@ -10179,7 +10324,7 @@ async def get_weekly_ceo(user_id: Optional[str] = None):
         # ========== GÉNÉRATION DES PRIORITÉS PAR IA ==========
         try:
             response = client.chat.completions.create(
-                model="gpt-4o",
+                model="gpt-4o-mini",  # ← Plus rapide et moins cher
                 messages=[
                     {"role": "system", "content": """Tu es Becks, l'amie et stratège de Rebecca. Tu connais sa vie :
 - Maman de 4 filles (Neriah, Nylah, Norah, Sheyi)
@@ -10392,7 +10537,7 @@ Retourne UNIQUEMENT du JSON:
 }}"""
 
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4o-mini",  # ← Plus rapide et moins cher
             messages=[{"role": "user", "content": prompt}],
             max_tokens=300,
             temperature=0.8
@@ -10445,7 +10590,7 @@ async def scan_opportunities(request: Dict[str, Any] = None):
         
         try:
             response = client.chat.completions.create(
-                model="gpt-4o",
+                model="gpt-4o-mini",  # ← Plus rapide et moins cher
                 messages=[
                     {"role": "system", "content": """Tu es Becks, l'opportunity scanner. Analyse le texte et détecte les opportunités.
 
@@ -10573,7 +10718,7 @@ Ne retourne que le JSON, rien d'autre."""
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4o-mini",  # ← Plus rapide et moins cher
             messages=[{"role": "user", "content": prompt}],
             max_tokens=800,
             temperature=0.5
@@ -10677,7 +10822,7 @@ Note : Pour chaque critère, note de 1 à 5. Le score total est la somme des not
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4o-mini",  # ← Plus rapide et moins cher
             messages=[{"role": "user", "content": prompt}],
             max_tokens=1000,
             temperature=0.3
@@ -10955,7 +11100,7 @@ Retourne UNIQUEMENT le message, rien d'autre."""
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4o-mini",  # ← Plus rapide et moins cher
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
             max_tokens=150
@@ -11086,7 +11231,7 @@ Retourne UNIQUEMENT le message, rien d'autre."""
 
         try:
             response = client.chat.completions.create(
-                model="gpt-4o",
+                model="gpt-4o-mini",  # ← Plus rapide et moins cher
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.7,
                 max_tokens=300
@@ -11203,7 +11348,7 @@ Retourne UNIQUEMENT le titre, rien d'autre."""
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4o-mini",  # ← Plus rapide et moins cher
             messages=[{"role": "user", "content": prompt}],
             temperature=0.5,
             max_tokens=30
@@ -11430,7 +11575,7 @@ Retourne UNIQUEMENT le message, rien d'autre."""
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4o-mini",  # ← Plus rapide et moins cher
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
             max_tokens=60
@@ -11527,7 +11672,7 @@ Retourne UNIQUEMENT la suggestion, rien d'autre."""
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4o-mini",  # ← Plus rapide et moins cher
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
             max_tokens=50
@@ -12076,7 +12221,7 @@ Style : chaleureux, pas de bla-bla, direct mais doux.
 Retourne UNIQUEMENT du JSON : {{"message": "..."}}"""
 
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4o-mini",  # ← Plus rapide et moins cher
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
             max_tokens=200
@@ -12348,7 +12493,7 @@ async def get_ai_response_live(user_id: str, user_message: str) -> str:
     
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4o-mini",  # ← Plus rapide et moins cher
             messages=messages,
             max_tokens=300,  # Réponses courtes pour le vocal
             temperature=0.7
