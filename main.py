@@ -5311,12 +5311,11 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                     content = f"❌ {result.get('error')}"
                 logger.info(f"📝 Update {table}: {item_name}")
 
-
             elif name == "get_emails":
-                limit = args.get("limit", 20)
-                unread_only = args.get("unread_only", True)
-                
                 try:
+                    limit = args.get("limit", 20)
+                    unread_only = args.get("unread_only", True)
+                    
                     result = await get_gmail_messages(limit, unread_only)
                     
                     if result.get("success") and result.get("messages"):
@@ -5331,7 +5330,6 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                                 subject_clean = e['subject'][:80] if e['subject'] else "Sans sujet"
                                 email_list.append(f"{i}. **{from_clean}**\n   📧 {subject_clean}")
                             
-                            # Stocker les emails dans la session
                             if user_id not in pending_emails:
                                 pending_emails[user_id] = {}
                             pending_emails[user_id]["last_emails"] = emails
@@ -5342,14 +5340,12 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                             if len(emails) > 20:
                                 content += f"\n\n... et {len(emails) - 20} autre(s)"
                             
-                            content += "\n\n💡 **Que faire ?**"
-                            content += "\n• Dis-moi 'ouvre l'email [numéro]' pour voir le contenu"
-                            content += "\n• Dis-moi 'réponds à l'email [numéro]' pour répondre"
+                            content += "\n\n💡 Dis-moi 'ouvre l'email [numéro]' pour voir le contenu"
                     else:
                         content = "📧 Aucun email non lu dans ta boîte."
                 except Exception as e:
                     logger.error(f"Erreur get_emails: {e}")
-                    content = f"❌ Erreur lors de la récupération des emails: {str(e)}"
+                    content = f"❌ Erreur: {str(e)}"
             
             elif name == "get_email_content":
                 email_number = args.get("email_number", 1)
@@ -8325,9 +8321,9 @@ async def send_evening_report(request: Dict[str, Any] = None):
         mood_today = supabase.table("mood_entries").select("mood")\
             .eq("user_id", user_id)\
             .eq("date", today)\
-            .maybeSingle()\
+            .limit(1)\
             .execute()
-        current_mood = mood_today.data.get("mood") if mood_today.data else None
+        current_mood = mood_today.data[0]["mood"] if mood_today.data else None
         
         # Récupérer le nom
         profile = supabase.table("user_profile").select("preferred_name").eq("user_id", user_id).execute()
