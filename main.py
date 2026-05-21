@@ -5346,30 +5346,36 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                     content = f"❌ Erreur Gmail: {result.get('error', 'Erreur inconnue')}"
                 
             
+
             elif name == "get_email_content":
                 email_number = args.get("email_number", 1)
                 
+                # Récupérer les emails stockés
                 stored_emails = None
                 if user_id in pending_emails and "last_emails" in pending_emails[user_id]:
                     stored_emails = pending_emails[user_id]["last_emails"]
                 
                 if not stored_emails:
-                    result = await get_gmail_messages(20, True)
+                    # Si pas en cache, les récupérer
+                    result = await get_gmail_messages_imap(20)
                     if result.get("success") and result.get("messages"):
                         stored_emails = result["messages"]
+                        if user_id not in pending_emails:
+                            pending_emails[user_id] = {}
+                        pending_emails[user_id]["last_emails"] = stored_emails
                     else:
                         content = "❌ Impossible de récupérer les emails"
                 
                 if stored_emails:
                     if 1 <= email_number <= len(stored_emails):
                         email = stored_emails[email_number - 1]
-                        from_clean = email['from'].split('<')[0].strip()
+                        from_clean = email.get('from', 'Inconnu').split('<')[0].strip()
                         content = f"📧 **Email #{email_number}**\n\n"
                         content += f"**De :** {from_clean}\n"
-                        content += f"**Email :** {email['from']}\n"
-                        content += f"**Objet :** {email['subject']}\n"
-                        content += f"**Date :** {email['date']}\n\n"
-                        content += f"**Contenu :**\n{email['snippet']}\n\n"
+                        content += f"**Email :** {email.get('from', 'Inconnu')}\n"
+                        content += f"**Objet :** {email.get('subject', 'Sans sujet')}\n"
+                        content += f"**Date :** {email.get('date', 'Date inconnue')}\n\n"
+                        content += f"**Contenu :**\n{email.get('snippet', '[Contenu non disponible]')}\n\n"
                         content += "---\n💡 Dis-moi :\n"
                         content += "• 'réponds à cet email' pour répondre\n"
                         content += "• 'marque comme lu' pour l'archiver"
