@@ -5343,9 +5343,6 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                 if not content:
                     content = "📧 Aucun email non lu dans ta boîte."
                 
-                # 🔧 NE PAS utiliser yield ici, stocker dans content et continuer
-                # Le yield sera géré plus tard dans le streaming principal
-                
             
             elif name == "get_email_content":
                 email_number = args.get("email_number", 1)
