@@ -89,6 +89,12 @@ async def whatsapp_webhook(request: Request):
         return Response(status_code=200)
     
     body = await request.body()
+
+    # 🔥 LOG TRÈS VISIBLE
+    print("\n" + "="*60)
+    print(f"📱 WHATSAPP WEBHOOK - {datetime.now()}")
+    print(f"Body: {body[:200]}")
+    print("="*60 + "\n")
     
     try:
         data = json.loads(body.decode('utf-8'))
@@ -12271,3 +12277,65 @@ async def direct_gmail_test():
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Récupère les messages WhatsApp non traités au démarrage"""
+    await poll_missed_whatsapp_messages()
+
+async def poll_missed_whatsapp_messages():
+    """Récupère les messages WhatsApp non lus depuis GreenAPI (polling)"""
+    if not GREENAPI_ID_INSTANCE or not GREENAPI_API_TOKEN:
+        return
+    
+    async with httpx.AsyncClient() as client:
+        # Récupère les notifications en attente
+        while True:
+            response = await client.get(
+                f"https://api.green-api.com/waInstance{GREENAPI_ID_INSTANCE}/receiveNotification/{GREENAPI_API_TOKEN}?timeout=10",
+                timeout=20
+            )
+            
+            if response.status_code != 200:
+                break
+                
+            notification = response.json()
+            if not notification:
+                break
+                
+            receipt_id = notification.get("receiptId")
+            body = notification.get("body", {})
+            
+            # Traiter le message
+            if body.get("typeWebhook") == "incomingMessageReceived":
+                await process_incoming_message(body)
+                logger.info(f"✅ Message récupéré par polling: {receipt_id}")
+            
+            # Supprimer la notification
+            await client.delete(
+                f"https://api.green-api.com/waInstance{GREENAPI_ID_INSTANCE}/deleteNotification/{GREENAPI_API_TOKEN}/{receipt_id}"
+            )
+            
+            await asyncio.sleep(0.5)  # Petit délai avant le prochain
+
+@app.post("/api/whatsapp/recover-messages")
+async def recover_whatsapp_messages():
+    """Force la récupération des messages WhatsApp manquants"""
+    await poll_missed_whatsapp_messages()
+    return {"success": True, "message": "Messages manquants récupérés"}
+
+@app.get("/api/whatsapp/check-messages")
+async def check_whatsapp_messages():
+    """Vérifie les derniers messages WhatsApp en base"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    result = supabase.table("whatsapp_messages")\
+        .select("*")\
+        .order("created_at", desc=True)\
+        .limit(10)\
+        .execute()
+    
+    return {"success": True, "messages": result.data}
