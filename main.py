@@ -4725,8 +4725,11 @@ async def list_documents(user_id: str, limit: int = 10, status: str = None, show
         logger.error(f"Erreur list_documents: {e}")
         return {"success": False, "error": str(e), "documents": []}
 
+
+
+
 async def get_gmail_messages_imap(limit: int = 10):
-    """Récupère les emails via IMAP"""
+    """Récupère les emails via IMAP - Version CORRIGÉE (pas de return dans async generator)"""
     
     # 🔧 Initialisation par défaut
     default_result = {"success": True, "messages": [], "count": 0, "error": None}
@@ -4811,6 +4814,7 @@ async def get_gmail_messages_imap(limit: int = 10):
     except Exception as e:
         logger.error(f"Erreur IMAP Gmail: {e}")
         return {"success": False, "error": str(e), "messages": [], "count": 0}
+        
         
 async def update_document(user_id: str, document_id: str = None, name: str = None, 
                           updates: dict = None) -> Dict:
