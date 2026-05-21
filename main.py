@@ -3146,10 +3146,10 @@ Tu es là pour être juste, utile et profondément humaine.
 # =====================================================
 
 tools = [
-    # -------------------------------------------------
-    # LECTURE DE DONNÉES
-    # -------------------------------------------------
-    {    
+    # =====================================================
+    # 1. LECTURE DE DONNÉES
+    # =====================================================
+    {
         "type": "function",
         "function": {
             "name": "read_table",
@@ -3172,8 +3172,38 @@ tools = [
         }
     },
 
-
-    # Ajouter dans la liste des tools (vers ligne 1600)
+    # =====================================================
+    # 2. EMAILS (GMAIL)
+    # =====================================================
+    {
+        "type": "function",
+        "function": {
+            "name": "get_emails",
+            "description": "Récupère les emails non lus de la boîte Gmail.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "description": "Nombre maximum d'emails à afficher (défaut: 20)"},
+                    "unread_only": {"type": "boolean", "description": "Afficher uniquement les non lus (défaut: true)"}
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_email_content",
+            "description": "Récupère le contenu complet d'un email spécifique par son numéro dans la liste",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "email_number": {"type": "integer", "description": "Le numéro de l'email dans la liste (1, 2, 3...)"}
+                },
+                "required": ["email_number"]
+            }
+        }
+    },
     {
         "type": "function",
         "function": {
@@ -3189,36 +3219,6 @@ tools = [
             }
         }
     },
-
-    {
-        "type": "function",
-        "function": {
-            "name": "get_comms_summary",
-            "description": "Récupère un résumé de toutes les communications en attente (WhatsApp non répondus et emails non lus)",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": []
-            }
-        }
-    },
-
-    {
-        "type": "function",
-        "function": {
-            "name": "get_emails",
-            "description": "Récupère les emails non lus de la boîte Gmail.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "limit": {"type": "integer", "description": "Nombre maximum d'emails à afficher (défaut: 10)"},
-                    "unread_only": {"type": "boolean", "description": "Afficher uniquement les non lus (défaut: true)"}
-                },
-                "required": []
-            }
-        }
-    },
-
     {
         "type": "function",
         "function": {
@@ -3233,471 +3233,58 @@ tools = [
             }
         }
     },
-
     {
         "type": "function",
         "function": {
-            "name": "delete_task",
-            "description": "Supprime une tâche.",
+            "name": "send_email",
+            "description": "Envoie un email directement. Génère le contenu ET envoie en un clic via le bouton d'action.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "task_name": {"type": "string", "description": "Nom de la tâche à supprimer"}
+                    "to": {"type": "string", "description": "Adresse email du destinataire"},
+                    "subject": {"type": "string", "description": "Sujet de l'email"},
+                    "body": {"type": "string", "description": "Contenu HTML ou texte de l'email"}
                 },
-                "required": ["task_name"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "delete_mission",
-            "description": "Supprime une mission.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "mission_name": {"type": "string", "description": "Nom de la mission à supprimer"}
-                },
-                "required": ["mission_name"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "delete_document",
-            "description": "Supprime un document.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "document_name": {"type": "string", "description": "Nom du document à supprimer"}
-                },
-                "required": ["document_name"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "update_mission_status",
-            "description": "Change le statut d'une mission (active, paused, complete, etc.).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "mission_name": {"type": "string", "description": "Nom de la mission"},
-                    "status": {"type": "string", "enum": ["idea", "planning", "active", "waiting", "paused", "complete"], "description": "Nouveau statut"}
-                },
-                "required": ["mission_name", "status"]
+                "required": ["to", "subject", "body"]
             }
         }
     },
 
+    # =====================================================
+    # 3. COMMUNICATIONS (WHATSAPP)
+    # =====================================================
     {
         "type": "function",
         "function": {
-            "name": "delete_item",
-            "description": "Supprime un élément (tâche, mission, document, événement, etc.)",
+            "name": "get_comms_summary",
+            "description": "Récupère un résumé de toutes les communications en attente (WhatsApp non répondus et emails non lus)",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "table": {"type": "string", "enum": ["tasks", "missions", "documents", "family_events", "wins"], "description": "La table concernée"},
-                    "name": {"type": "string", "description": "Nom/titre de l'élément à supprimer"},
-                    "item_id": {"type": "string", "description": "ID de l'élément (optionnel si le nom est fourni)"}
-                },
-                "required": ["table", "name"]
-            }
-        }
-    },
-    
-    {
-        "type": "function",
-        "function": {
-            "name": "update_task_priority",
-            "description": "Change la priorité d'une tâche.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "task_name": {"type": "string", "description": "Nom de la tâche"},
-                    "priority": {"type": "string", "enum": ["critical", "high", "normal", "low"], "description": "Nouvelle priorité"}
-                },
-                "required": ["task_name", "priority"]
-            }
-        }
-    },
-
-    {
-        "type": "function",
-        "function": {
-            "name": "update_mission_priority",
-            "description": "Change la priorité d'une mission.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "mission_name": {"type": "string", "description": "Nom de la mission"},
-                    "priority": {"type": "string", "enum": ["critical", "high", "normal", "low"], "description": "Nouvelle priorité"}
-                },
-                "required": ["mission_name", "priority"]
-            }
-        }
-    },
-    
-    {
-        "type": "function",
-        "function": {
-            "name": "complete_task",
-            "description": "Marque une tâche comme terminée (status='done').",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "task_name": {"type": "string", "description": "Nom de la tâche à marquer comme faite"},
-                    "task_id": {"type": "string", "description": "ID de la tâche (optionnel si le nom est fourni)"}
-                },
-                "required": ["task_name"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "update_item",
-            "description": "Met à jour un élément existant (tâche, mission, document, événement, etc.)",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "table": {"type": "string", "enum": ["tasks", "missions", "family_events", "documents", "wins", "spending", "revenue"], "description": "La table concernée"},
-                    "name": {"type": "string", "description": "Nom/titre de l'élément à modifier"},
-                    "updates": {"type": "object", "description": "Champs à mettre à jour (ex: {\"url\": \"https://...\", \"status\": \"done\"})"}
-                },
-                "required": ["table", "name", "updates"]
-            }
-        }
-    },
-    # -------------------------------------------------
-    # update_document
-    # -------------------------------------------------
-
-    {
-        "type": "function",
-        "function": {
-            "name": "update_document",
-            "description": "Met à jour un document existant (ajouter/modifier un lien, des notes, le statut, etc.)",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "Nom du document à modifier"},
-                    "updates": {"type": "object", "description": "Champs à mettre à jour (ex: {\"url\": \"https://...\", \"notes\": \"Nouvelle note\"})"}
-                },
-                "required": ["name", "updates"]
-            }
-        }
-    },
-    
-    # -------------------------------------------------
-    # get_document
-    # -------------------------------------------------
-
-    {
-        "type": "function",
-        "function": {
-            "name": "get_document",
-            "description": "Récupère les détails complets d'un document spécifique.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "document_id": {"type": "string", "description": "ID du document"},
-                    "name": {"type": "string", "description": "Nom du document (recherche approximative)"}
-                },
+                "properties": {},
                 "required": []
             }
         }
     },
-    # -------------------------------------------------
-    # list_documents
-    # -------------------------------------------------
     {
         "type": "function",
         "function": {
-            "name": "list_documents",
-            "description": "Liste les documents de l'utilisateur avec tous les détails (liens, dates, statuts).",
+            "name": "whatsapp_send_reply",
+            "description": "Envoie une réponse WhatsApp à un contact. À utiliser UNIQUEMENT pour WhatsApp.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "limit": {"type": "integer", "description": "Nombre maximum de documents à afficher (défaut: 10)"},
-                    "status": {"type": "string", "enum": ["draft", "review", "ready", "submitted", "approved", "rejected"], "description": "Filtrer par statut"},
-                    "show_details": {"type": "boolean", "description": "Afficher les détails complets (défaut: true)"}
+                    "to": {"type": "string", "description": "Le numéro de téléphone du contact au format '229XXXXXXXX@c.us'"},
+                    "message": {"type": "string", "description": "Le message à envoyer"},
+                    "message_id": {"type": "string", "description": "L'ID du message original (optionnel)"}
                 },
-                "required": []
-            }
-        }
-    },
-    # -------------------------------------------------
-    # add_document
-    # -------------------------------------------------
-
-    {
-        "type": "function",
-        "function": {
-            "name": "add_document",
-            "description": "Ajoute un document (proposition, contrat, grant, facture, etc.)",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "Nom du document"},
-                    "doc_type": {"type": "string", "enum": ["proposal", "contract", "grant", "invoice", "legal", "admin", "other"], "description": "Type de document"},
-                    "status": {"type": "string", "enum": ["draft", "review", "ready", "submitted", "approved", "rejected"], "description": "Statut"},
-                    "due_date": {"type": "string", "description": "Date d'échéance (YYYY-MM-DD)"},
-                    "url": {"type": "string", "description": "URL du document (optionnel)"},
-                    "notes": {"type": "string", "description": "Notes supplémentaires"}
-                },
-                "required": ["name"]
+                "required": ["to", "message"]
             }
         }
     },
 
-
-   # -------------------------------------------------
-    # add_revenue
-    # -------------------------------------------------
-    {
-        "type": "function",
-        "function": {
-            "name": "add_mission",
-            "description": "Ajoute une nouvelle mission ou projet.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "Nom de la mission"},
-                    "category": {"type": "string", "enum": ["business", "family", "personal", "relocation", "farm", "content", "documents"], "description": "Catégorie de la mission"},
-                    "priority": {"type": "string", "enum": ["critical", "high", "normal", "low"], "description": "Priorité"},
-                    "status": {"type": "string", "enum": ["idea", "planning", "active", "waiting", "paused", "complete"], "description": "Statut"},
-                    "deadline": {"type": "string", "description": "Date limite (format YYYY-MM-DD)"},
-                    "revenue_potential": {"type": "integer", "description": "Potentiel de revenu de 1 à 5"},
-                    "notes": {"type": "string", "description": "Notes supplémentaires"}
-                },
-                "required": ["name"]
-            }
-        }
-    },
-   
-
-    # -------------------------------------------------
-    # add_revenue
-    # -------------------------------------------------
-    {
-        "type": "function",
-        "function": {
-            "name": "add_revenue",
-            "description": "Ajoute un revenu.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "source": {"type": "string", "description": "Source du revenu (ex: vente, prestation, salaire)"},
-                    "amount": {"type": "number", "description": "Montant en CFA"},
-                    "project": {"type": "string", "description": "Projet associé (Ifè Farm, Love & Fire, etc.)"},
-                    "date": {"type": "string", "description": "Date du revenu (format YYYY-MM-DD)"},
-                    "notes": {"type": "string", "description": "Notes supplémentaires"}
-                },
-                "required": ["source", "amount"]
-            }
-        }
-    },
-    # -------------------------------------------------
-    # add_spending
-    # -------------------------------------------------
-
-    {
-        "type": "function",
-        "function": {
-            "name": "add_spending",
-            "description": "Ajoute une dépense.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string", "description": "Description de la dépense"},
-                    "amount": {"type": "number", "description": "Montant en CFA"},
-                    "category": {"type": "string", "enum": ["materials", "construction", "labor", "livestock", "crops", "transport", "equipment", "food", "other"], "description": "Catégorie de la dépense"},
-                    "project": {"type": "string", "description": "Projet associé (Ifè Farm, Love & Fire, etc.)"},
-                    "date": {"type": "string", "description": "Date de la dépense (format YYYY-MM-DD)"},
-                    "notes": {"type": "string", "description": "Notes supplémentaires"}
-                },
-                "required": ["title", "amount"]
-            }
-        }
-    },
-
-    # -------------------------------------------------
-    # add_win
-    # -------------------------------------------------
-    {
-        "type": "function",
-        "function": {
-            "name": "add_win",
-            "description": "Ajoute une victoire pour célébrer un succès.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string", "description": "Description de la victoire"},
-                    "category": {"type": "string", "enum": ["business", "family", "personal", "money", "health", "farm", "other"], "description": "Catégorie de la victoire"},
-                    "celebration_emoji": {"type": "string", "description": "Émoji pour célébrer (ex: 🎉, 🏆, 💪, 🔥, 👑)"},
-                    "notes": {"type": "string", "description": "Notes supplémentaires"}
-                },
-                "required": ["title"]
-            }
-        }
-    },
-    # -------------------------------------------------
-    # add_family_event
-    # -------------------------------------------------
-
-    {
-        "type": "function",
-        "function": {
-            "name": "add_family_event",
-            "description": "Ajoute un événement familial (école, santé, activité, voyage, papiers, routine, fournitures).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string", "description": "Titre de l'événement"},
-                    "child_name": {"type": "string", "description": "Nom de l'enfant concerné (optionnel)"},
-                    "category": {"type": "string", "enum": ["school", "health", "activity", "travel", "document", "routine", "supplies"], "description": "Catégorie de l'événement"},
-                    "date": {"type": "string", "description": "Date de l'événement (format YYYY-MM-DD)"},
-                    "priority": {"type": "string", "enum": ["critical", "high", "normal", "low"], "description": "Priorité"},
-                    "notes": {"type": "string", "description": "Notes supplémentaires"}
-                },
-                "required": ["title"]
-            }
-        }
-    },
-
-    # -------------------------------------------------
-    # ÉCRITURE DE DONNÉES
-    # -------------------------------------------------
-    {
-        "type": "function",
-        "function": {
-            "name": "write_to_table",
-            "description": "Écrit une nouvelle entrée (spending, tasks, wins, family_events, revenue, missions)",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "table": {
-                        "type": "string",
-                        "enum": ["spending", "tasks", "wins", "family_events", "revenue", "missions"]
-                    },
-                    "title": {"type": "string"},
-                    "amount": {"type": "number", "minimum": 0},
-                    "category": {"type": "string"},
-                    "project": {"type": "string"},
-                    "date": {"type": "string", "format": "date"},
-                    "notes": {"type": "string"}
-                },
-                "required": ["table", "title"]
-            }
-        }
-    },
-
-    # -------------------------------------------------
-    # FINANCES
-    # -------------------------------------------------
-    {
-        "type": "function",
-        "function": {
-            "name": "get_financial_summary",
-            "description": "Retourne le résumé financier (revenus, dépenses, solde)",
-            "parameters": {"type": "object", "properties": {}, "required": []}
-        }
-    },
-
-    # -------------------------------------------------
-    # ADD CHILD
-    # -------------------------------------------------   
-
-    {
-        "type": "function",
-        "function": {
-            "name": "add_child",
-            "description": "Ajoute un enfant au profil utilisateur.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "Nom complet de l'enfant"},
-                    "nickname": {"type": "string", "description": "Surnom (optionnel)"},
-                    "birthday": {"type": "string", "description": "Date d'anniversaire (format YYYY-MM-DD, optionnel)"},
-                    "notes": {"type": "string", "description": "Notes supplémentaires (optionnel)"}
-                },
-                "required": ["name"]
-            }
-        }
-    },
-    # -------------------------------------------------
-    # WHATSAPP 
-    # -------------------------------------------------   
-    {
-        "type": "function",
-        "function": {
-            "name": "update_profile",
-            "description": "Met à jour le profil utilisateur (nom, enfants, projets, objectifs).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "field": {
-                        "type": "string",
-                        "enum": ["preferred_name", "full_name", "birthday", "children", "projects", "current_goals"],
-                        "description": "Le champ à modifier"
-                    },
-                    "value": {
-                        "type": "string",
-                        "description": "La nouvelle valeur (pour les champs simples) ou JSON (pour les champs complexes comme children)"
-                    }
-                },
-                "required": ["field", "value"]
-            }
-        }
-    },
-    # -------------------------------------------------
-    # WHATSAPP 
-    # -------------------------------------------------   
-        {
-            "type": "function",
-            "function": {
-                "name": "whatsapp_send_reply",
-                "description": "Envoie une réponse WhatsApp à un contact. À utiliser UNIQUEMENT pour WhatsApp, JAMAIS pour les emails.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "to": {
-                            "type": "string",
-                            "description": "Le numéro de téléphone du contact au format '229XXXXXXXX@c.us'"
-                        },
-                        "message": {
-                            "type": "string",
-                            "description": "Le message à envoyer"
-                        },
-                        "message_id": {
-                            "type": "string",
-                            "description": "L'ID du message original (optionnel)"
-                        }
-                    },
-                    "required": ["to", "message"]
-                }
-            }
-        },
-    # -------------------------------------------------
-    # TÂCHES
-    # -------------------------------------------------
-    
-    {
-        "type": "function",
-        "function": {
-            "name": "get_priority_tasks",
-            "description": "Retourne les tâches prioritaires",
-            "parameters": {
-                "type": "object",
-                "properties": {"limit": {"type": "integer"}},
-                "required": []
-            }
-        }
-    },
+    # =====================================================
+    # 4. TÂCHES
+    # =====================================================
     {
         "type": "function",
         "function": {
@@ -3722,6 +3309,62 @@ tools = [
     {
         "type": "function",
         "function": {
+            "name": "complete_task",
+            "description": "Marque une tâche comme terminée (status='done').",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_name": {"type": "string", "description": "Nom de la tâche à marquer comme faite"},
+                    "task_id": {"type": "string", "description": "ID de la tâche (optionnel si le nom est fourni)"}
+                },
+                "required": ["task_name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_task",
+            "description": "Supprime une tâche.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_name": {"type": "string", "description": "Nom de la tâche à supprimer"}
+                },
+                "required": ["task_name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_task_priority",
+            "description": "Change la priorité d'une tâche.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_name": {"type": "string", "description": "Nom de la tâche"},
+                    "priority": {"type": "string", "enum": ["critical", "high", "normal", "low"], "description": "Nouvelle priorité"}
+                },
+                "required": ["task_name", "priority"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_priority_tasks",
+            "description": "Retourne les tâches prioritaires",
+            "parameters": {
+                "type": "object",
+                "properties": {"limit": {"type": "integer"}},
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "analyze_priorities",
             "description": "Analyse les tâches et les organise par priorité (urgent/important) avec temps estimé et difficulté",
             "parameters": {
@@ -3738,63 +3381,355 @@ tools = [
         }
     },
 
-    # -------------------------------------------------
-    # COMMUNICATION
-    # -------------------------------------------------
+    # =====================================================
+    # 5. MISSIONS
+    # =====================================================
     {
         "type": "function",
         "function": {
-            "name": "send_email",
-            "description": "Envoie un email directement. Génère le contenu ET envoie en un clic via le bouton d'action.",
+            "name": "add_mission",
+            "description": "Ajoute une nouvelle mission ou projet.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "to": {"type": "string", "description": "Adresse email du destinataire"},
-                    "subject": {"type": "string", "description": "Sujet de l'email"},
-                    "body": {"type": "string", "description": "Contenu HTML ou texte de l'email"}
+                    "name": {"type": "string", "description": "Nom de la mission"},
+                    "category": {"type": "string", "enum": ["business", "family", "personal", "relocation", "farm", "content", "documents"], "description": "Catégorie de la mission"},
+                    "priority": {"type": "string", "enum": ["critical", "high", "normal", "low"], "description": "Priorité"},
+                    "status": {"type": "string", "enum": ["idea", "planning", "active", "waiting", "paused", "complete"], "description": "Statut"},
+                    "deadline": {"type": "string", "description": "Date limite (format YYYY-MM-DD)"},
+                    "revenue_potential": {"type": "integer", "description": "Potentiel de revenu de 1 à 5"},
+                    "notes": {"type": "string", "description": "Notes supplémentaires"}
                 },
-                "required": ["to", "subject", "body"]
+                "required": ["name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_mission",
+            "description": "Supprime une mission.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "mission_name": {"type": "string", "description": "Nom de la mission à supprimer"}
+                },
+                "required": ["mission_name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_mission_status",
+            "description": "Change le statut d'une mission (active, paused, complete, etc.).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "mission_name": {"type": "string", "description": "Nom de la mission"},
+                    "status": {"type": "string", "enum": ["idea", "planning", "active", "waiting", "paused", "complete"], "description": "Nouveau statut"}
+                },
+                "required": ["mission_name", "status"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_mission_priority",
+            "description": "Change la priorité d'une mission.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "mission_name": {"type": "string", "description": "Nom de la mission"},
+                    "priority": {"type": "string", "enum": ["critical", "high", "normal", "low"], "description": "Nouvelle priorité"}
+                },
+                "required": ["mission_name", "priority"]
             }
         }
     },
 
+    # =====================================================
+    # 6. DOCUMENTS
+    # =====================================================
     {
         "type": "function",
         "function": {
-            "name": "get_email_content",
-            "description": "Récupère le contenu complet d'un email spécifique par son numéro dans la liste",
+            "name": "add_document",
+            "description": "Ajoute un document (proposition, contrat, grant, facture, etc.)",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "email_number": {"type": "integer", "description": "Le numéro de l'email dans la liste (1, 2, 3...)"}
+                    "name": {"type": "string", "description": "Nom du document"},
+                    "doc_type": {"type": "string", "enum": ["proposal", "contract", "grant", "invoice", "legal", "admin", "other"], "description": "Type de document"},
+                    "status": {"type": "string", "enum": ["draft", "review", "ready", "submitted", "approved", "rejected"], "description": "Statut"},
+                    "due_date": {"type": "string", "description": "Date d'échéance (YYYY-MM-DD)"},
+                    "url": {"type": "string", "description": "URL du document (optionnel)"},
+                    "notes": {"type": "string", "description": "Notes supplémentaires"}
                 },
-                "required": ["email_number"]
+                "required": ["name"]
             }
         }
     },
     {
         "type": "function",
         "function": {
-            "name": "create_draft",
-            "description": "Génère un brouillon d'email, de lettre, de proposition ou de note",
+            "name": "list_documents",
+            "description": "Liste les documents de l'utilisateur avec tous les détails (liens, dates, statuts).",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "type": {
+                    "limit": {"type": "integer", "description": "Nombre maximum de documents à afficher (défaut: 10)"},
+                    "status": {"type": "string", "enum": ["draft", "review", "ready", "submitted", "approved", "rejected"], "description": "Filtrer par statut"},
+                    "show_details": {"type": "boolean", "description": "Afficher les détails complets (défaut: true)"}
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_document",
+            "description": "Récupère les détails complets d'un document spécifique.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "document_id": {"type": "string", "description": "ID du document"},
+                    "name": {"type": "string", "description": "Nom du document (recherche approximative)"}
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_document",
+            "description": "Met à jour un document existant (ajouter/modifier un lien, des notes, le statut, etc.)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Nom du document à modifier"},
+                    "updates": {"type": "object", "description": "Champs à mettre à jour (ex: {\"url\": \"https://...\", \"notes\": \"Nouvelle note\"})"}
+                },
+                "required": ["name", "updates"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_document",
+            "description": "Supprime un document.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "document_name": {"type": "string", "description": "Nom du document à supprimer"}
+                },
+                "required": ["document_name"]
+            }
+        }
+    },
+
+    # =====================================================
+    # 7. FINANCES
+    # =====================================================
+    {
+        "type": "function",
+        "function": {
+            "name": "add_spending",
+            "description": "Ajoute une dépense.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Description de la dépense"},
+                    "amount": {"type": "number", "description": "Montant en CFA"},
+                    "category": {"type": "string", "enum": ["materials", "construction", "labor", "livestock", "crops", "transport", "equipment", "food", "other"], "description": "Catégorie de la dépense"},
+                    "project": {"type": "string", "description": "Projet associé (Ifè Farm, Love & Fire, etc.)"},
+                    "date": {"type": "string", "description": "Date de la dépense (format YYYY-MM-DD)"},
+                    "notes": {"type": "string", "description": "Notes supplémentaires"}
+                },
+                "required": ["title", "amount"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_revenue",
+            "description": "Ajoute un revenu.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string", "description": "Source du revenu (ex: vente, prestation, salaire)"},
+                    "amount": {"type": "number", "description": "Montant en CFA"},
+                    "project": {"type": "string", "description": "Projet associé (Ifè Farm, Love & Fire, etc.)"},
+                    "date": {"type": "string", "description": "Date du revenu (format YYYY-MM-DD)"},
+                    "notes": {"type": "string", "description": "Notes supplémentaires"}
+                },
+                "required": ["source", "amount"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_financial_summary",
+            "description": "Retourne le résumé financier (revenus, dépenses, solde)",
+            "parameters": {"type": "object", "properties": {}, "required": []}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_to_table",
+            "description": "Écrit une nouvelle entrée (spending, tasks, wins, family_events, revenue, missions)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "table": {
                         "type": "string",
-                        "enum": ["email", "letter", "proposal", "note"],
-                        "description": "Type de document à générer"
+                        "enum": ["spending", "tasks", "wins", "family_events", "revenue", "missions"]
                     },
-                    "context": {"type": "string", "description": "Contexte et instructions pour le brouillon"}
+                    "title": {"type": "string"},
+                    "amount": {"type": "number", "minimum": 0},
+                    "category": {"type": "string"},
+                    "project": {"type": "string"},
+                    "date": {"type": "string", "format": "date"},
+                    "notes": {"type": "string"}
                 },
-                "required": ["type", "context"]
+                "required": ["table", "title"]
             }
         }
     },
 
-    # -------------------------------------------------
-    # ORGANISATION
-    # -------------------------------------------------
+    # =====================================================
+    # 8. FAMILLE & ENFANTS
+    # =====================================================
+    {
+        "type": "function",
+        "function": {
+            "name": "add_family_event",
+            "description": "Ajoute un événement familial (école, santé, activité, voyage, papiers, routine, fournitures).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Titre de l'événement"},
+                    "child_name": {"type": "string", "description": "Nom de l'enfant concerné (optionnel)"},
+                    "category": {"type": "string", "enum": ["school", "health", "activity", "travel", "document", "routine", "supplies"], "description": "Catégorie de l'événement"},
+                    "date": {"type": "string", "description": "Date de l'événement (format YYYY-MM-DD)"},
+                    "priority": {"type": "string", "enum": ["critical", "high", "normal", "low"], "description": "Priorité"},
+                    "notes": {"type": "string", "description": "Notes supplémentaires"}
+                },
+                "required": ["title"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_child",
+            "description": "Ajoute un enfant au profil utilisateur.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Nom complet de l'enfant"},
+                    "nickname": {"type": "string", "description": "Surnom (optionnel)"},
+                    "birthday": {"type": "string", "description": "Date d'anniversaire (format YYYY-MM-DD, optionnel)"},
+                    "notes": {"type": "string", "description": "Notes supplémentaires (optionnel)"}
+                },
+                "required": ["name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_profile",
+            "description": "Met à jour le profil utilisateur (nom, enfants, projets, objectifs).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "field": {
+                        "type": "string",
+                        "enum": ["preferred_name", "full_name", "birthday", "children", "projects", "current_goals"],
+                        "description": "Le champ à modifier"
+                    },
+                    "value": {
+                        "type": "string",
+                        "description": "La nouvelle valeur (pour les champs simples) ou JSON (pour les champs complexes comme children)"
+                    }
+                },
+                "required": ["field", "value"]
+            }
+        }
+    },
+
+    # =====================================================
+    # 9. VICTOIRES
+    # =====================================================
+    {
+        "type": "function",
+        "function": {
+            "name": "add_win",
+            "description": "Ajoute une victoire pour célébrer un succès.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Description de la victoire"},
+                    "category": {"type": "string", "enum": ["business", "family", "personal", "money", "health", "farm", "other"], "description": "Catégorie de la victoire"},
+                    "celebration_emoji": {"type": "string", "description": "Émoji pour célébrer (ex: 🎉, 🏆, 💪, 🔥, 👑)"},
+                    "notes": {"type": "string", "description": "Notes supplémentaires"}
+                },
+                "required": ["title"]
+            }
+        }
+    },
+
+    # =====================================================
+    # 10. MISE À JOUR GÉNÉRIQUE
+    # =====================================================
+    {
+        "type": "function",
+        "function": {
+            "name": "update_item",
+            "description": "Met à jour un élément existant (tâche, mission, document, événement, victoire, dépense, revenu)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "table": {
+                        "type": "string",
+                        "enum": ["tasks", "missions", "family_events", "documents", "wins", "spending", "revenue"],
+                        "description": "La table concernée"
+                    },
+                    "name": {"type": "string", "description": "Nom/titre de l'élément à modifier"},
+                    "updates": {"type": "object", "description": "Champs à mettre à jour (ex: {\"status\": \"done\", \"priority\": \"high\"})"}
+                },
+                "required": ["table", "name", "updates"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_item",
+            "description": "Supprime un élément (tâche, mission, document, événement, victoire)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "table": {"type": "string", "enum": ["tasks", "missions", "documents", "family_events", "wins"], "description": "La table concernée"},
+                    "name": {"type": "string", "description": "Nom/titre de l'élément à supprimer"},
+                    "item_id": {"type": "string", "description": "ID de l'élément (optionnel si le nom est fourni)"}
+                },
+                "required": ["table", "name"]
+            }
+        }
+    },
+
+    # =====================================================
+    # 11. ORGANISATION & RAPPELS
+    # =====================================================
     {
         "type": "function",
         "function": {
@@ -3823,24 +3758,33 @@ tools = [
                 "type": "object",
                 "properties": {
                     "summary": {"type": "string", "description": "Titre de l'événement"},
-                    "start_datetime": {
-                        "type": "string",
-                        "description": "Date et heure de début (format: YYYY-MM-DDTHH:MM:SS)"
-                    },
-                    "end_datetime": {
-                        "type": "string",
-                        "description": "Date et heure de fin (format: YYYY-MM-DDTHH:MM:SS)"
-                    },
+                    "start_datetime": {"type": "string", "description": "Date et heure de début (format: YYYY-MM-DDTHH:MM:SS)"},
+                    "end_datetime": {"type": "string", "description": "Date et heure de fin (format: YYYY-MM-DDTHH:MM:SS)"},
                     "description": {"type": "string", "description": "Description optionnelle"}
                 },
                 "required": ["summary", "start_datetime", "end_datetime"]
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "schedule_reminder",
+            "description": "Programme un rappel dans le temps (pour manger, se reposer, etc.)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Titre du rappel"},
+                    "minutes": {"type": "integer", "description": "Nombre de minutes après lesquelles le rappel s'affiche"}
+                },
+                "required": ["title", "minutes"]
+            }
+        }
+    },
 
-    # -------------------------------------------------
-    # CRÉATIF
-    # -------------------------------------------------
+    # =====================================================
+    # 12. CRÉATIF & BROUILLONS
+    # =====================================================
     {
         "type": "function",
         "function": {
@@ -3855,10 +3799,25 @@ tools = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_draft",
+            "description": "Génère un brouillon d'email, de lettre, de proposition ou de note",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string", "enum": ["email", "letter", "proposal", "note"], "description": "Type de document à générer"},
+                    "context": {"type": "string", "description": "Contexte et instructions pour le brouillon"}
+                },
+                "required": ["type", "context"]
+            }
+        }
+    },
 
-    # -------------------------------------------------
-    # MÉMOIRE
-    # -------------------------------------------------
+    # =====================================================
+    # 13. MÉMOIRE
+    # =====================================================
     {
         "type": "function",
         "function": {
@@ -3867,22 +3826,15 @@ tools = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "key": {
-                        "type": "string",
-                        "description": "Clé de l'information (ex: 'enfant_prefere', 'projet_prioritaire')"
-                    },
+                    "key": {"type": "string", "description": "Clé de l'information (ex: 'enfant_prefere', 'projet_prioritaire')"},
                     "value": {"type": "string", "description": "Valeur de l'information"},
-                    "category": {
-                        "type": "string",
-                        "description": "Catégorie: identity, family, business, preferences, projects"
-                    }
+                    "category": {"type": "string", "description": "Catégorie: identity, family, business, preferences, projects"}
                 },
                 "required": ["key", "value", "category"]
             }
         }
     }
 ]
-
 # =====================================================
 # API ROUTES - HEALTH & ROOT
 # =====================================================
