@@ -2093,7 +2093,7 @@ async def run_all_reminders():
     results["opportunities"] = await opportunities_reminder()
     results["financial_weekly"] = await financial_weekly_report()
     results["family_events"] = await family_events_reminder()
-    results["evening_comms"] = await send_evening_comms_reminder() 
+    results["evening_report"] = await send_evening_report() 
     
     total_count = 0
     for key, value in results.items():
@@ -4174,6 +4174,120 @@ async def list_documents(user_id: str, limit: int = 10, status: str = None, show
     except Exception as e:
         logger.error(f"Erreur list_documents: {e}")
         return {"success": False, "error": str(e), "documents": []}
+
+async def get_gmail_messages_imap(limit: int = 10):
+    """Récupère les emails via IMAP"""
+    if not GMAIL_APP_PASSWORD:
+        return {"success": False, "error": "Gmail IMAP non configuré", "messages": []}
+    
+    try:
+        mail = imaplib.IMAP4_SSL("imap.gmail.com")
+        mail.login(GMAIL_EMAIL, GMAIL_APP_PASSWORD)
+        mail.select("INBOX")
+        
+        status, messages = mail.search(None, 'UNSEEN')
+        
+        if status != 'OK':
+            return {"success": True, "messages": [], "count": 0}
+        
+        email_ids = messages[0].split()
+        email_ids = email_ids[-limit:] if len(email_ids) > limit else email_ids
+        
+        # Liste des mots-clés pour identifier les auto-emails
+        auto_keywords = [
+            "sovereign-bridge",
+            "sovereign",
+            "noreply@sovereign",
+            "test de sovereign",
+            "becks",
+            "sovereign-backend",
+            "render.com",
+            "jbillcataria@gmail.com"
+        ]
+        
+        emails = []
+        for e_id in reversed(email_ids):
+            try:
+                status, msg_data = mail.fetch(e_id, '(RFC822)')
+                for response_part in msg_data:
+                    if isinstance(response_part, tuple):
+                        msg = email.message_from_bytes(response_part[1])
+                        
+                        from_addr = msg.get("From", "Inconnu")
+                        try:
+                            decoded = decode_header(from_addr)[0]
+                            if isinstance(decoded[0], bytes):
+                                from_addr = decoded[0].decode(decoded[1] or 'utf-8', errors='ignore')
+                            else:
+                                from_addr = decoded[0]
+                        except:
+                            pass
+                        
+                        # ========== FILTRE ANTI-AUTO-EMAILS ==========
+                        from_lower = from_addr.lower()
+                        
+                        # Ignorer les emails envoyés par notre propre système
+                        is_auto = False
+                        for keyword in auto_keywords:
+                            if keyword in from_lower:
+                                is_auto = True
+                                print(f"⏭️ Auto-email ignoré: {from_addr[:50]}...")
+                                break
+                        
+                        # Ignorer les emails envoyés par notre propre adresse Gmail
+                        if GMAIL_EMAIL and GMAIL_EMAIL.lower() in from_lower:
+                            is_auto = True
+                            print(f"⏭️ Email auto-envoyé ignoré: {from_addr[:50]}...")
+                        
+                        if is_auto:
+                            continue  # Passer à l'email suivant
+                        # ============================================
+                        
+                        subject = msg.get("Subject", "Sans sujet")
+                        try:
+                            decoded_subj = decode_header(subject)[0]
+                            if isinstance(decoded_subj[0], bytes):
+                                subject = decoded_subj[0].decode(decoded_subj[1] or 'utf-8', errors='ignore')
+                            else:
+                                subject = decoded_subj[0]
+                        except:
+                            pass
+                        
+                        body = ""
+                        if msg.is_multipart():
+                            for part in msg.walk():
+                                if part.get_content_type() == "text/plain":
+                                    try:
+                                        body = part.get_payload(decode=True).decode('utf-8', errors='ignore')[:200]
+                                        break
+                                    except:
+                                        body = "[Contenu non disponible]"
+                        else:
+                            try:
+                                body = msg.get_payload(decode=True).decode('utf-8', errors='ignore')[:200]
+                            except:
+                                body = "[Contenu non disponible]"
+                        
+                        emails.append({
+                            "id": e_id.decode(),
+                            "from": from_addr,
+                            "subject": subject,
+                            "snippet": body,
+                            "date": msg.get("Date", "Date inconnue")
+                        })
+            except Exception as inner_e:
+                logger.error(f"Erreur traitement email {e_id}: {inner_e}")
+                continue
+        
+        mail.close()
+        mail.logout()
+        
+        return {"success": True, "messages": emails, "count": len(emails)}
+    
+    except Exception as e:
+        logger.error(f"Erreur IMAP Gmail: {e}")
+        return {"success": False, "error": str(e), "messages": []}
+
 
 
 async def update_document(user_id: str, document_id: str = None, name: str = None, 
@@ -6900,8 +7014,13 @@ async def send_morning_brief(request: Dict[str, Any] = None):
         yesterday_mood_value = yesterday_mood.data[0]["mood"] if yesterday_mood.data else None
         
         # 7. Prochain événement familial
-        next_family_event = supabase.table("family_events").select("*").eq("user_id", user_id).gte("date", today).neq("status", "done").order("date", ascending=True).limit(1).execute()
-        
+        next_family_event = supabase.table("family_events").select("*")\
+            .eq("user_id", user_id)\
+            .gte("date", today)\
+            .neq("status", "done")\
+            .order("date")\
+            .limit(1)\
+            .execute()        
         # 8. Récupérer le nom et les enfants
         profile = supabase.table("user_profile").select("preferred_name, children").eq("user_id", user_id).execute()
         user_name = profile.data[0].get("preferred_name", "Rebecca") if profile.data else "Rebecca"
@@ -6917,7 +7036,7 @@ async def send_morning_brief(request: Dict[str, Any] = None):
                     birthday_today = child["name"]
         
         # 10. Mission à plus fort potentiel
-        top_mission = supabase.table("missions").select("*").eq("user_id", user_id).eq("status", "active").order("revenue_potential", ascending=False).limit(1).execute()
+        top_mission = supabase.table("missions").select("*").eq("user_id", user_id).eq("status", "active").order("revenue_potential", desc=True).limit(1).execute()
         
         # 11. Budget restant
         total_revenue = supabase.table("revenue").select("amount").eq("user_id", user_id).execute()
@@ -7086,144 +7205,6 @@ Je suis là. 💖"""
 
 
 
-@app.post("/api/proactive/evening-comms-reminder")
-async def send_evening_comms_reminder(request: Dict[str, Any] = None):
-    """
-    Envoie un rappel des communications non traitées le soir.
-    À appeler par cron-job.org entre 19h et 21h.
-    """
-    if not supabase:
-        return {"success": False, "error": "Supabase non configuré"}
-    
-    try:
-        user_id = get_request_user_id(request or {})
-        now = datetime.now()
-        today = now.date().isoformat()
-        hour = now.hour
-        
-        # Vérifier si c'est l'heure (19h-21h)
-        if not (19 <= hour <= 21):
-            return {"success": True, "sent": False, "message": "Pas l'heure du rappel du soir"}
-        
-        # Vérifier si déjà envoyé aujourd'hui
-        existing = supabase.table("notifications_log").select("*")\
-            .eq("type", "evening_comms")\
-            .eq("date", today)\
-            .eq("user_id", user_id)\
-            .execute()
-        
-        if existing.data:
-            return {"success": True, "sent": False, "message": "Déjà envoyé ce soir"}
-        
-        # ========== RÉCUPÉRER LES COMMUNICATIONS ==========
-        comms = await get_comms_summary(user_id)
-        comms_data = comms.get("data", {})
-        whatsapp_list = comms_data.get("whatsapp", [])
-        emails_list = comms_data.get("emails", [])
-        urgent_count = comms_data.get("urgent_count", 0)
-        total_pending = comms_data.get("total_pending", 0)
-        
-        # Récupérer le nom de l'utilisateur
-        profile = supabase.table("user_profile").select("preferred_name").eq("user_id", user_id).execute()
-        user_name = profile.data[0].get("preferred_name", "Rebecca") if profile.data else "Rebecca"
-        
-        # ========== CONSTRUIRE LE MESSAGE ==========
-        if total_pending == 0:
-            message = f"🌙 Bonsoir {user_name}.\n\n✅ Aucun message en attente. Tu es à jour !\n\nRepose-toi bien. 👑"
-        else:
-            # Construire le message
-            message = f"🌙 Bonsoir {user_name}.\n\n"
-            message += f"📊 **Bilan de la journée :**\n"
-            
-            if urgent_count > 0:
-                message += f"⚠️ **{urgent_count} message(s) urgent(s) en attente**\n\n"
-            
-            if whatsapp_list:
-                message += f"📱 **WhatsApp ({len(whatsapp_list)} non répondus)**\n"
-                for w in whatsapp_list[:5]:
-                    urgency = "⚠️ " if w["is_urgent"] else "   "
-                    message += f"{urgency}• {w['from']}: {w['message'][:50]}...\n"
-                if len(whatsapp_list) > 5:
-                    message += f"   ... et {len(whatsapp_list) - 5} autre(s)\n"
-                message += "\n"
-            
-            if emails_list:
-                message += f"📧 **Emails ({len(emails_list)} non lus)**\n"
-                for e in emails_list[:5]:
-                    urgency = "⚠️ " if e["is_urgent"] else "   "
-                    from_clean = e['from'].split('<')[0].strip()
-                    message += f"{urgency}• {from_clean}: {e['subject']}\n"
-                if len(emails_list) > 5:
-                    message += f"   ... et {len(emails_list) - 5} autre(s)\n"
-                message += "\n"
-            
-            message += f"💡 **Demain matin**, je te rappellerai les priorités.\n"
-            message += f"📱 Dis-moi 'fais le point' pour répondre maintenant.\n\n"
-            message += f"Bonne nuit, {user_name}. 👑"
-        
-        # ========== ENVOI EMAIL ==========
-        email_sent = False
-        if BREVO_API_KEY:
-            try:
-                user_email = "jbillcataria@gmail.com"  # À remplacer par l'email de l'utilisateur
-                email_body = message.replace("\n", "<br>")
-                await send_email(EmailRequest(
-                    to=user_email,
-                    subject=f"🌙 {user_name} - Bilan du {now.strftime('%d/%m/%Y')}",
-                    body=email_body
-                ))
-                email_sent = True
-                logger.info("📧 Email bilan du soir envoyé")
-            except Exception as e:
-                logger.error(f"Erreur envoi email soir: {e}")
-        
-        # ========== ENVOI NOTIFICATION PUSH ==========
-        push_sent = False
-        try:
-            send_notification_sync({
-                "title": f"🌙 {user_name}",
-                "body": f"{total_pending} message(s) en attente dont {urgent_count} urgent(s)",
-                "url": "/chat",
-                "type": "evening_comms",
-                "user_id": user_id,
-                "requireInteraction": urgent_count > 0
-            })
-            push_sent = True
-            logger.info("🔔 Notification push bilan du soir envoyée")
-        except Exception as e:
-            logger.error(f"Erreur envoi push soir: {e}")
-        
-        # Logger l'envoi
-        supabase.table("notifications_log").insert({
-            "type": "evening_comms",
-            "date": today,
-            "user_id": user_id,
-            "sent_at": now.isoformat(),
-            "metadata": {
-                "total_pending": total_pending,
-                "urgent_count": urgent_count,
-                "whatsapp_count": len(whatsapp_list),
-                "emails_count": len(emails_list)
-            }
-        }).execute()
-        
-        return {
-            "success": True,
-            "sent": True,
-            "message": message,
-            "stats": {
-                "total_pending": total_pending,
-                "urgent_count": urgent_count,
-                "whatsapp": len(whatsapp_list),
-                "emails": len(emails_list)
-            },
-            "email_sent": email_sent,
-            "push_sent": push_sent
-        }
-        
-    except Exception as e:
-        logger.error(f"Erreur evening_comms_reminder: {e}")
-        return {"success": False, "error": str(e)}
 
 # =====================================================
 # PROACTIF - VEILLE SUR PROJETS INACTIFS
@@ -7735,48 +7716,91 @@ async def execute_batch_actions(actions: List[ExecutorAction], auto_confirm: boo
     return {"success": True, "results": results}
 
 
-@app.post("/api/proactive/evening-summary")
-async def send_evening_summary(request: Dict[str, Any] = None):
+@app.post("/api/proactive/evening-report")
+async def send_evening_report(request: Dict[str, Any] = None):
     """
-    Envoie un résumé de fin de journée personnalisé par IA.
+    Envoie un rapport complet du soir (communications + résumé de journée).
+    Envoie à la fois une notification push et un email.
     """
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
         user_id = get_request_user_id(request or {})
-        today = datetime.now().date().isoformat()
         now = datetime.now()
+        today = now.date().isoformat()
+        hour = now.hour
         
-        # ========== RÉCUPÉRER LES DONNÉES ==========
+        # Vérifier si c'est l'heure (19h-21h)
+        if not (19 <= hour <= 21):
+            return {"success": True, "sent": False, "message": "Pas l'heure du rappel du soir"}
+        
+        # Vérifier si déjà envoyé aujourd'hui
+        existing = supabase.table("notifications_log").select("*")\
+            .eq("type", "evening_report")\
+            .eq("date", today)\
+            .eq("user_id", user_id)\
+            .execute()
+        
+        if existing.data:
+            return {"success": True, "sent": False, "message": "Déjà envoyé ce soir"}
+        
+        # ========== 1. RÉCUPÉRER LES COMMUNICATIONS ==========
+        comms = await get_comms_summary(user_id)
+        comms_data = comms.get("data", {})
+        whatsapp_list = comms_data.get("whatsapp", [])
+        emails_list = comms_data.get("emails", [])
+        urgent_count = comms_data.get("urgent_count", 0)
+        total_pending = len(whatsapp_list) + len(emails_list)
+        
+        # ========== 2. RÉCUPÉRER LES DONNÉES DE LA JOURNÉE ==========
         
         # Tâches complétées aujourd'hui
-        completed_tasks = supabase.table("tasks").select("*").eq("user_id", user_id).eq("status", "done").gte("updated_at", today).execute()
+        completed_tasks = supabase.table("tasks").select("*")\
+            .eq("user_id", user_id)\
+            .eq("status", "done")\
+            .gte("updated_at", today)\
+            .order("updated_at", desc=True)\
+            .execute()
         completed_count = len(completed_tasks.data)
         completed_list = [t["title"] for t in completed_tasks.data[:3]]
         
         # Tâches restantes (non terminées)
-        pending_tasks = supabase.table("tasks").select("*").eq("user_id", user_id).neq("status", "done").execute()
+        pending_tasks = supabase.table("tasks").select("*")\
+            .eq("user_id", user_id)\
+            .neq("status", "done")\
+            .execute()
         pending_count = len(pending_tasks.data)
         
         # Tâches en retard
-        overdue_tasks = supabase.table("tasks").select("*").eq("user_id", user_id).lt("due_date", today).neq("status", "done").execute()
+        overdue_tasks = supabase.table("tasks").select("*")\
+            .eq("user_id", user_id)\
+            .lt("due_date", today)\
+            .neq("status", "done")\
+            .execute()
         overdue_count = len(overdue_tasks.data)
         
         # Victoires du jour
-        wins_today = supabase.table("wins").select("*").gte("date", today).execute()
+        wins_today = supabase.table("wins").select("*")\
+            .eq("user_id", user_id)\
+            .gte("date", today)\
+            .execute()
         wins_count = len(wins_today.data)
         wins_list = [w["title"] for w in wins_today.data[:3]]
         
         # Humeur du jour
-        mood_today = supabase.table("mood_entries").select("mood").eq("date", today).eq("user_id", user_id).execute()
-        current_mood = mood_today.data[0]["mood"] if mood_today.data else None
+        mood_today = supabase.table("mood_entries").select("mood")\
+            .eq("user_id", user_id)\
+            .eq("date", today)\
+            .maybeSingle()\
+            .execute()
+        current_mood = mood_today.data.get("mood") if mood_today.data else None
         
         # Récupérer le nom
         profile = supabase.table("user_profile").select("preferred_name").eq("user_id", user_id).execute()
         user_name = profile.data[0].get("preferred_name", "Rebecca") if profile.data else "Rebecca"
         
-        # ========== GÉNÉRATION IA ==========
+        # ========== 3. GÉNÉRATION IA POUR LE MESSAGE PERSO ==========
         
         prompt = f"""Rebecca a terminé sa journée. Voici son bilan :
 - Tâches faites : {completed_count} ({', '.join(completed_list) if completed_list else 'rien'})
@@ -7784,13 +7808,15 @@ async def send_evening_summary(request: Dict[str, Any] = None):
 - Tâches en retard : {overdue_count}
 - Victoires du jour : {wins_count} ({', '.join(wins_list) if wins_list else 'aucune'})
 - Humeur : {current_mood or 'non renseignée'}
+- Messages en attente : {total_pending} (dont {urgent_count} urgent(s))
 
-Génère un message de fin de journée (max 60 mots) :
+Génère un message de fin de journée (max 80 mots) :
 1. Reconnais ce qu'elle a accompli (ou non)
-2. Un conseil court pour demain si nécessaire
-3. Une phrase apaisante pour la nuit
+2. Mentionne les messages en attente si urgents
+3. Un conseil court pour demain
+4. Une phrase apaisante pour la nuit
 
-Style : chaleureux, pas de bla-bla, direct mais doux.
+Style : chaleureux, direct mais doux.
 
 Retourne UNIQUEMENT du JSON : {{"message": "..."}}"""
 
@@ -7798,61 +7824,112 @@ Retourne UNIQUEMENT du JSON : {{"message": "..."}}"""
             model="gpt-4o",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
-            max_tokens=200
+            max_tokens=250
         )
         
         result_text = response.choices[0].message.content
         result_text = result_text.replace("```json", "").replace("```", "").strip()
         ai_content = json.loads(result_text)
         
-        message = f"🌙 Bonsoir {user_name}.\n\n{ai_content.get('message')}\n\nRepose-toi bien. Demain est un nouveau jour. 👑"
+        # ========== 4. CONSTRUIRE LE MESSAGE FINAL ==========
         
-        # ========== ENVOI ==========
+        # Section communications (si nécessaire)
+        comms_section = ""
+        if total_pending > 0:
+            comms_section = f"\n\n📱 **Messages en attente :**\n"
+            if urgent_count > 0:
+                comms_section += f"⚠️ {urgent_count} message(s) urgent(s)\n"
+            
+            # Afficher les 2 premiers WhatsApp urgents
+            for w in whatsapp_list[:2]:
+                comms_section += f"   • WhatsApp - {w['from']}: {w['message'][:40]}...\n"
+            # Afficher les 2 premiers emails urgents
+            for e in emails_list[:2]:
+                from_clean = e['from'].split('<')[0].strip()
+                comms_section += f"   • Email - {from_clean}: {e['subject'][:40]}\n"
+            
+            if total_pending > 4:
+                remaining = total_pending - 4
+                comms_section += f"   • et {remaining} autre(s) message(s)\n"
+            
+            comms_section += f"\n👉 Dis-moi 'fais le point' pour voir les détails et répondre."
+        
+        # Message principal
+        message = f"🌙 Bonsoir {user_name}.\n\n{ai_content.get('message')}{comms_section}\n\nRepose-toi bien. Demain est un nouveau jour. 👑"
+        
+        # ========== 5. ENVOI NOTIFICATION PUSH ==========
         push_sent = False
         try:
             send_notification_sync({
-                "title": "🌙 Fin de journée",
-                "body": f"{completed_count} tâche(s) accomplie(s) • {wins_count} victoire(s)",
-                "url": "/",
+                "title": f"🌙 {user_name} - Bilan du soir",
+                "body": f"{completed_count} tâche(s) faite(s) | {total_pending} message(s) en attente",
+                "url": "/chat",
+                "type": "evening_report",
                 "user_id": user_id,
-                "type": "brief"
+                "requireInteraction": urgent_count > 0
             })
             push_sent = True
+            logger.info("🔔 Notification push bilan du soir envoyée")
         except Exception as e:
             logger.error(f"Erreur envoi push soir: {e}")
         
-        # Email optionnel (1x par jour max)
+        # ========== 6. ENVOI EMAIL ==========
         email_sent = False
-        if BREVO_API_KEY and completed_count > 0:
+        if BREVO_API_KEY:
             try:
+                user_email = "jbillcataria@gmail.com"
                 email_body = message.replace("\n", "<br>")
                 await send_email(EmailRequest(
-                    to="jbillcataria@gmail.com",
-                    subject=f"🌙 Résumé du {datetime.now().strftime('%d/%m/%Y')}",
+                    to=user_email,
+                    subject=f"🌙 {user_name} - Bilan du {now.strftime('%d/%m/%Y')}",
                     body=email_body
                 ))
                 email_sent = True
+                logger.info("📧 Email bilan du soir envoyé")
             except Exception as e:
                 logger.error(f"Erreur envoi email soir: {e}")
         
+        # ========== 7. LOGGER L'ENVOI ==========
+        supabase.table("notifications_log").insert({
+            "type": "evening_report",
+            "date": today,
+            "user_id": user_id,
+            "sent_at": now.isoformat(),
+            "metadata": {
+                "completed_tasks": completed_count,
+                "pending_tasks": pending_count,
+                "overdue_tasks": overdue_count,
+                "wins": wins_count,
+                "mood": current_mood,
+                "pending_comms": total_pending,
+                "urgent_comms": urgent_count,
+                "whatsapp_count": len(whatsapp_list),
+                "emails_count": len(emails_list)
+            }
+        }).execute()
+        
         return {
             "success": True,
+            "sent": True,
             "message": message,
             "stats": {
-                "completed": completed_count,
-                "pending": pending_count,
-                "overdue": overdue_count,
+                "completed_tasks": completed_count,
+                "pending_tasks": pending_count,
+                "overdue_tasks": overdue_count,
                 "wins": wins_count,
-                "mood": current_mood
+                "mood": current_mood,
+                "pending_comms": total_pending,
+                "urgent_comms": urgent_count,
+                "whatsapp": len(whatsapp_list),
+                "emails": len(emails_list)
             },
             "push_sent": push_sent,
             "email_sent": email_sent
         }
         
     except Exception as e:
-        logger.error(f"Erreur résumé soir: {e}")
+        logger.error(f"Erreur evening_report: {e}")
         return {"success": False, "error": str(e)}
-        
 
 def _get_evening_advice(completed: int, pending: int, overdue: int) -> str:
     """Génère un conseil personnalisé pour le soir"""
@@ -11122,51 +11199,9 @@ def get_gmail_service():
         return None
 
 async def get_gmail_messages(max_results: int = 10, unread_only: bool = True):
-    """Récupère les messages Gmail"""
+    """Récupère les messages Gmail via IMAP"""
     return await get_gmail_messages_imap(max_results)
-    service = get_gmail_service()
-    if not service:
-        return {"success": False, "error": "Gmail non configuré", "messages": []}
     
-    try:
-        query = "is:unread" if unread_only else ""
-        
-        results = service.users().messages().list(
-            userId=GMAIL_USER_ID,
-            maxResults=max_results,
-            q=query
-        ).execute()
-        
-        messages = []
-        for msg in results.get('messages', []):
-            msg_data = service.users().messages().get(
-                userId=GMAIL_USER_ID,
-                id=msg['id'],
-                format='metadata',
-                metadataHeaders=['From', 'Subject', 'Date']
-            ).execute()
-            
-            headers = msg_data.get('payload', {}).get('headers', [])
-            
-            subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'Sans sujet')
-            from_addr = next((h['value'] for h in headers if h['name'] == 'From'), 'Inconnu')
-            date = next((h['value'] for h in headers if h['name'] == 'Date'), 'Date inconnue')
-            snippet = msg_data.get('snippet', '')[:150]
-            
-            messages.append({
-                "id": msg['id'],
-                "from": from_addr,
-                "subject": subject,
-                "snippet": snippet,
-                "date": date
-            })
-        
-        return {"success": True, "messages": messages, "count": len(messages)}
-    
-    except Exception as e:
-        logger.error(f"Erreur Gmail: {e}")
-        return {"success": False, "error": str(e), "messages": []}
-
 async def mark_gmail_as_read(message_id: str):
     """Marque un message comme lu"""
     service = get_gmail_service()
@@ -11185,118 +11220,6 @@ async def mark_gmail_as_read(message_id: str):
         return False
 
 
-
-async def get_gmail_messages_imap(limit: int = 10):
-    """Récupère les emails via IMAP"""
-    if not GMAIL_APP_PASSWORD:
-        return {"success": False, "error": "Gmail IMAP non configuré", "messages": []}
-    
-    try:
-        mail = imaplib.IMAP4_SSL("imap.gmail.com")
-        mail.login(GMAIL_EMAIL, GMAIL_APP_PASSWORD)
-        mail.select("INBOX")
-        
-        status, messages = mail.search(None, 'UNSEEN')
-        
-        if status != 'OK':
-            return {"success": True, "messages": [], "count": 0}
-        
-        email_ids = messages[0].split()
-        email_ids = email_ids[-limit:] if len(email_ids) > limit else email_ids
-        
-        # Liste des mots-clés pour identifier les auto-emails
-        auto_keywords = [
-            "sovereign-bridge",
-            "sovereign",
-            "noreply@sovereign",
-            "test de sovereign",
-            "becks",
-            "sovereign-backend",
-            "render.com"
-        ]
-        
-        emails = []
-        for e_id in reversed(email_ids):
-            try:
-                status, msg_data = mail.fetch(e_id, '(RFC822)')
-                for response_part in msg_data:
-                    if isinstance(response_part, tuple):
-                        msg = email.message_from_bytes(response_part[1])
-                        
-                        from_addr = msg.get("From", "Inconnu")
-                        try:
-                            decoded = decode_header(from_addr)[0]
-                            if isinstance(decoded[0], bytes):
-                                from_addr = decoded[0].decode(decoded[1] or 'utf-8', errors='ignore')
-                            else:
-                                from_addr = decoded[0]
-                        except:
-                            pass
-                        
-                        # ========== FILTRE ANTI-AUTO-EMAILS ==========
-                        from_lower = from_addr.lower()
-                        
-                        # Ignorer les emails envoyés par notre propre système
-                        is_auto = False
-                        for keyword in auto_keywords:
-                            if keyword in from_lower:
-                                is_auto = True
-                                print(f"⏭️ Auto-email ignoré: {from_addr[:50]}...")
-                                break
-                        
-                        # Ignorer les emails envoyés par notre propre adresse Gmail
-                        if GMAIL_EMAIL and GMAIL_EMAIL.lower() in from_lower:
-                            is_auto = True
-                            print(f"⏭️ Email auto-envoyé ignoré: {from_addr[:50]}...")
-                        
-                        if is_auto:
-                            continue  # Passer à l'email suivant
-                        # ============================================
-                        
-                        subject = msg.get("Subject", "Sans sujet")
-                        try:
-                            decoded_subj = decode_header(subject)[0]
-                            if isinstance(decoded_subj[0], bytes):
-                                subject = decoded_subj[0].decode(decoded_subj[1] or 'utf-8', errors='ignore')
-                            else:
-                                subject = decoded_subj[0]
-                        except:
-                            pass
-                        
-                        body = ""
-                        if msg.is_multipart():
-                            for part in msg.walk():
-                                if part.get_content_type() == "text/plain":
-                                    try:
-                                        body = part.get_payload(decode=True).decode('utf-8', errors='ignore')[:200]
-                                        break
-                                    except:
-                                        body = "[Contenu non disponible]"
-                        else:
-                            try:
-                                body = msg.get_payload(decode=True).decode('utf-8', errors='ignore')[:200]
-                            except:
-                                body = "[Contenu non disponible]"
-                        
-                        emails.append({
-                            "id": e_id.decode(),
-                            "from": from_addr,
-                            "subject": subject,
-                            "snippet": body,
-                            "date": msg.get("Date", "Date inconnue")
-                        })
-            except Exception as inner_e:
-                logger.error(f"Erreur traitement email {e_id}: {inner_e}")
-                continue
-        
-        mail.close()
-        mail.logout()
-        
-        return {"success": True, "messages": emails, "count": len(emails)}
-    
-    except Exception as e:
-        logger.error(f"Erreur IMAP Gmail: {e}")
-        return {"success": False, "error": str(e), "messages": []}
 
 
 
@@ -11417,6 +11340,8 @@ async def cron_trigger(action: str, request: Request):
         "smart-group": "/api/notifications/smart-group",
         "opportunities": "/api/proactive/opportunities-alert",
         "celebration": "/api/celebration-reminder",
+        "evening-report": "/api/proactive/evening-report", 
+
         
         # Hebdomadaire
         "weekly-report": "/api/weekly-report-reminder",
@@ -11460,6 +11385,9 @@ async def cron_trigger(action: str, request: Request):
         # Morning notification
         elif action == "morning-notification":
             result = await send_morning_notification(query_params or None)
+
+        elif action == "evening-report":
+            result = await send_evening_report(query_params or None)
         
         # Morning greeting
         elif action == "morning-greeting":
@@ -11526,7 +11454,7 @@ async def cron_trigger(action: str, request: Request):
             # Essayer de faire un appel interne à l'endpoint
             import httpx
             async with httpx.AsyncClient() as client:
-                response = await client.post(f"http://localhost:{PORT}{endpoint}", json=query_params or {})
+                response = await client.post(f"http://localhost:8000{endpoint}",json=query_params or {})
                 result = response.json()
         
         # Ajouter l'action dans le résultat pour traçabilité
@@ -11570,7 +11498,262 @@ async def ping():
     """Réponse rapide pour les checks de cron-job.org"""
     return {"pong": True, "timestamp": datetime.now().isoformat()}
 
+@app.post("/api/proactive/evening-comms-reminder")
+async def send_evening_comms_reminder(request: Dict[str, Any] = None):
+    """
+    Envoie un rappel des communications non traitées le soir.
+    À appeler par cron-job.org entre 19h et 21h.
+    """
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        user_id = get_request_user_id(request or {})
+        now = datetime.now()
+        today = now.date().isoformat()
+        hour = now.hour
+        
+        # Vérifier si c'est l'heure (19h-21h)
+        if not (19 <= hour <= 21):
+            return {"success": True, "sent": False, "message": "Pas l'heure du rappel du soir"}
+        
+        # Vérifier si déjà envoyé aujourd'hui
+        existing = supabase.table("notifications_log").select("*")\
+            .eq("type", "evening_comms")\
+            .eq("date", today)\
+            .eq("user_id", user_id)\
+            .execute()
+        
+        if existing.data:
+            return {"success": True, "sent": False, "message": "Déjà envoyé ce soir"}
+        
+        # ========== RÉCUPÉRER LES COMMUNICATIONS ==========
+        comms = await get_comms_summary(user_id)
+        comms_data = comms.get("data", {})
+        whatsapp_list = comms_data.get("whatsapp", [])
+        emails_list = comms_data.get("emails", [])
+        urgent_count = comms_data.get("urgent_count", 0)
+        total_pending = comms_data.get("total_pending", 0)
+        
+        # Récupérer le nom de l'utilisateur
+        profile = supabase.table("user_profile").select("preferred_name").eq("user_id", user_id).execute()
+        user_name = profile.data[0].get("preferred_name", "Rebecca") if profile.data else "Rebecca"
+        
+        # ========== CONSTRUIRE LE MESSAGE ==========
+        if total_pending == 0:
+            message = f"🌙 Bonsoir {user_name}.\n\n✅ Aucun message en attente. Tu es à jour !\n\nRepose-toi bien. 👑"
+        else:
+            # Construire le message
+            message = f"🌙 Bonsoir {user_name}.\n\n"
+            message += f"📊 **Bilan de la journée :**\n"
+            
+            if urgent_count > 0:
+                message += f"⚠️ **{urgent_count} message(s) urgent(s) en attente**\n\n"
+            
+            if whatsapp_list:
+                message += f"📱 **WhatsApp ({len(whatsapp_list)} non répondus)**\n"
+                for w in whatsapp_list[:5]:
+                    urgency = "⚠️ " if w["is_urgent"] else "   "
+                    message += f"{urgency}• {w['from']}: {w['message'][:50]}...\n"
+                if len(whatsapp_list) > 5:
+                    message += f"   ... et {len(whatsapp_list) - 5} autre(s)\n"
+                message += "\n"
+            
+            if emails_list:
+                message += f"📧 **Emails ({len(emails_list)} non lus)**\n"
+                for e in emails_list[:5]:
+                    urgency = "⚠️ " if e["is_urgent"] else "   "
+                    from_clean = e['from'].split('<')[0].strip()
+                    message += f"{urgency}• {from_clean}: {e['subject']}\n"
+                if len(emails_list) > 5:
+                    message += f"   ... et {len(emails_list) - 5} autre(s)\n"
+                message += "\n"
+            
+            message += f"💡 **Demain matin**, je te rappellerai les priorités.\n"
+            message += f"📱 Dis-moi 'fais le point' pour répondre maintenant.\n\n"
+            message += f"Bonne nuit, {user_name}. 👑"
+        
+        # ========== ENVOI EMAIL ==========
+        email_sent = False
+        if BREVO_API_KEY:
+            try:
+                user_email = "jbillcataria@gmail.com"  # À remplacer par l'email de l'utilisateur
+                email_body = message.replace("\n", "<br>")
+                await send_email(EmailRequest(
+                    to=user_email,
+                    subject=f"🌙 {user_name} - Bilan du {now.strftime('%d/%m/%Y')}",
+                    body=email_body
+                ))
+                email_sent = True
+                logger.info("📧 Email bilan du soir envoyé")
+            except Exception as e:
+                logger.error(f"Erreur envoi email soir: {e}")
+        
+        # ========== ENVOI NOTIFICATION PUSH ==========
+        push_sent = False
+        try:
+            send_notification_sync({
+                "title": f"🌙 {user_name}",
+                "body": f"{total_pending} message(s) en attente dont {urgent_count} urgent(s)",
+                "url": "/chat",
+                "type": "evening_comms",
+                "user_id": user_id,
+                "requireInteraction": urgent_count > 0
+            })
+            push_sent = True
+            logger.info("🔔 Notification push bilan du soir envoyée")
+        except Exception as e:
+            logger.error(f"Erreur envoi push soir: {e}")
+        
+        # Logger l'envoi
+        supabase.table("notifications_log").insert({
+            "type": "evening_comms",
+            "date": today,
+            "user_id": user_id,
+            "sent_at": now.isoformat(),
+            "metadata": {
+                "total_pending": total_pending,
+                "urgent_count": urgent_count,
+                "whatsapp_count": len(whatsapp_list),
+                "emails_count": len(emails_list)
+            }
+        }).execute()
+        
+        return {
+            "success": True,
+            "sent": True,
+            "message": message,
+            "stats": {
+                "total_pending": total_pending,
+                "urgent_count": urgent_count,
+                "whatsapp": len(whatsapp_list),
+                "emails": len(emails_list)
+            },
+            "email_sent": email_sent,
+            "push_sent": push_sent
+        }
+        
+    except Exception as e:
+        logger.error(f"Erreur evening_comms_reminder: {e}")
+        return {"success": False, "error": str(e)}
+----------------------------------------------------------------------------------------------------------------------------@app.post("/api/proactive/evening-summary")
+async def send_evening_summary(request: Dict[str, Any] = None):
+    """
+    Envoie un résumé de fin de journée personnalisé par IA.
+    """
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        user_id = get_request_user_id(request or {})
+        today = datetime.now().date().isoformat()
+        now = datetime.now()
+        
+        # ========== RÉCUPÉRER LES DONNÉES ==========
+        
+        # Tâches complétées aujourd'hui
+        completed_tasks = supabase.table("tasks").select("*").eq("user_id", user_id).eq("status", "done").gte("updated_at", today).execute()
+        completed_count = len(completed_tasks.data)
+        completed_list = [t["title"] for t in completed_tasks.data[:3]]
+        
+        # Tâches restantes (non terminées)
+        pending_tasks = supabase.table("tasks").select("*").eq("user_id", user_id).neq("status", "done").execute()
+        pending_count = len(pending_tasks.data)
+        
+        # Tâches en retard
+        overdue_tasks = supabase.table("tasks").select("*").eq("user_id", user_id).lt("due_date", today).neq("status", "done").execute()
+        overdue_count = len(overdue_tasks.data)
+        
+        # Victoires du jour
+        wins_today = supabase.table("wins").select("*").gte("date", today).execute()
+        wins_count = len(wins_today.data)
+        wins_list = [w["title"] for w in wins_today.data[:3]]
+        
+        # Humeur du jour
+        mood_today = supabase.table("mood_entries").select("mood").eq("date", today).eq("user_id", user_id).execute()
+        current_mood = mood_today.data[0]["mood"] if mood_today.data else None
+        
+        # Récupérer le nom
+        profile = supabase.table("user_profile").select("preferred_name").eq("user_id", user_id).execute()
+        user_name = profile.data[0].get("preferred_name", "Rebecca") if profile.data else "Rebecca"
+        
+        # ========== GÉNÉRATION IA ==========
+        
+        prompt = f"""Rebecca a terminé sa journée. Voici son bilan :
+- Tâches faites : {completed_count} ({', '.join(completed_list) if completed_list else 'rien'})
+- Tâches restantes : {pending_count}
+- Tâches en retard : {overdue_count}
+- Victoires du jour : {wins_count} ({', '.join(wins_list) if wins_list else 'aucune'})
+- Humeur : {current_mood or 'non renseignée'}
 
+Génère un message de fin de journée (max 60 mots) :
+1. Reconnais ce qu'elle a accompli (ou non)
+2. Un conseil court pour demain si nécessaire
+3. Une phrase apaisante pour la nuit
+
+Style : chaleureux, pas de bla-bla, direct mais doux.
+
+Retourne UNIQUEMENT du JSON : {{"message": "..."}}"""
+
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=200
+        )
+        
+        result_text = response.choices[0].message.content
+        result_text = result_text.replace("```json", "").replace("```", "").strip()
+        ai_content = json.loads(result_text)
+        
+        message = f"🌙 Bonsoir {user_name}.\n\n{ai_content.get('message')}\n\nRepose-toi bien. Demain est un nouveau jour. 👑"
+        
+        # ========== ENVOI ==========
+        push_sent = False
+        try:
+            send_notification_sync({
+                "title": "🌙 Fin de journée",
+                "body": f"{completed_count} tâche(s) accomplie(s) • {wins_count} victoire(s)",
+                "url": "/",
+                "user_id": user_id,
+                "type": "brief"
+            })
+            push_sent = True
+        except Exception as e:
+            logger.error(f"Erreur envoi push soir: {e}")
+        
+        # Email optionnel (1x par jour max)
+        email_sent = False
+        if BREVO_API_KEY and completed_count > 0:
+            try:
+                email_body = message.replace("\n", "<br>")
+                await send_email(EmailRequest(
+                    to="jbillcataria@gmail.com",
+                    subject=f"🌙 Résumé du {datetime.now().strftime('%d/%m/%Y')}",
+                    body=email_body
+                ))
+                email_sent = True
+            except Exception as e:
+                logger.error(f"Erreur envoi email soir: {e}")
+        
+        return {
+            "success": True,
+            "message": message,
+            "stats": {
+                "completed": completed_count,
+                "pending": pending_count,
+                "overdue": overdue_count,
+                "wins": wins_count,
+                "mood": current_mood
+            },
+            "push_sent": push_sent,
+            "email_sent": email_sent
+        }
+        
+    except Exception as e:
+        logger.error(f"Erreur résumé soir: {e}")
+        return {"success": False, "error": str(e)}
+          
 @app.get("/api/comms/test")
 async def test_comms_summary(user_id: Optional[str] = None):
     """Endpoint de test pour voir le résumé brut"""
