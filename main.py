@@ -12339,3 +12339,69 @@ async def check_whatsapp_messages():
         .execute()
     
     return {"success": True, "messages": result.data}
+
+
+# =====================================================
+# WHATSAPP POLLING - RÉCUPÉRATION DES MESSAGES SANS WEBHOOK
+# =====================================================
+
+async def whatsapp_polling_loop():
+    """Boucle de polling pour récupérer les messages WhatsApp"""
+    if not GREENAPI_ID_INSTANCE or not GREENAPI_API_TOKEN:
+        logger.warning("⚠️ GreenAPI non configuré, polling désactivé")
+        return
+    
+    logger.info("📱 Démarrage du polling WhatsApp...")
+    
+    while True:
+        try:
+            async with httpx.AsyncClient() as client:
+                # Récupérer les notifications
+                response = await client.get(
+                    f"https://api.green-api.com/waInstance{GREENAPI_ID_INSTANCE}/receiveNotification/{GREENAPI_API_TOKEN}",
+                    timeout=10
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    
+                    # Si des notifications sont reçues
+                    if data:
+                        # S'assurer que c'est une liste
+                        notifications = data if isinstance(data, list) else [data]
+                        
+                        for notif in notifications:
+                            receipt_id = notif.get("receiptId")
+                            body = notif.get("body", {})
+                            webhook_type = body.get("typeWebhook")
+                            
+                            logger.info(f"📱 Notification reçue: {webhook_type}")
+                            
+                            # Traiter uniquement les messages entrants
+                            if webhook_type == "incomingMessageReceived":
+                                await process_incoming_message(body)
+                                logger.info(f"✅ Message WhatsApp traité par polling")
+                            
+                            # Supprimer la notification après traitement
+                            if receipt_id:
+                                await client.delete(
+                                    f"https://api.green-api.com/waInstance{GREENAPI_ID_INSTANCE}/deleteNotification/{GREENAPI_API_TOKEN}/{receipt_id}"
+                                )
+                                logger.info(f"🗑️ Notification supprimée: {receipt_id}")
+                    
+                elif response.status_code != 204:  # 204 = pas de notifications
+                    logger.warning(f"⚠️ GreenAPI polling: {response.status_code}")
+                    
+        except httpx.TimeoutException:
+            pass  # Timeout normal, on continue
+        except Exception as e:
+            logger.error(f"❌ Erreur polling WhatsApp: {e}")
+        
+        # Polling toutes les 3 secondes
+        await asyncio.sleep(3)
+
+
+@app.on_event("startup")
+async def start_whatsapp_poller():
+    """Démarre le polling WhatsApp au démarrage du serveur"""
+    asyncio.create_task(whatsapp_polling_loop())
