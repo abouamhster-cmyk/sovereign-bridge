@@ -11636,7 +11636,12 @@ async def send_evening_comms_reminder(request: Dict[str, Any] = None):
     except Exception as e:
         logger.error(f"Erreur evening_comms_reminder: {e}")
         return {"success": False, "error": str(e)}
-----------------------------------------------------------------------------------------------------------------------------@app.post("/api/proactive/evening-summary")
+
+#--------------------------------------------------------------------
+#--------------------------evening-summary
+#--------------------------------------------------------------------
+
+@app.post("/api/proactive/evening-summary")
 async def send_evening_summary(request: Dict[str, Any] = None):
     """
     Envoie un résumé de fin de journée personnalisé par IA.
