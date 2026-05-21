@@ -4743,18 +4743,6 @@ async def get_gmail_messages_imap(limit: int = 10):
         email_ids = messages[0].split()
         email_ids = email_ids[-limit:] if len(email_ids) > limit else email_ids
         
-        # Liste des mots-clés pour identifier les auto-emails
-        auto_keywords = [
-            "sovereign-bridge",
-            "sovereign",
-            "noreply@sovereign",
-            "test de sovereign",
-            "becks",
-            "sovereign-backend",
-            "render.com",
-            "jbillcataria@gmail.com"
-        ]
-        
         emails = []
         for e_id in reversed(email_ids):
             try:
@@ -4773,25 +4761,13 @@ async def get_gmail_messages_imap(limit: int = 10):
                         except:
                             pass
                         
-                        # ========== FILTRE ANTI-AUTO-EMAILS ==========
+                        # Ignorer les auto-emails de Sovereign
                         from_lower = from_addr.lower()
-                        
-                        # Ignorer les emails envoyés par notre propre système
-                        is_auto = False
-                        for keyword in auto_keywords:
-                            if keyword in from_lower:
-                                is_auto = True
-                                print(f"⏭️ Auto-email ignoré: {from_addr[:50]}...")
-                                break
-                        
-                        # Ignorer les emails envoyés par notre propre adresse Gmail
-                        if GMAIL_EMAIL and GMAIL_EMAIL.lower() in from_lower:
-                            is_auto = True
-                            print(f"⏭️ Email auto-envoyé ignoré: {from_addr[:50]}...")
+                        auto_keywords = ["sovereign-bridge", "noreply@sovereign", "render.com"]
+                        is_auto = any(k in from_lower for k in auto_keywords)
                         
                         if is_auto:
-                            continue  # Passer à l'email suivant
-                        # ============================================
+                            continue
                         
                         subject = msg.get("Subject", "Sans sujet")
                         try:
@@ -4837,8 +4813,6 @@ async def get_gmail_messages_imap(limit: int = 10):
     except Exception as e:
         logger.error(f"Erreur IMAP Gmail: {e}")
         return {"success": False, "error": str(e), "messages": []}
-
-
 
 async def update_document(user_id: str, document_id: str = None, name: str = None, 
                           updates: dict = None) -> Dict:
@@ -5337,37 +5311,45 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                     content = f"❌ {result.get('error')}"
                 logger.info(f"📝 Update {table}: {item_name}")
 
+
             elif name == "get_emails":
                 limit = args.get("limit", 20)
                 unread_only = args.get("unread_only", True)
                 
-                result = await get_gmail_messages(limit, unread_only)
-                
-                if result.get("success") and result.get("messages"):
-                    emails = result["messages"]
-                    email_list = []
-                    for i, e in enumerate(emails[:20], 1):
-                        from_clean = e['from'].split('<')[0].strip()
-                        from_clean = from_clean.replace('"', '').replace("'", '')
-                        subject_clean = e['subject'][:80] if e['subject'] else "Sans sujet"
-                        email_list.append(f"{i}. **{from_clean}**\n   📧 {subject_clean}")
+                try:
+                    result = await get_gmail_messages(limit, unread_only)
                     
-                    # Stocker les emails dans la session
-                    if user_id not in pending_emails:
-                        pending_emails[user_id] = {}
-                    pending_emails[user_id]["last_emails"] = emails
-                    
-                    content = f"📧 **{result['count']} email(s) non lu(s) :**\n\n"
-                    content += "\n".join(email_list)
-                    
-                    if len(emails) > 20:
-                        content += f"\n\n... et {len(emails) - 20} autre(s)"
-                    
-                    content += "\n\n💡 **Que faire ?**"
-                    content += "\n• Dis-moi 'ouvre l'email [numéro]' pour voir le contenu"
-                    content += "\n• Dis-moi 'réponds à l'email [numéro]' pour répondre"
-                else:
-                    content = "📧 Aucun email non lu dans ta boîte."
+                    if result.get("success") and result.get("messages"):
+                        emails = result["messages"]
+                        if len(emails) == 0:
+                            content = "📧 Aucun email non lu dans ta boîte."
+                        else:
+                            email_list = []
+                            for i, e in enumerate(emails[:20], 1):
+                                from_clean = e['from'].split('<')[0].strip()
+                                from_clean = from_clean.replace('"', '').replace("'", '')
+                                subject_clean = e['subject'][:80] if e['subject'] else "Sans sujet"
+                                email_list.append(f"{i}. **{from_clean}**\n   📧 {subject_clean}")
+                            
+                            # Stocker les emails dans la session
+                            if user_id not in pending_emails:
+                                pending_emails[user_id] = {}
+                            pending_emails[user_id]["last_emails"] = emails
+                            
+                            content = f"📧 **{len(emails)} email(s) non lu(s) :**\n\n"
+                            content += "\n".join(email_list)
+                            
+                            if len(emails) > 20:
+                                content += f"\n\n... et {len(emails) - 20} autre(s)"
+                            
+                            content += "\n\n💡 **Que faire ?**"
+                            content += "\n• Dis-moi 'ouvre l'email [numéro]' pour voir le contenu"
+                            content += "\n• Dis-moi 'réponds à l'email [numéro]' pour répondre"
+                    else:
+                        content = "📧 Aucun email non lu dans ta boîte."
+                except Exception as e:
+                    logger.error(f"Erreur get_emails: {e}")
+                    content = f"❌ Erreur lors de la récupération des emails: {str(e)}"
             
             elif name == "get_email_content":
                 email_number = args.get("email_number", 1)
