@@ -4727,6 +4727,10 @@ async def list_documents(user_id: str, limit: int = 10, status: str = None, show
 
 async def get_gmail_messages_imap(limit: int = 10):
     """Récupère les emails via IMAP"""
+    
+    # 🔧 Initialisation par défaut
+    default_result = {"success": True, "messages": [], "count": 0, "error": None}
+    
     if not GMAIL_APP_PASSWORD:
         return {"success": False, "error": "Gmail IMAP non configuré", "messages": [], "count": 0}
     
@@ -4738,7 +4742,9 @@ async def get_gmail_messages_imap(limit: int = 10):
         status, messages = mail.search(None, 'UNSEEN')
         
         if status != 'OK':
-            return {"success": True, "messages": [], "count": 0}
+            mail.close()
+            mail.logout()
+            return default_result
         
         email_ids = messages[0].split()
         email_ids = email_ids[-limit:] if len(email_ids) > limit else email_ids
@@ -4800,24 +4806,12 @@ async def get_gmail_messages_imap(limit: int = 10):
         mail.close()
         mail.logout()
         
-        # 🔧 CORRECTION : retourner TOUJOURS cette structure
-        return {
-            "success": True, 
-            "messages": emails, 
-            "count": len(emails),
-            "error": None
-        }
+        return {"success": True, "messages": emails, "count": len(emails), "error": None}
     
     except Exception as e:
         logger.error(f"Erreur IMAP Gmail: {e}")
-        # 🔧 CORRECTION : retourner une structure valide même en erreur
-        return {
-            "success": False, 
-            "error": str(e), 
-            "messages": [], 
-            "count": 0
-        }
-
+        return {"success": False, "error": str(e), "messages": [], "count": 0}
+        
 async def update_document(user_id: str, document_id: str = None, name: str = None, 
                           updates: dict = None) -> Dict:
     """Met à jour un document existant"""
@@ -5315,52 +5309,43 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                     content = f"❌ {result.get('error')}"
                 logger.info(f"📝 Update {table}: {item_name}")
 
-
             elif name == "get_emails":
                 try:
                     limit = args.get("limit", 20)
-                    unread_only = args.get("unread_only", True)
-                    
                     result = await get_gmail_messages_imap(limit)
                     
-                    # 🔧 Vérification stricte du résultat
+                    # 🔧 CORRECTION : toujours retourner une chaîne valide, jamais None ou vide
                     if not result:
-                        content = "❌ Impossible de récupérer les emails (réponse vide)"
+                        content = "❌ Impossible de récupérer les emails"
                     elif not result.get("success"):
-                        error_msg = result.get("error", "Erreur inconnue")
-                        content = f"❌ Erreur Gmail: {error_msg}"
-                    elif not result.get("messages"):
-                        content = "📧 Aucun email non lu dans ta boîte."
+                        content = f"❌ Erreur Gmail: {result.get('error', 'Erreur inconnue')}"
                     else:
-                        emails = result["messages"]
-                        if len(emails) == 0:
+                        emails = result.get("messages", [])
+                        if not emails or len(emails) == 0:
                             content = "📧 Aucun email non lu dans ta boîte."
                         else:
                             email_list = []
                             for i, e in enumerate(emails[:20], 1):
                                 from_clean = e.get('from', 'Inconnu').split('<')[0].strip()
-                                from_clean = from_clean.replace('"', '').replace("'", '')
                                 subject_clean = e.get('subject', 'Sans sujet')[:80]
                                 email_list.append(f"{i}. **{from_clean}**\n   📧 {subject_clean}")
                             
-                            # Stocker les emails dans la session
-                            if user_id not in pending_emails:
-                                pending_emails[user_id] = {}
-                            pending_emails[user_id]["last_emails"] = emails
-                            
                             content = f"📧 **{len(emails)} email(s) non lu(s) :**\n\n"
                             content += "\n".join(email_list)
-                            
                             if len(emails) > 20:
                                 content += f"\n\n... et {len(emails) - 20} autre(s)"
-                            
                             content += "\n\n💡 Dis-moi 'ouvre l'email [numéro]' pour voir le contenu"
-                            
-                    logger.info(f"📧 get_emails: {len(emails) if result and result.get('messages') else 0} emails trouvés")
+                    
+                    # 🔧 IMPORTANT : s'assurer que content n'est jamais None ou vide
+                    if not content:
+                        content = "📧 Aucun email non lu dans ta boîte."
+                    
+                    # Envoyer le contenu
+                    yield f"data: {json.dumps({'content': content, 'done': False})}\n\n"
                     
                 except Exception as e:
-                    logger.error(f"Erreur get_emails: {e}")
-                    content = f"❌ Erreur: {str(e)}"
+                    logger.error(f"Erreur get_emails dans stream: {e}")
+                    yield f"data: {json.dumps({'content': f'❌ Erreur: {str(e)}', 'done': False})}\n\n"
             
             elif name == "get_email_content":
                 email_number = args.get("email_number", 1)
