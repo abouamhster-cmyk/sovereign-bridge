@@ -4711,11 +4711,16 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                 if result.get("success") and result.get("messages"):
                     emails = result["messages"]
                     email_list = []
-                    for i, e in enumerate(emails[:10], 1):
-                        email_list.append(f"{i}. **{e['from']}**\n   📧 {e['subject']}\n   📝 {e['snippet'][:80]}...")
+                    for i, e in enumerate(emails[:20], 1):
+                        from_clean = e['from'].split('<')[0].strip()
+                        # Nettoyer les guillemets et caractères
+                        from_clean = from_clean.replace('"', '').replace("'", '')
+                        email_list.append(f"{i}. **{from_clean}**\n   📧 {e['subject']}")
                     
                     content = f"📧 **{result['count']} email(s) non lu(s) :**\n\n" + "\n".join(email_list)
-                    content += "\n\n💡 Pour répondre, dis-moi 'réponds à l'email [numéro]'"
+                    if len(emails) > 20:
+                        content += f"\n\n... et {len(emails) - 20} autre(s)"
+                    content += "\n\n💡 Dis-moi le numéro pour voir le contenu ou répondre."
                 else:
                     content = "📧 Aucun email non lu"
             
@@ -8933,7 +8938,8 @@ async def detect_overload(request: Dict[str, Any] = None):
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
-        user_id = require_user_id(user_id)
+        # 🔧 CORRECTION : utiliser get_request_user_id au lieu de require_user_id(user_id)
+        user_id = get_request_user_id(request or {})
         today = datetime.now().date().isoformat()
         now = datetime.now()
         
