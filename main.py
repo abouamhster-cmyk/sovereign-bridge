@@ -5313,17 +5313,16 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                     content = f"❌ {result.get('error')}"
                 logger.info(f"📝 Update {table}: {item_name}")
 
+
+
             elif name == "get_emails":
                 limit = args.get("limit", 20)
+                # Remplacer get_gmail_messages par get_gmail_messages_imap
                 result = await get_gmail_messages_imap(limit)
                 
-                # 🔧 CORRECTION : toujours retourner une chaîne valide, jamais None ou vide
-                if not result:
-                    content = "❌ Impossible de récupérer les emails"
-                elif not result.get("success"):
-                    content = f"❌ Erreur Gmail: {result.get('error', 'Erreur inconnue')}"
-                else:
-                    emails = result.get("messages", [])
+                # CORRECTION - structure de retour adaptée
+                if result.get("success") and result.get("messages"):
+                    emails = result["messages"]
                     if not emails or len(emails) == 0:
                         content = "📧 Aucun email non lu dans ta boîte."
                     else:
@@ -5338,10 +5337,13 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                         if len(emails) > 20:
                             content += f"\n\n... et {len(emails) - 20} autre(s)"
                         content += "\n\n💡 Dis-moi 'ouvre l'email [numéro]' pour voir le contenu"
-                
-                # 🔧 IMPORTANT : s'assurer que content n'est jamais None ou vide
-                if not content:
-                    content = "📧 Aucun email non lu dans ta boîte."
+                        
+                        # Stocker les emails pour y accéder plus tard
+                        if user_id not in pending_emails:
+                            pending_emails[user_id] = {}
+                        pending_emails[user_id]["last_emails"] = emails
+                else:
+                    content = f"❌ Erreur Gmail: {result.get('error', 'Erreur inconnue')}"
                 
             
             elif name == "get_email_content":
