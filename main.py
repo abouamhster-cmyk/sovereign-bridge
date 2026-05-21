@@ -5166,7 +5166,7 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
     context_timestamp = datetime.now().strftime("%H:%M:%S")
     memory_context_with_time = f"{memory_context}\n(Contexte mis à jour à {context_timestamp})"
     
-    enhanced_system_prompt = FAST_SYSTEM_PROMPT + date_context + memory_context_with_time
+    enhanced_system_prompt = BASE_SYSTEM_PROMPT + date_context + memory_context_with_time
     if profile_context:
         enhanced_system_prompt += f"\n\n# PROFIL\n{profile_context}"
     
@@ -12832,7 +12832,7 @@ async def chat_stream_endpoint(request: ChatRequest):
     profile_context_result = await get_profile_context(user_id=user_id)
     profile_context = profile_context_result.get("context", "")
     
-    enhanced_system_prompt = FAST_SYSTEM_PROMPT + date_context + memory_context
+    enhanced_system_prompt = BASE_SYSTEM_PROMPT + date_context + memory_context
     if profile_context:
         enhanced_system_prompt += f"\n\n# PROFIL\n{profile_context}"
     
@@ -13036,7 +13036,7 @@ async def chat_stream_simple(request: ChatRequest):
     memory_context = await get_quick_context(user_id, last_message)
     profile_context = await get_profile_context(user_id=user_id)
     
-    system_prompt = FAST_SYSTEM_PROMPT
+    system_prompt = BASE_SYSTEM_PROMPT
     if memory_context:
         system_prompt += memory_context
     if profile_context:
