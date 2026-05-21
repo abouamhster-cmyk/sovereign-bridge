@@ -12405,3 +12405,84 @@ async def whatsapp_polling_loop():
 async def start_whatsapp_poller():
     """Démarre le polling WhatsApp au démarrage du serveur"""
     asyncio.create_task(whatsapp_polling_loop())
+
+
+@app.post("/api/whatsapp/force-poll")
+async def force_poll_whatsapp():
+    """Force la récupération des messages WhatsApp"""
+    if not GREENAPI_ID_INSTANCE or not GREENAPI_API_TOKEN:
+        return {"success": False, "error": "GreenAPI non configuré"}
+    
+    messages = []
+    
+    async with httpx.AsyncClient() as client:
+        while True:
+            response = await client.get(
+                f"https://api.green-api.com/waInstance{GREENAPI_ID_INSTANCE}/receiveNotification/{GREENAPI_API_TOKEN}",
+                timeout=10
+            )
+            
+            if response.status_code != 200:
+                break
+                
+            data = response.json()
+            if not data:
+                break
+                
+            notifications = data if isinstance(data, list) else [data]
+            
+            for notif in notifications:
+                receipt_id = notif.get("receiptId")
+                body = notif.get("body", {})
+                
+                messages.append({
+                    "receipt_id": receipt_id,
+                    "type": body.get("typeWebhook"),
+                    "data": body
+                })
+                
+                if body.get("typeWebhook") == "incomingMessageReceived":
+                    await process_incoming_message(body)
+                    logger.info(f"✅ Message WhatsApp récupéré par force poll")
+                
+                if receipt_id:
+                    await client.delete(
+                        f"https://api.green-api.com/waInstance{GREENAPI_ID_INSTANCE}/deleteNotification/{GREENAPI_API_TOKEN}/{receipt_id}"
+                    )
+    
+    return {
+        "success": True,
+        "messages_found": len(messages),
+        "messages": messages
+    }
+
+
+
+@app.get("/api/whatsapp/chat-history")
+async def get_whatsapp_chat_history(chat_id: str = None):
+    """Récupère l'historique des conversations WhatsApp"""
+    if not GREENAPI_ID_INSTANCE or not GREENAPI_API_TOKEN:
+        return {"success": False, "error": "GreenAPI non configuré"}
+    
+    # Si pas de chat_id spécifié, prend le premier de la liste
+    if not chat_id:
+        # D'abord récupérer les chats
+        response = await client.get(
+            f"https://api.green-api.com/waInstance{GREENAPI_ID_INSTANCE}/getChats/{GREENAPI_API_TOKEN}"
+        )
+        if response.status_code == 200 and response.json():
+            chats = response.json()
+            if chats:
+                chat_id = chats[0].get("id")
+    
+    if chat_id:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"https://api.green-api.com/waInstance{GREENAPI_ID_INSTANCE}/getChatMessages/{GREENAPI_API_TOKEN}?chatId={chat_id}&count=10"
+            )
+            return {
+                "success": response.status_code == 200,
+                "messages": response.json() if response.status_code == 200 else response.text
+            }
+    
+    return {"success": False, "message": "Aucun chat trouvé"}
