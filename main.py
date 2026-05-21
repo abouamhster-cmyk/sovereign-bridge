@@ -11386,6 +11386,191 @@ async def get_comms_summary(user_id: Optional[str] = None):
     return {"success": True, "data": result}
 
 
+
+# =====================================================
+# ENDPOINT UNIVERSEL POUR CRON-JOB.ORG
+# =====================================================
+
+@app.api_route("/cron/{action}", methods=["GET", "POST"])
+async def cron_trigger(action: str, request: Request):
+    """
+    Endpoint universel pour cron-job.org
+    Accepte GET et POST, redirige vers le bon endpoint
+    """
+    # Récupérer les query params si présents
+    query_params = dict(request.query_params)
+    
+    # Mapping des actions vers les fonctions
+    action_map = {
+        # Matin
+        "morning-brief": "/api/proactive/morning-brief",
+        "morning-checkin": "/api/morning-checkin",
+        "morning-notification": "/api/morning-notification",
+        "morning-greeting": "/api/morning-greeting",
+        
+        # Soir
+        "evening-comms": "/api/proactive/evening-comms-reminder",
+        "evening-summary": "/api/proactive/evening-summary",
+        
+        # Planning & Rappels
+        "daily-planning": "/api/proactive/daily-planning",
+        "smart-group": "/api/notifications/smart-group",
+        "opportunities": "/api/proactive/opportunities-alert",
+        "celebration": "/api/celebration-reminder",
+        
+        # Hebdomadaire
+        "weekly-report": "/api/weekly-report-reminder",
+        "weekly-summary": "/api/weekly-summary",
+        "financial-weekly": "/api/financial-weekly-report",
+        
+        # WhatsApp
+        "whatsapp-pending": "/api/whatsapp/pending-notifications",
+        
+        # Missions & Documents
+        "mission-reminders": "/api/mission-reminders",
+        "document-reminders": "/api/document-reminders",
+        "task-reminders": "/api/check-task-reminders",
+        
+        # Run all
+        "run-all": "/api/run-all-reminders",
+    }
+    
+    if action not in action_map:
+        return {
+            "success": False, 
+            "error": f"Action '{action}' inconnue",
+            "available_actions": list(action_map.keys())
+        }
+    
+    endpoint = action_map[action]
+    logger.info(f"🔄 Cron trigger: {action} -> {endpoint}")
+    
+    try:
+        # Appeler la fonction appropriée selon l'action
+        result = None
+        
+        # Brief matinal
+        if action == "morning-brief":
+            result = await send_morning_brief(query_params or None)
+        
+        # Morning check-in
+        elif action == "morning-checkin":
+            result = await send_morning_checkin(query_params or None)
+        
+        # Morning notification
+        elif action == "morning-notification":
+            result = await send_morning_notification(query_params or None)
+        
+        # Morning greeting
+        elif action == "morning-greeting":
+            result = await get_morning_greeting(query_params.get("user_id"), force=False)
+        
+        # Evening comms reminder
+        elif action == "evening-comms":
+            result = await send_evening_comms_reminder(query_params or None)
+        
+        # Evening summary
+        elif action == "evening-summary":
+            result = await send_evening_summary(query_params or None)
+        
+        # Daily planning
+        elif action == "daily-planning":
+            result = await daily_planning(query_params or None)
+        
+        # Smart group notifications
+        elif action == "smart-group":
+            result = await send_smart_notifications(query_params or None)
+        
+        # Opportunities alert
+        elif action == "opportunities":
+            result = await check_opportunities_alert(query_params or None)
+        
+        # Celebration reminder
+        elif action == "celebration":
+            result = await celebration_reminder(query_params or None)
+        
+        # Weekly report
+        elif action == "weekly-report":
+            result = await weekly_report_reminder(query_params or None)
+        
+        # Weekly summary
+        elif action == "weekly-summary":
+            result = await send_weekly_summary(query_params or None)
+        
+        # Financial weekly report
+        elif action == "financial-weekly":
+            result = await financial_weekly_report(query_params or None)
+        
+        # WhatsApp pending notifications
+        elif action == "whatsapp-pending":
+            result = await whatsapp_pending_notifications(query_params or None)
+        
+        # Mission reminders
+        elif action == "mission-reminders":
+            result = await mission_reminders(query_params or None)
+        
+        # Document reminders
+        elif action == "document-reminders":
+            result = await document_reminders(query_params or None)
+        
+        # Task reminders
+        elif action == "task-reminders":
+            result = await check_task_reminders(query_params or None)
+        
+        # Run all reminders
+        elif action == "run-all":
+            result = await run_all_reminders()
+        
+        # Fallback pour les actions non implémentées
+        else:
+            # Essayer de faire un appel interne à l'endpoint
+            import httpx
+            async with httpx.AsyncClient() as client:
+                response = await client.post(f"http://localhost:{PORT}{endpoint}", json=query_params or {})
+                result = response.json()
+        
+        # Ajouter l'action dans le résultat pour traçabilité
+        if result and isinstance(result, dict):
+            result["cron_action"] = action
+            result["cron_endpoint"] = endpoint
+        
+        logger.info(f"✅ Cron {action} exécuté avec succès")
+        return result or {"success": True, "message": f"Action '{action}' exécutée", "cron_action": action}
+    
+    except Exception as e:
+        logger.error(f"❌ Erreur cron trigger {action}: {e}")
+        return {
+            "success": False, 
+            "error": str(e),
+            "cron_action": action,
+            "cron_endpoint": endpoint
+        }
+
+
+# =====================================================
+# HEALTH CHECK POUR CRON-JOB.ORG
+# =====================================================
+
+@app.get("/health")
+async def health_check():
+    """Endpoint simple pour vérifier que le service est vivant"""
+    return {
+        "status": "alive",
+        "timestamp": datetime.now().isoformat(),
+        "version": "1.0.0"
+    }
+
+
+# =====================================================
+# PING POUR CRON-JOB.ORG (keep alive)
+# =====================================================
+
+@app.get("/ping")
+async def ping():
+    """Réponse rapide pour les checks de cron-job.org"""
+    return {"pong": True, "timestamp": datetime.now().isoformat()}
+
+
 @app.get("/api/comms/test")
 async def test_comms_summary(user_id: Optional[str] = None):
     """Endpoint de test pour voir le résumé brut"""
