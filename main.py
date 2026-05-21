@@ -2769,6 +2769,19 @@ tools = [
     {
         "type": "function",
         "function": {
+            "name": "get_comms_summary",
+            "description": "Récupère un résumé de toutes les communications en attente (WhatsApp non répondus et emails non lus)",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
+
+    {
+        "type": "function",
+        "function": {
             "name": "get_emails",
             "description": "Récupère les emails non lus de la boîte Gmail.",
             "parameters": {
@@ -4987,6 +5000,54 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                 else:
                     content = f"❌ Échec de l'envoi"
                 logger.info(f"📱 WhatsApp reply to {to}")
+
+            elif name == "get_comms_summary":
+                result = await get_comms_summary(user_id)
+                
+                if not result.get("success"):
+                    content = "❌ Impossible de récupérer le résumé des communications"
+                else:
+                    data = result.get("data", {})
+                    whatsapp = data.get("whatsapp", [])
+                    emails = data.get("emails", [])
+                    urgent_count = data.get("urgent_count", 0)
+                    
+                    # Construire un résumé textuel
+                    summary_parts = []
+                    
+                    if urgent_count > 0:
+                        summary_parts.append(f"⚠️ **{urgent_count} communication(s) urgente(s)**\n")
+                    
+                    if whatsapp:
+                        summary_parts.append(f"📱 **WhatsApp ({len(whatsapp)} non répondus)**")
+                        for w in whatsapp[:5]:
+                            urgency = "⚠️ " if w["is_urgent"] else "   "
+                            summary_parts.append(f"{urgency}• {w['from']}: {w['message'][:50]}...")
+                        if len(whatsapp) > 5:
+                            summary_parts.append(f"   ... et {len(whatsapp) - 5} autre(s)")
+                        summary_parts.append("")
+                    
+                    if emails:
+                        summary_parts.append(f"📧 **Emails ({len(emails)} non lus)**")
+                        for e in emails[:5]:
+                            urgency = "⚠️ " if e["is_urgent"] else "   "
+                            summary_parts.append(f"{urgency}• {e['from'].split('<')[0].strip()}: {e['subject']}")
+                        if len(emails) > 5:
+                            summary_parts.append(f"   ... et {len(emails) - 5} autre(s)")
+                        summary_parts.append("")
+                    
+                    if not whatsapp and not emails:
+                        summary_parts.append("✅ Aucune communication en attente. Tout est à jour !")
+                    
+                    summary_parts.append("\n💡 **Que veux-tu faire ?**")
+                    summary_parts.append("• Réponds aux urgents")
+                    summary_parts.append("• Ignore pour l'instant")
+                    summary_parts.append("• Dis-moi 'montre-moi les détails'")
+                    
+                    content = "\n".join(summary_parts)
+                    
+                    # Stocker les données en session pour les actions suivantes
+                    # (optionnel)
             
             elif name == "create_task":
                 title = args.get("title")
@@ -11063,3 +11124,85 @@ async def test_gmail():
     except Exception as e:
         logger.error(f"Erreur test Gmail: {e}")
         return {"success": False, "error": str(e), "messages": []}
+
+
+# =====================================================
+# COMMUNICATIONS INTELLIGENCE
+# =====================================================
+
+@app.get("/api/comms/summary")
+async def get_comms_summary(user_id: Optional[str] = None):
+    """Récupère le résumé complet des communications en attente"""
+    
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    user_id = require_user_id(user_id)
+    
+    result = {
+        "whatsapp": [],
+        "emails": [],
+        "urgent_count": 0,
+        "total_pending": 0
+    }
+    
+    # ========== 1. WHATSAPP NON RÉPONDUS ==========
+    whatsapp_data = supabase.table("whatsapp_messages")\
+        .select("*")\
+        .eq("user_id", user_id)\
+        .eq("replied", False)\
+        .order("created_at", desc=True)\
+        .limit(20)\
+        .execute()
+    
+    for msg in whatsapp_data.data:
+        importance = msg.get("importance", "medium")
+        is_urgent = importance == "high"
+        
+        result["whatsapp"].append({
+            "from": msg.get("from_name", "Inconnu"),
+            "message": msg.get("message", "")[:80],
+            "importance": importance,
+            "is_urgent": is_urgent,
+            "time": msg.get("created_at"),
+            "message_id": msg.get("id")
+        })
+        if is_urgent:
+            result["urgent_count"] += 1
+    
+    # ========== 2. EMAILS NON LUS (non répondus) ==========
+    emails = await get_gmail_messages_imap(15)
+    
+    if emails.get("success"):
+        for email in emails.get("messages", []):
+            # Calculer l'âge de l'email
+            days_old = 0
+            try:
+                # Extraction approximative de l'âge
+                date_str = email.get("date", "")
+                # Simplifié : on utilise juste la présence de mots-clés
+                subject = email.get("subject", "").lower()
+                is_urgent = any(word in subject for word in ["alerte", "urgent", "failed", "suppression", "expire", "last chance"])
+            except:
+                is_urgent = False
+            
+            result["emails"].append({
+                "from": email.get("from", "Inconnu"),
+                "subject": email.get("subject", "Sans sujet")[:60],
+                "snippet": email.get("snippet", "")[:80],
+                "is_urgent": is_urgent,
+                "message_id": email.get("id")
+            })
+            if is_urgent:
+                result["urgent_count"] += 1
+    
+    result["total_pending"] = len(result["whatsapp"]) + len(result["emails"])
+    
+    return {"success": True, "data": result}
+
+
+@app.get("/api/comms/test")
+async def test_comms_summary(user_id: Optional[str] = None):
+    """Endpoint de test pour voir le résumé brut"""
+    result = await get_comms_summary(user_id)
+    return result
