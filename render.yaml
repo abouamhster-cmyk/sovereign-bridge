@@ -1,4 +1,7 @@
 services:
+  # =====================================================
+  # BACKEND PRINCIPAL - API
+  # =====================================================
   - type: web
     name: sovereign-bridge
     runtime: python
@@ -23,20 +26,33 @@ services:
         sync: false
       - key: PYTHON_VERSION
         value: 3.11.0
-      - Key: GMAIL_EMAIL
-        value: abouamhster@gmail.com  
+      - key: GMAIL_EMAIL
+        value: abouamhster@gmail.com
       - key: GMAIL_APP_PASSWORD
-        sync: true  
+        sync: true
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: DEEPGRAM_API_KEY
+        sync: false
+      - key: BREVO_API_KEY
+        sync: false
+      - key: DEFAULT_USER_ID
+        sync: false
 
-
-
-- type: worker
-  name: sovereign-keepalive
-  runtime: python
-  region: frankfurt
-  plan: free
-  buildCommand: pip install requests
-  startCommand: python keep_alive.py
-  envVars:
-    - key: BACKEND_URL
-      value: https://sovereign-bridge.onrender.com
+  # =====================================================
+  # WORKER KEEP-ALIVE - Pour empêcher Render de s'endormir
+  # =====================================================
+  - type: worker
+    name: sovereign-keepalive
+    runtime: python
+    region: frankfurt
+    plan: free
+    
+    buildCommand: |
+      pip install requests
+    
+    startCommand: python keep_alive.py
+    
+    envVars:
+      - key: BACKEND_URL
+        value: https://sovereign-bridge.onrender.com
