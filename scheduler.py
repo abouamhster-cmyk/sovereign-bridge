@@ -163,6 +163,22 @@ def run_hourly_checks():
         if current_hour % 2 == 0:
             send_intelligent_notifications()
 
+
+def poll_whatsapp_messages():
+    """Appel toutes les 2 minutes pour récupérer les messages manquants"""
+    try:
+        response = requests.post(f"{BACKEND_URL}/api/whatsapp/recover-messages", timeout=30)
+        print(f"[{datetime.now()}] 📱 WhatsApp polling: {response.status_code}")
+    except Exception as e:
+        print(f"[{datetime.now()}] ❌ Erreur WhatsApp polling: {e}")
+
+# Dans run_hourly_checks, ajoute :
+def run_hourly_checks():
+    # ...
+    # Vérifier WhatsApp toutes les 2 minutes
+    if current_minute % 2 == 0:
+        poll_whatsapp_messages()
+        
 def run_continuous():
     """Boucle continue avec vérification toutes les minutes"""
     print(f"🚀 Scheduler Sovereign démarré - {datetime.now()}")
