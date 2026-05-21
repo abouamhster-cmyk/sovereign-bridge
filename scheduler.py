@@ -8,6 +8,7 @@ BACKEND_URL = os.environ.get("BACKEND_URL", "https://sovereign-bridge.onrender.c
 # Suivi des envois pour éviter les doublons dans la même session
 morning_sent_today = False
 last_reminder_date = None
+last_evening_comms_date = None
 
 def send_morning_notification():
     """Envoie la notification matinale UNE SEULE FOIS par jour"""
@@ -31,6 +32,49 @@ def send_morning_notification():
     # Réinitialiser le flag après 9h
     if current_hour > 9:
         morning_sent_today = False
+
+def send_morning_brief():
+    """Envoie le brief matinal complet (avec tâches et communications)"""
+    current_hour = datetime.now().hour
+    
+    # Entre 7h et 9h
+    if 7 <= current_hour <= 9:
+        try:
+            response = requests.post(f"{BACKEND_URL}/api/proactive/morning-brief", timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("success"):
+                    stats = data.get("stats", {})
+                    print(f"[{datetime.now()}] 📋 Brief matinal envoyé: {stats.get('tasks_today', 0)} tâches, {stats.get('pending_comms', 0)} messages en attente")
+                else:
+                    print(f"[{datetime.now()}] ⚠️ Brief matinal non envoyé")
+        except Exception as e:
+            print(f"[{datetime.now()}] ❌ Erreur brief matinal: {e}")
+
+def send_evening_comms_reminder():
+    """Envoie le rappel des communications non traitées le soir (19h-21h)"""
+    global last_evening_comms_date
+    current_hour = datetime.now().hour
+    today = datetime.now().date()
+    
+    # Ne pas exécuter plus d'une fois par jour
+    if last_evening_comms_date == today:
+        return
+    
+    # Entre 19h et 21h
+    if 19 <= current_hour <= 21:
+        try:
+            response = requests.post(f"{BACKEND_URL}/api/proactive/evening-comms-reminder", timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("sent"):
+                    last_evening_comms_date = today
+                    stats = data.get("stats", {})
+                    print(f"[{datetime.now()}] 🌙 Rappel communications soir envoyé: {stats.get('total_pending', 0)} messages, {stats.get('urgent_count', 0)} urgents")
+                else:
+                    print(f"[{datetime.now()}] 🌙 Rappel communications déjà envoyé aujourd'hui")
+        except Exception as e:
+            print(f"[{datetime.now()}] ❌ Erreur rappel communications soir: {e}")
 
 def run_all_reminders():
     """Exécute tous les rappels UNE SEULE FOIS par jour"""
@@ -67,65 +111,6 @@ def run_all_reminders():
         last_reminder_date = today
         print(f"[{datetime.now()}] ✅ Rappels du {today} terminés")
 
-def run_hourly_checks():
-    """Exécutions horaires (au lieu de toutes les 5 minutes)"""
-    current_minute = datetime.now().minute
-    
-    # Exécuter uniquement à la minute 0 de chaque heure
-    if current_minute == 0:
-        send_morning_notification()
-        run_all_reminders()
-
-if __name__ == "__main__":
-    print(f"🚀 Scheduler Sovereign démarré - {datetime.now()}")
-    print(f"📡 Backend: {BACKEND_URL}")
-    print(f"⏰ Vérification toutes les minutes (exécution à la minute 0 de chaque heure)")
-    
-    last_minute = -1
-    
-    while True:
-        current_minute = datetime.now().minute
-        
-        # Exécuter une fois par minute (pour être réactif) mais les fonctions internes gèrent les doublons
-        if current_minute != last_minute:
-            run_hourly_checks()
-            last_minute = current_minute
-        
-        time.sleep(60)  # Vérifier toutes les minutes
-
-
-# scheduler.py - Ajouter cette fonction
-
-def send_intelligent_notifications():
-    """Envoie des notifications contextuelles intelligentes"""
-    try:
-        response = requests.post(f"{BACKEND_URL}/api/notifications/intelligent-check", timeout=30)
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("notifications_sent", 0) > 0:
-                print(f"[{datetime.now()}] 🤖 {data['notifications_sent']} notification(s) intelligente(s) envoyée(s)")
-            else:
-                print(f"[{datetime.now()}] 🤖 Aucune notification intelligente nécessaire")
-    except Exception as e:
-        print(f"[{datetime.now()}] ❌ Erreur notifications intelligentes: {e}")
-
-# Modifier run_hourly_checks pour inclure les notifications intelligentes toutes les 2 heures
-def run_hourly_checks():
-    current_minute = datetime.now().minute
-    current_hour = datetime.now().hour
-    
-    # Exécuter à la minute 0 de chaque heure
-    if current_minute == 0:
-        send_morning_notification()
-        run_all_reminders()
-        
-        # Notifications intelligentes toutes les 2 heures (heures paires)
-        if current_hour % 2 == 0:
-            send_intelligent_notifications()
-
-
-# scheduler.py - Ajouter ou modifier
-
 def send_morning_checkin():
     """Envoie le check-in matinal proactif (une fois par jour entre 7h et 9h)"""
     current_hour = datetime.now().hour
@@ -143,15 +128,63 @@ def send_morning_checkin():
         except Exception as e:
             print(f"[{datetime.now()}] ❌ Erreur check-in matinal: {e}")
 
+def send_intelligent_notifications():
+    """Envoie des notifications contextuelles intelligentes"""
+    try:
+        response = requests.post(f"{BACKEND_URL}/api/notifications/intelligent-check", timeout=30)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("notifications_sent", 0) > 0:
+                print(f"[{datetime.now()}] 🤖 {data['notifications_sent']} notification(s) intelligente(s) envoyée(s)")
+            else:
+                print(f"[{datetime.now()}] 🤖 Aucune notification intelligente nécessaire")
+    except Exception as e:
+        print(f"[{datetime.now()}] ❌ Erreur notifications intelligentes: {e}")
+
 def run_hourly_checks():
+    """Exécutions horaires (à la minute 0 de chaque heure)"""
     current_minute = datetime.now().minute
     current_hour = datetime.now().hour
     
     # Exécuter à la minute 0 de chaque heure
     if current_minute == 0:
-        send_morning_checkin()  # ← AJOUTER CETTE LIGNE
+        # ========== MATIN (7h-9h) ==========
+        send_morning_checkin()
+        send_morning_brief()      # ← Brief matinal complet avec communications
+        send_morning_notification()
+        
+        # ========== RAPPELS QUOTIDIENS (une fois par jour) ==========
         run_all_reminders()
         
-        # Notifications intelligentes toutes les 2 heures (heures paires)
+        # ========== SOIR (19h-21h) ==========
+        send_evening_comms_reminder()  # ← Rappel communications du soir
+        
+        # ========== NOTIFICATIONS INTELLIGENTES (toutes les 2 heures) ==========
         if current_hour % 2 == 0:
             send_intelligent_notifications()
+
+def run_continuous():
+    """Boucle continue avec vérification toutes les minutes"""
+    print(f"🚀 Scheduler Sovereign démarré - {datetime.now()}")
+    print(f"📡 Backend: {BACKEND_URL}")
+    print(f"⏰ Vérification toutes les minutes (exécution à la minute 0 de chaque heure)")
+    print(f"📋 Notifications programmées :")
+    print(f"   • 7h-9h : Brief matinal + Check-in + Notifications")
+    print(f"   • 19h-21h : Rappel communications du soir")
+    print(f"   • Heures paires : Notifications intelligentes")
+    print(f"   • Une fois par jour : Rappels tâches, missions, documents, victoires")
+    
+    last_minute = -1
+    
+    while True:
+        current_minute = datetime.now().minute
+        
+        # Exécuter une fois par minute
+        if current_minute != last_minute:
+            run_hourly_checks()
+            last_minute = current_minute
+        
+        time.sleep(60)  # Vérifier toutes les minutes
+
+if __name__ == "__main__":
+    run_continuous()
