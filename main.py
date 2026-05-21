@@ -5316,35 +5316,48 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
 
 
             elif name == "get_emails":
+                logger.info(f"🔍 get_emails appelé avec args: {args}")
                 limit = args.get("limit", 20)
-                # Remplacer get_gmail_messages par get_gmail_messages_imap
-                result = await get_gmail_messages_imap(limit)
                 
-                # CORRECTION - structure de retour adaptée
-                if result.get("success") and result.get("messages"):
-                    emails = result["messages"]
-                    if not emails or len(emails) == 0:
-                        content = "📧 Aucun email non lu dans ta boîte."
+                try:
+                    result = await get_gmail_messages_imap(limit)
+                    logger.info(f"📧 Résultat get_gmail_messages_imap: success={result.get('success')}, count={result.get('count', 0)}")
+                    
+                    if not result:
+                        content = "❌ Impossible de récupérer les emails"
+                        logger.error("Result est None ou vide")
+                    elif not result.get("success"):
+                        error_msg = result.get('error', 'Erreur inconnue')
+                        content = f"❌ Erreur Gmail: {error_msg}"
+                        logger.error(f"Erreur Gmail: {error_msg}")
                     else:
-                        email_list = []
-                        for i, e in enumerate(emails[:20], 1):
-                            from_clean = e.get('from', 'Inconnu').split('<')[0].strip()
-                            subject_clean = e.get('subject', 'Sans sujet')[:80]
-                            email_list.append(f"{i}. **{from_clean}**\n   📧 {subject_clean}")
+                        emails = result.get("messages", [])
+                        logger.info(f"📧 {len(emails)} emails récupérés")
                         
-                        content = f"📧 **{len(emails)} email(s) non lu(s) :**\n\n"
-                        content += "\n".join(email_list)
-                        if len(emails) > 20:
-                            content += f"\n\n... et {len(emails) - 20} autre(s)"
-                        content += "\n\n💡 Dis-moi 'ouvre l'email [numéro]' pour voir le contenu"
-                        
-                        # Stocker les emails pour y accéder plus tard
-                        if user_id not in pending_emails:
-                            pending_emails[user_id] = {}
-                        pending_emails[user_id]["last_emails"] = emails
-                else:
-                    content = f"❌ Erreur Gmail: {result.get('error', 'Erreur inconnue')}"
-                
+                        if not emails or len(emails) == 0:
+                            content = "📧 Aucun email non lu dans ta boîte."
+                        else:
+                            email_list = []
+                            for i, e in enumerate(emails[:20], 1):
+                                from_clean = e.get('from', 'Inconnu').split('<')[0].strip()
+                                subject_clean = e.get('subject', 'Sans sujet')[:80]
+                                email_list.append(f"{i}. **{from_clean}**\n   📧 {subject_clean}")
+                            
+                            content = f"📧 **{len(emails)} email(s) non lu(s) :**\n\n"
+                            content += "\n".join(email_list)
+                            if len(emails) > 20:
+                                content += f"\n\n... et {len(emails) - 20} autre(s)"
+                            content += "\n\n💡 Dis-moi 'ouvre l'email [numéro]' pour voir le contenu"
+                            
+                            if user_id not in pending_emails:
+                                pending_emails[user_id] = {}
+                            pending_emails[user_id]["last_emails"] = emails
+                            
+                            logger.info(f"✅ {len(emails)} emails formatés avec succès")
+                except Exception as e:
+                    logger.error(f"❌ Exception dans get_emails: {e}")
+                    content = f"❌ Erreur technique: {str(e)}"
+                    
             
 
             elif name == "get_email_content":
@@ -13057,3 +13070,27 @@ async def chat_stream_simple(request: ChatRequest):
             yield f"data: {json.dumps({'error': str(e), 'done': True})}\n\n"
     
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.get("/api/gmail/direct-test")
+async def direct_gmail_test():
+    """Test direct de la connexion Gmail - sans passer par l'IA"""
+    try:
+        # Tester d'abord avec IMAP
+        imap_result = await get_gmail_messages_imap(5)
+        
+        return {
+            "success": imap_result.get("success", False),
+            "error": imap_result.get("error"),
+            "count": imap_result.get("count", 0),
+            "messages": [
+                {
+                    "from": msg.get("from"),
+                    "subject": msg.get("subject"),
+                    "snippet": msg.get("snippet", "")[:100]
+                }
+                for msg in imap_result.get("messages", [])[:3]
+            ]
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
