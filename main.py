@@ -13030,7 +13030,7 @@ async def chat_stream_simple(request: ChatRequest):
     
     messages_payload.append({"role": "system", "content": system_prompt})
     
-    for msg in request.messages[-5:]:  # Derniers 5 messages seulement pour la rapidité
+    for msg in request.messages[-5:]:  # Derniers 5 messages seulement
         messages_payload.append({"role": msg["role"], "content": msg["content"]})
     
     async def generate():
