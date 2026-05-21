@@ -5704,17 +5704,23 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                 "content": content
             })
         
-        final_response = client.chat.completions.create(
+        # =====================================================
+        # STREAMING - Réponse caractère par caractère
+        # =====================================================
+        stream_response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=messages_payload,
-            tool_choice="auto",
-            max_tokens=1024,
+            max_tokens=512,
             temperature=0.7,
-            timeout=15.0,
-            stream=True 
+            stream=True
         )
         
-        assistant_response = final_response.choices[0].message.content
+        # Collecter la réponse morceau par morceau
+        assistant_response = ""
+        for chunk in stream_response:
+            if chunk.choices[0].delta.content:
+                assistant_response += chunk.choices[0].delta.content
+                
         
         # Nettoyer les tags d'apprentissage
         learn_pattern = r'\[LEARN:([^:]+):([^:]+):([^\]]+)\]'
