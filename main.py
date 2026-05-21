@@ -2693,6 +2693,20 @@ EXEMPLES À ÉVITER :
 - "La tâche a été marquée comme terminée avec succès dans le système."
 - "Je vais procéder à l'envoi de l'email comme demandé."
 - "Souhaites-tu que j'effectue une autre action pour toi ?"
+
+# ====================================================
+# RÈGLE POUR L'AFFICHAGE DES EMAILS
+# ====================================================
+
+Lorsque l'utilisateur demande "montre-moi mes emails" ou "liste mes emails non lus" :
+1. Affiche UNE SEULE liste
+2. Format : un email par ligne, avec : 
+   - Expéditeur (nom et email)
+   - Objet
+   - Un extrait très court (max 50 caractères)
+3. Si plusieurs emails similaires (ex: plusieurs "Render"), regroupe-les avec un compteur
+4. N'AFFICHE JAMAIS la liste deux fois
+
 # ============================================================
 # RÈGLE FINALE
 # ============================================================
@@ -2730,6 +2744,24 @@ tools = [
                     "limit": {"type": "integer", "default": 50}
                 },
                 "required": ["table"]
+            }
+        }
+    },
+
+
+    # Ajouter dans la liste des tools (vers ligne 1600)
+    {
+        "type": "function",
+        "function": {
+            "name": "reply_to_email",
+            "description": "Répond à un email Gmail",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message_id": {"type": "string", "description": "ID du message à répondre (extrait de la liste)"},
+                    "body": {"type": "string", "description": "Corps du message de réponse"}
+                },
+                "required": ["message_id", "body"]
             }
         }
     },
@@ -4245,7 +4277,59 @@ def get_allowed_fields_for_table(table: str) -> list:
         "revenue": ["source", "amount", "project", "notes"]
     }
     return fields_map.get(table, ["notes"])
+
+
+async def send_gmail_reply(message_id: str, body: str):
+    """Envoie une réponse à un email Gmail"""
+    if not GMAIL_APP_PASSWORD:
+        return {"success": False, "error": "Gmail non configuré"}
+    
+    try:
+        mail = imaplib.IMAP4_SSL("imap.gmail.com")
+        mail.login(GMAIL_EMAIL, GMAIL_APP_PASSWORD)
         
+        # Récupérer l'email original pour obtenir le thread
+        mail.select("INBOX")
+        status, msg_data = mail.fetch(message_id, '(RFC822)')
+        
+        if status != 'OK':
+            return {"success": False, "error": "Email non trouvé"}
+        
+        # Extraire le From original
+        for response_part in msg_data:
+            if isinstance(response_part, tuple):
+                msg = email.message_from_bytes(response_part[1])
+                original_from = msg.get("From")
+                original_subject = msg.get("Subject", "")
+                
+                # Créer la réponse
+                reply_subject = f"Re: {original_subject}" if not original_subject.startswith("Re:") else original_subject
+                
+                # Envoyer via SMTP
+                import smtplib
+                from email.mime.text import MIMEText
+                
+                smtp = smtplib.SMTP_SSL("smtp.gmail.com", 465)
+                smtp.login(GMAIL_EMAIL, GMAIL_APP_PASSWORD)
+                
+                reply_msg = MIMEText(body, "plain", "utf-8")
+                reply_msg["From"] = GMAIL_EMAIL
+                reply_msg["To"] = original_from
+                reply_msg["Subject"] = reply_subject
+                
+                smtp.send_message(reply_msg)
+                smtp.quit()
+                
+                mail.close()
+                mail.logout()
+                
+                return {"success": True, "to": original_from, "subject": reply_subject}
+        
+        return {"success": False, "error": "Impossible de traiter l'email"}
+        
+    except Exception as e:
+        logger.error(f"Erreur envoi réponse Gmail: {e}")
+        return {"success": False, "error": str(e)}
 
 # =====================================================
 # API ROUTES - CHAT AMÉLIORÉ AVEC MÉMOIRE
@@ -4515,6 +4599,17 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                     content = f"✅ Email marqué comme lu"
                 else:
                     content = f"❌ Erreur lors du marquage"
+
+            # Dans le bloc des tool_calls (lignes ~2200)
+            elif name == "reply_to_email":
+                message_id = args.get("message_id")
+                body = args.get("body")
+                
+                result = await send_gmail_reply(message_id, body)
+                if result.get("success"):
+                    content = f"✅ Réponse envoyée à l'email {message_id}"
+                else:
+                    content = f"❌ Erreur: {result.get('error')}"
             
             elif name == "list_documents":
                 limit = args.get("limit", 10)
@@ -10863,6 +10958,17 @@ async def get_gmail_messages_imap(limit: int = 10):
         email_ids = messages[0].split()
         email_ids = email_ids[-limit:] if len(email_ids) > limit else email_ids
         
+        # Liste des mots-clés pour identifier les auto-emails
+        auto_keywords = [
+            "sovereign-bridge",
+            "sovereign",
+            "noreply@sovereign",
+            "test de sovereign",
+            "becks",
+            "sovereign-backend",
+            "render.com"
+        ]
+        
         emails = []
         for e_id in reversed(email_ids):
             try:
@@ -10880,6 +10986,26 @@ async def get_gmail_messages_imap(limit: int = 10):
                                 from_addr = decoded[0]
                         except:
                             pass
+                        
+                        # ========== FILTRE ANTI-AUTO-EMAILS ==========
+                        from_lower = from_addr.lower()
+                        
+                        # Ignorer les emails envoyés par notre propre système
+                        is_auto = False
+                        for keyword in auto_keywords:
+                            if keyword in from_lower:
+                                is_auto = True
+                                print(f"⏭️ Auto-email ignoré: {from_addr[:50]}...")
+                                break
+                        
+                        # Ignorer les emails envoyés par notre propre adresse Gmail
+                        if GMAIL_EMAIL and GMAIL_EMAIL.lower() in from_lower:
+                            is_auto = True
+                            print(f"⏭️ Email auto-envoyé ignoré: {from_addr[:50]}...")
+                        
+                        if is_auto:
+                            continue  # Passer à l'email suivant
+                        # ============================================
                         
                         subject = msg.get("Subject", "Sans sujet")
                         try:
