@@ -3733,6 +3733,21 @@ tools = [
             }
         }
     },
+
+    {
+        "type": "function",
+        "function": {
+            "name": "get_email_content",
+            "description": "Récupère le contenu complet d'un email spécifique par son numéro dans la liste",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "email_number": {"type": "integer", "description": "Le numéro de l'email dans la liste (1, 2, 3...)"}
+                },
+                "required": ["email_number"]
+            }
+        }
+    },
     {
         "type": "function",
         "function": {
@@ -5102,7 +5117,7 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                 logger.info(f"📝 Update {table}: {item_name}")
 
             elif name == "get_emails":
-                limit = args.get("limit", 10)
+                limit = args.get("limit", 20)  # Augmenté à 20
                 unread_only = args.get("unread_only", True)
                 
                 result = await get_gmail_messages(limit, unread_only)
@@ -5112,16 +5127,25 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                     email_list = []
                     for i, e in enumerate(emails[:20], 1):
                         from_clean = e['from'].split('<')[0].strip()
-                        # Nettoyer les guillemets et caractères
                         from_clean = from_clean.replace('"', '').replace("'", '')
-                        email_list.append(f"{i}. **{from_clean}**\n   📧 {e['subject']}")
+                        subject_clean = e['subject'][:80]
+                        email_list.append(f"{i}. **{from_clean}**\n   📧 {subject_clean}")
                     
-                    content = f"📧 **{result['count']} email(s) non lu(s) :**\n\n" + "\n".join(email_list)
+                    # Construire la réponse COMPLÈTE
+                    content = f"📧 **{result['count']} email(s) non lu(s) :**\n\n"
+                    content += "\n".join(email_list)
+                    
                     if len(emails) > 20:
                         content += f"\n\n... et {len(emails) - 20} autre(s)"
-                    content += "\n\n💡 Dis-moi le numéro pour voir le contenu ou répondre."
+                    
+                    # Ajouter les instructions claires
+                    content += "\n\n💡 **Que faire ?**"
+                    content += "\n• Dis-moi 'ouvre l'email [numéro]' pour voir le contenu"
+                    content += "\n• Dis-moi 'réponds à l'email [numéro]' pour répondre"
+                    content += "\n• Dis-moi 'suivi Rakuten' pour un email spécifique"
+                    
                 else:
-                    content = "📧 Aucun email non lu"
+                    content = "📧 Aucun email non lu dans ta boîte."
             
             elif name == "mark_email_read":
                 message_id = args.get("message_id")
@@ -5132,8 +5156,28 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                 else:
                     content = f"❌ Erreur lors du marquage"
 
-            # Dans le bloc des tool_calls (lignes ~2200)
-            elif name == "reply_to_email":
+            elif name == "get_email_content":
+                email_number = args.get("email_number", 1)
+                
+                # Récupérer à nouveau les emails
+                result = await get_gmail_messages(20, True)
+                
+                if result.get("success") and result.get("messages"):
+                    emails = result["messages"]
+                    if 1 <= email_number <= len(emails):
+                        email = emails[email_number - 1]
+                        content = f"📧 **Email {email_number}**\n"
+                        content += f"**De:** {email['from']}\n"
+                        content += f"**Objet:** {email['subject']}\n"
+                        content += f"**Date:** {email['date']}\n\n"
+                        content += f"**Contenu:**\n{email['snippet']}\n\n"
+                        content += "💡 Réponds 'réponds à cet email' pour envoyer une réponse."
+                    else:
+                        content = f"❌ Email {email_number} non trouvé"
+                else:
+                    content = "❌ Impossible de récupérer les emails"
+
+             elif name == "reply_to_email":
                 message_id = args.get("message_id")
                 body = args.get("body")
                 
