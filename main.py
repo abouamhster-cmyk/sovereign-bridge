@@ -2690,6 +2690,9 @@ Ne réponds JAMAIS "fais-moi signe" quand un outil existe
 6. Voir les finances :
 [ACTION:{"type":"get_financial_summary","params":{},"label":"💰 Finances"}]
 
+7.Voir les messages whatsapp 
+[ACTION:{"type":"read_table","params":{"table":"whatsapp_messages","filters":{"replied":false},"limit":20},"label":"📱 Voir"}]
+
 # ============================================================
 # RÈGLES D'EXÉCUTION (NE JAMAIS ENFREINDRE)
 # ============================================================
