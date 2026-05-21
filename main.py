@@ -599,6 +599,32 @@ async def whatsapp_status():
         return {"configured": False}
     return {"configured": True, "idInstance": GREENAPI_ID_INSTANCE}
 
+
+# =====================================================
+# STREAMING UTILITIES
+# =====================================================
+
+async def stream_generator(response_stream, user_id: str, conversation_id: str = None):
+    """
+    Générateur asynchrone pour le streaming des réponses.
+    Envoie chaque morceau au client au fur et à mesure.
+    """
+    full_response = ""
+    try:
+        for chunk in response_stream:
+            if chunk.choices[0].delta.content:
+                content = chunk.choices[0].delta.content
+                full_response += content
+                # Envoyer le morceau au format SSE (Server-Sent Events)
+                yield f"data: {json.dumps({'content': content, 'done': False})}\n\n"
+        
+        # Une fois terminé, envoyer le signal de fin
+        yield f"data: {json.dumps({'content': '', 'done': True, 'full_response': full_response})}\n\n"
+        
+    except Exception as e:
+        logger.error(f"Erreur streaming: {e}")
+        yield f"data: {json.dumps({'error': str(e), 'done': True})}\n\n"
+
 # =====================================================
 # WHATSAPP VIA BAILEYS (gratuit, illimité)
 # =====================================================
@@ -12654,3 +12680,397 @@ async def test_comms_summary(user_id: Optional[str] = None):
     """Endpoint de test pour voir le résumé brut"""
     result = await get_comms_summary(user_id)
     return result
+
+
+
+# =====================================================
+# CHAT STREAMING (SSE)
+# =====================================================
+
+from fastapi.responses import StreamingResponse
+
+@app.post("/chat/stream")
+async def chat_stream_endpoint(request: ChatRequest):
+    """
+    Endpoint de chat avec streaming (Server-Sent Events)
+    Les réponses arrivent caractère par caractère.
+    """
+    logger.info(f"📨 Streaming - Reçu: {len(request.messages)} messages")
+    
+    # Récupérer l'utilisateur
+    user_id = require_user_id(request.user_id)
+    
+    # Récupérer le dernier message
+    last_message = request.messages[-1].get("content", "") if request.messages else ""
+    
+    # =====================================================
+    # VÉRIFICATION DES EMAILS EN ATTENTE (interception)
+    # =====================================================
+    if user_id and user_id in pending_emails:
+        last_response = request.messages[-1].get("content", "").lower()
+        pending = pending_emails[user_id]
+        
+        if last_response in ["oui", "yes", "ok", "envoie", "envoyer", "faut envoyer", "je confirme", "vas y", "envoie le mail"]:
+            email_result = await send_email_simple(
+                to=pending["to"],
+                subject=pending["subject"],
+                body=pending["body"]
+            )
+            del pending_emails[user_id]
+            
+            if email_result.get("success"):
+                reply = f"✅ Email envoyé à {pending['to']}"
+            else:
+                reply = f"❌ Erreur: {email_result.get('error')}"
+            
+            # Réponse simple (non streamée pour les confirmations)
+            async def simple_response():
+                yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
+            return StreamingResponse(simple_response(), media_type="text/event-stream")
+        
+        elif last_response in ["non", "no", "annule", "annuler"]:
+            del pending_emails[user_id]
+            async def cancel_response():
+                yield f"data: {json.dumps({'content': '❌ Envoi annulé.', 'done': True})}\n\n"
+            return StreamingResponse(cancel_response(), media_type="text/event-stream")
+    
+    # =====================================================
+    # DÉTECTION DES RÉFÉRENCES AUX EMAILS
+    # =====================================================
+    email_ref_patterns = [
+        r'(?:le |l\'|le )?(dernier|premier|second|troisième|4[eè]|5[eè])(?:\s+email)?',
+        r'ouvre\s+(?:le |l\'|le )?email\s+(\d+)',
+        r'affiche\s+(?:le |l\'|le )?email\s+(\d+)',
+        r'le mail de (\w+)',
+        r'l\'email de (\w+)',
+    ]
+    
+    for pattern in email_ref_patterns:
+        match = re.search(pattern, last_message, re.IGNORECASE)
+        if match:
+            groups = match.groups()
+            email_num = None
+            email_sender = None
+            
+            for g in groups:
+                if g and g.isdigit():
+                    email_num = int(g)
+                    break
+                elif g and g.lower() in ["dernier", "premier", "second", "troisième"]:
+                    email_num = 0
+                    break
+                elif g and not g.isdigit() and len(g) > 2:
+                    email_sender = g.lower()
+                    break
+            
+            result = await get_gmail_messages(20, True)
+            if result.get("success") and result.get("messages"):
+                emails = result["messages"]
+                
+                if email_num is not None:
+                    if email_num == 0:
+                        email_num = len(emails)
+                    elif email_num == -1:
+                        email_num = 1
+                    
+                    if 1 <= email_num <= len(emails):
+                        email = emails[email_num - 1]
+                        from_clean = email['from'].split('<')[0].strip()
+                        reply = f"📧 **Email #{email_num}**\n\n"
+                        reply += f"**De :** {from_clean}\n"
+                        reply += f"**Objet :** {email['subject']}\n"
+                        reply += f"**Date :** {email['date']}\n\n"
+                        reply += f"**Contenu :**\n{email['snippet'][:500]}"
+                        
+                        async def email_response():
+                            yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
+                        return StreamingResponse(email_response(), media_type="text/event-stream")
+                
+                elif email_sender:
+                    matching_emails = []
+                    for i, e in enumerate(emails, 1):
+                        from_clean = e['from'].split('<')[0].strip().lower()
+                        if email_sender in from_clean:
+                            matching_emails.append((i, e))
+                    
+                    if matching_emails:
+                        if len(matching_emails) == 1:
+                            i, e = matching_emails[0]
+                            from_clean = e['from'].split('<')[0].strip()
+                            reply = f"📧 **Email de {email_sender}**\n\n"
+                            reply += f"**De :** {from_clean}\n"
+                            reply += f"**Objet :** {e['subject']}\n"
+                            reply += f"**Date :** {e['date']}\n\n"
+                            reply += f"**Contenu :**\n{e['snippet'][:500]}"
+                            
+                            async def sender_email_response():
+                                yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
+                            return StreamingResponse(sender_email_response(), media_type="text/event-stream")
+                        else:
+                            email_list = []
+                            for i, e in matching_emails[:5]:
+                                from_clean = e['from'].split('<')[0].strip()
+                                email_list.append(f"{i}. **{from_clean}**\n   📧 {e['subject']}")
+                            reply = f"📧 **{len(matching_emails)} email(s) de {email_sender} :**\n\n"
+                            reply += "\n".join(email_list)
+                            reply += "\n\n💡 Dis-moi 'ouvre l'email [numéro]' pour voir le contenu."
+                            
+                            async def list_response():
+                                yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
+                            return StreamingResponse(list_response(), media_type="text/event-stream")
+                
+                reply = f"❌ Aucun email trouvé. Tu as {len(emails)} email(s) non lu(s)."
+                async def not_found_response():
+                    yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
+                return StreamingResponse(not_found_response(), media_type="text/event-stream")
+    
+    # =====================================================
+    # CONSTRUCTION DES MESSAGES POUR L'IA
+    # =====================================================
+    messages_payload = []
+    
+    today_date = datetime.now().strftime("%B %d, %Y")
+    date_context = f"\n\nToday is {today_date}. Use this information to provide relevant context."
+    
+    memory_context = await get_quick_context(user_id, last_message)
+    profile_context_result = await get_profile_context(user_id=user_id)
+    profile_context = profile_context_result.get("context", "")
+    
+    enhanced_system_prompt = FAST_SYSTEM_PROMPT + date_context + memory_context
+    if profile_context:
+        enhanced_system_prompt += f"\n\n# PROFIL\n{profile_context}"
+    
+    whatsapp_instructions = """
+    
+# WHATSAPP SPECIFIC RULES:
+- To get pending WhatsApp messages, use: read_table(table="whatsapp_messages", filters={"replied": False})
+- NEVER use status="unread" because this column doesn't exist
+- Use "replied": False for pending messages
+- Use "replied": True for answered messages
+"""
+    enhanced_system_prompt += whatsapp_instructions
+    
+    messages_payload.append({"role": "system", "content": enhanced_system_prompt})
+    
+    # Traitement des fichiers
+    all_file_urls = []
+    
+    for msg in request.messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        
+        extract_result = extract_text_from_message(content)
+        text_content = extract_result[0]
+        image_urls = extract_result[1] if len(extract_result) > 1 else []
+        file_urls = extract_result[2] if len(extract_result) > 2 else []
+        
+        all_file_urls.extend(file_urls)
+        
+        if role == "user" and image_urls:
+            vision_content = [{"type": "text", "text": text_content}]
+            for img_url in image_urls:
+                base64_image = await download_image_from_url(img_url)
+                if base64_image:
+                    vision_content.append({
+                        "type": "image_url",
+                        "image_url": {"url": base64_image, "detail": "high"}
+                    })
+                else:
+                    vision_content.append({
+                        "type": "text",
+                        "text": f"[Image non accessible: {img_url}]"
+                    })
+            messages_payload.append({"role": role, "content": vision_content})
+        else:
+            messages_payload.append({"role": role, "content": text_content})
+    
+    # Extraction des documents
+    document_text = None
+    
+    if all_file_urls:
+        for doc_url in all_file_urls:
+            if doc_url.lower().endswith(('.pdf', '.txt', '.docx', '.doc')):
+                doc_text = await process_document(doc_url)
+                if doc_text:
+                    document_text = doc_text
+                    break
+    
+    if document_text:
+        messages_payload.append({
+            "role": "user",
+            "content": f"[CONTENU DU DOCUMENT EXTRAIT]\n{document_text}\n\nQuestion ou demande associée : {last_message[:500]}"
+        })
+    
+    # =====================================================
+    # APPEL À L'IA EN STREAMING
+    # =====================================================
+    
+    async def generate_stream():
+        try:
+            stream_response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages_payload,
+                tools=tools,
+                tool_choice="auto",
+                max_tokens=512,
+                temperature=0.7,
+                stream=True
+            )
+            
+            full_response = ""
+            tool_calls_buffer = []
+            
+            for chunk in stream_response:
+                # Vérifier s'il y a des tool_calls
+                if chunk.choices[0].delta.tool_calls:
+                    for tc in chunk.choices[0].delta.tool_calls:
+                        # Buffer les tool_calls
+                        tool_calls_buffer.append(tc)
+                    continue
+                
+                # Sinon, c'est du texte
+                if chunk.choices[0].delta.content:
+                    content = chunk.choices[0].delta.content
+                    full_response += content
+                    yield f"data: {json.dumps({'content': content, 'done': False})}\n\n"
+            
+            # Si on a des tool_calls, les traiter
+            if tool_calls_buffer:
+                # Construire les tool_calls complets
+                tool_calls = []
+                for tc in tool_calls_buffer:
+                    if hasattr(tc, 'function'):
+                        tool_calls.append(tc)
+                
+                # Traiter les outils (comme dans la version non-streaming)
+                for tool_call in tool_calls:
+                    name = tool_call.function.name
+                    args = json.loads(tool_call.function.arguments)
+                    content = ""
+                    
+                    if name == "get_emails":
+                        limit = args.get("limit", 20)
+                        result = await get_gmail_messages(limit, True)
+                        
+                        if result.get("success") and result.get("messages"):
+                            emails = result["messages"]
+                            email_list = []
+                            for i, e in enumerate(emails[:20], 1):
+                                from_clean = e['from'].split('<')[0].strip()
+                                from_clean = from_clean.replace('"', '').replace("'", '')
+                                subject_clean = e['subject'][:80] if e['subject'] else "Sans sujet"
+                                email_list.append(f"{i}. **{from_clean}**\n   📧 {subject_clean}")
+                            
+                            if user_id not in pending_emails:
+                                pending_emails[user_id] = {}
+                            pending_emails[user_id]["last_emails"] = emails
+                            
+                            content = f"📧 **{result['count']} email(s) non lu(s) :**\n\n"
+                            content += "\n".join(email_list)
+                            if len(emails) > 20:
+                                content += f"\n\n... et {len(emails) - 20} autre(s)"
+                            content += "\n\n💡 Dis-moi 'ouvre l'email [numéro]' pour voir le contenu"
+                        else:
+                            content = "📧 Aucun email non lu dans ta boîte."
+                    
+                    elif name == "create_task":
+                        title = args.get("title")
+                        result = await create_task_from_conversation(ExecuteTaskRequest(
+                            title=title,
+                            user_id=user_id
+                        ))
+                        if result.get("success"):
+                            content = f"✅ Tâche créée: {title}"
+                        else:
+                            content = f"❌ Erreur création tâche"
+                    
+                    elif name == "whatsapp_send_reply":
+                        to = args.get("to", "")
+                        message = args.get("message", "")
+                        if not to.endswith("@c.us"):
+                            to = to + "@c.us"
+                        success = await whatsapp_send_message(to, message)
+                        if success:
+                            content = f"✅ Message WhatsApp envoyé à {to}"
+                        else:
+                            content = f"❌ Échec de l'envoi"
+                    
+                    elif name == "send_email":
+                        to = args.get("to", "")
+                        subject = args.get("subject", "")
+                        body = args.get("body", "")
+                        pending_emails[user_id] = {"to": to, "subject": subject, "body": body}
+                        content = f"📧 Email prêt à être envoyé à {to}. Dis-moi 'oui' pour confirmer."
+                    
+                    else:
+                        # Autres outils
+                        content = f"✅ Action '{name}' exécutée"
+                    
+                    # Envoyer le résultat de l'outil
+                    yield f"data: {json.dumps({'content': content, 'done': False})}\n\n"
+                    full_response += content
+            
+            # Sauvegarder la conversation
+            if request.messages:
+                last_user = request.messages[-1].get("content", "")
+                store_chat_session(last_user, full_response, [], user_id=user_id)
+            
+            # Fin du stream
+            yield f"data: {json.dumps({'content': '', 'done': True, 'full_response': full_response})}\n\n"
+            
+        except Exception as e:
+            logger.error(f"❌ Erreur streaming: {e}")
+            error_msg = f"❌ Erreur: {str(e)[:200]}"
+            yield f"data: {json.dumps({'content': error_msg, 'done': True, 'error': str(e)})}\n\n"
+    
+    return StreamingResponse(generate_stream(), media_type="text/event-stream")
+
+
+
+@app.post("/chat/stream-simple")
+async def chat_stream_simple(request: ChatRequest):
+    """Version simplifiée du chat avec streaming (sans interception complexe)"""
+    
+    user_id = require_user_id(request.user_id)
+    last_message = request.messages[-1].get("content", "") if request.messages else ""
+    
+    messages_payload = []
+    
+    # Contexte simplifié
+    memory_context = await get_quick_context(user_id, last_message)
+    profile_context = await get_profile_context(user_id=user_id)
+    
+    system_prompt = FAST_SYSTEM_PROMPT
+    if memory_context:
+        system_prompt += memory_context
+    if profile_context:
+        system_prompt += f"\n\n# PROFIL\n{profile_context}"
+    
+    messages_payload.append({"role": "system", "content": system_prompt})
+    
+    for msg in request.messages[-5:]:  # Derniers 5 messages seulement pour la rapidité
+        messages_payload.append({"role": msg["role"], "content": msg["content"]})
+    
+    async def generate():
+        try:
+            stream = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages_payload,
+                max_tokens=512,
+                temperature=0.7,
+                stream=True
+            )
+            
+            full_response = ""
+            for chunk in stream:
+                if chunk.choices[0].delta.content:
+                    content = chunk.choices[0].delta.content
+                    full_response += content
+                    yield f"data: {json.dumps({'content': content, 'done': False})}\n\n"
+            
+            yield f"data: {json.dumps({'content': '', 'done': True, 'full_response': full_response})}\n\n"
+            
+        except Exception as e:
+            yield f"data: {json.dumps({'error': str(e), 'done': True})}\n\n"
+    
+    return StreamingResponse(generate(), media_type="text/event-stream")
