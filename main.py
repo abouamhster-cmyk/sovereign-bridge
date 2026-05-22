@@ -25,6 +25,44 @@ from googleapiclient.discovery import build
 from email.mime.text import MIMEText
 
 
+
+# =====================================================
+# PRIORITY SCORE SYSTEM
+# =====================================================
+
+def calculate_priority_score(
+    urgency: int,        # 1-5
+    revenue_impact: int, # 1-5
+    strategic_value: int,# 1-5
+    family_impact: int,  # 1-5
+    energy_cost: int     # 1-5 (plus bas = mieux)
+) -> int:
+    """
+    Calcule le score de priorité selon la formule SOVEREIGN.
+    Score = Urgence + ImpactRevenu + ValeurStratégique + ImpactFamille - CoûtÉnergie
+    """
+    return urgency + revenue_impact + strategic_value + family_impact - energy_cost
+
+def get_priority_level(score: int) -> str:
+    """Retourne le niveau de priorité basé sur le score"""
+    if score >= 15:
+        return "critical"
+    elif score >= 12:
+        return "high"
+    elif score >= 8:
+        return "normal"
+    else:
+        return "low"
+
+def get_priority_color(level: str) -> str:
+    """Retourne la couleur CSS pour le niveau de priorité"""
+    colors = {
+        "critical": "bg-red-500/20 text-red-400",
+        "high": "bg-orange-500/20 text-orange-400",
+        "normal": "bg-blue-500/20 text-blue-400",
+        "low": "bg-gray-500/20 text-gray-400"
+    }
+    return colors.get(level, "bg-gray-500/20 text-gray-400")
 # =====================================================
 # FASTAPI INITIALIZATION
 # =====================================================
@@ -12615,3 +12653,107 @@ async def get_whatsapp_chat_history(chat_id: str = None):
             }
     
     return {"success": False, "message": "Aucun chat trouvé"}
+
+
+# =====================================================
+# MORNING CHECK-IN PROACTIF
+# =====================================================
+
+@app.post("/api/morning-checkin")
+async def send_morning_checkin(request: Dict[str, Any] = None):
+    """
+    Envoie une notification proactive le matin avec un message personnalisé.
+    À appeler via cron tous les matins entre 7h et 9h.
+    """
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        user_id = get_request_user_id(request or {})
+        now = datetime.now()
+        hour = now.hour
+        today = now.date().isoformat()
+        
+        # Vérifier si déjà envoyé aujourd'hui
+        existing = supabase.table("notifications_log").select("*")\
+            .eq("type", "morning_checkin")\
+            .eq("date", today)\
+            .eq("user_id", user_id)\
+            .execute()
+        
+        if existing.data:
+            return {"success": True, "sent": False, "message": "Déjà envoyé aujourd'hui"}
+        
+        # 1. Récupérer l'humeur d'hier
+        yesterday = (now.date() - timedelta(days=1)).isoformat()
+        mood_result = supabase.table("mood_entries").select("mood").eq("date", yesterday).eq("user_id", user_id).execute()
+        yesterday_mood = mood_result.data[0]["mood"] if mood_result.data else None
+        
+        # 2. Récupérer les tâches d'aujourd'hui
+        tasks_today = supabase.table("tasks").select("*").eq("user_id", user_id).eq("due_date", today).neq("status", "done").execute()
+        
+        # 3. Récupérer les documents en retard
+        overdue_docs = supabase.table("documents").select("*").lt("due_date", today).neq("status", "approved").execute()
+        
+        # 4. Récupérer le nom de l'utilisateur
+        profile = supabase.table("user_profile").select("preferred_name").eq("user_id", user_id).execute()
+        user_name = profile.data[0].get("preferred_name", "Rebecca") if profile.data else "Rebecca"
+        
+        # 5. Générer un message personnalisé
+        if hour < 9:
+            greeting = "☀️ Bonjour"
+        elif hour < 12:
+            greeting = "🌤️ Bonjour"
+        else:
+            greeting = "👋 Bonjour"
+        
+        if yesterday_mood == "stressée":
+            mood_message = "Je sens que hier était stressant. Aujourd'hui, on y va doucement."
+        elif yesterday_mood == "fatiguée":
+            mood_message = "Tu étais fatiguée hier. Priorise ton énergie aujourd'hui."
+        else:
+            mood_message = "J'espère que tu as bien dormi."
+        
+        if len(tasks_today.data) > 0:
+            task_message = f"Tu as {len(tasks_today.data)} tâche(s) aujourd'hui."
+            if len(tasks_today.data) == 1:
+                task_message = f"Ta tâche du jour : {tasks_today.data[0]['title']}"
+        else:
+            task_message = "Aucune tâche planifiée. Une journée pour respirer ?"
+        
+        if len(overdue_docs.data) > 0:
+            doc_message = f"⚠️ {len(overdue_docs.data)} document(s) en retard."
+        else:
+            doc_message = "✅ Aucun document en retard."
+        
+        final_message = f"{greeting} {user_name}.\n\n{mood_message}\n\n📋 {task_message}\n{doc_message}\n\nJe suis là pour t'aider. 👑"
+        
+        # Envoyer la notification push
+        send_notification_sync({
+            "title": f"🌅 {user_name}",
+            "body": final_message[:200],
+            "url": "/",
+            "type": "morning",
+            "user_id": user_id
+        })
+        
+        # Logger l'envoi
+        supabase.table("notifications_log").insert({
+            "type": "morning_checkin",
+            "date": today,
+            "user_id": user_id,
+            "sent_at": now.isoformat(),
+            "metadata": {
+                "tasks_count": len(tasks_today.data),
+                "overdue_docs": len(overdue_docs.data),
+                "yesterday_mood": yesterday_mood
+            }
+        }).execute()
+        
+        logger.info(f"🌅 Morning check-in envoyé à {user_name}")
+        
+        return {"success": True, "sent": True, "message": final_message}
+        
+    except Exception as e:
+        logger.error(f"Erreur morning_checkin: {e}")
+        return {"success": False, "error": str(e)}
