@@ -47,6 +47,23 @@ app.add_middleware(
 # WHATSAPP WEBHOOK - PLACÉ ICI APRÈS CORS
 # =====================================================
 
+
+@app.get("/ping")
+async def ping():
+    """Réponse rapide pour les checks de cron-job.org"""
+    return {"pong": True, "timestamp": datetime.now().isoformat()}
+
+
+@app.get("/health")
+async def health_check():
+    """Endpoint simple pour vérifier que le service est vivant"""
+    return {
+        "status": "alive",
+        "timestamp": datetime.now().isoformat(),
+        "version": "1.0.0"
+    }
+
+
 # Délai de réponse aléatoire entre 1 et 2 minutes (pour faire naturel)
 MIN_REPLY_DELAY = 60   # 1 minute en secondes
 MAX_REPLY_DELAY = 120  # 2 minutes en secondes
@@ -11326,24 +11343,12 @@ async def cron_trigger(action: str, request: Request):
 # HEALTH CHECK POUR CRON-JOB.ORG
 # =====================================================
 
-@app.get("/health")
-async def health_check():
-    """Endpoint simple pour vérifier que le service est vivant"""
-    return {
-        "status": "alive",
-        "timestamp": datetime.now().isoformat(),
-        "version": "1.0.0"
-    }
-
 
 # =====================================================
 # PING POUR CRON-JOB.ORG (keep alive)
 # =====================================================
 
-@app.get("/ping")
-async def ping():
-    """Réponse rapide pour les checks de cron-job.org"""
-    return {"pong": True, "timestamp": datetime.now().isoformat()}
+
 
 @app.post("/api/proactive/evening-comms-reminder")
 async def send_evening_comms_reminder(request: Dict[str, Any] = None):
