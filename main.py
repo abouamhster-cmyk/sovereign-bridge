@@ -7736,21 +7736,29 @@ Retourne UNIQUEMENT du JSON : {{"message": "..."}}"""
         except Exception as e:
             logger.error(f"Erreur envoi push soir: {e}")
         
-        # ========== 6. ENVOI EMAIL ==========
+        # ========== ENVOI EMAIL CORRIGÉ ==========
         email_sent = False
         if BREVO_API_KEY:
             try:
                 user_email = "jbillcataria@gmail.com"
                 email_body = message.replace("\n", "<br>")
-                await send_email(EmailRequest(
+                
+                # CORRECTION : Appeler la fonction asynchrone correctement
+                email_result = await send_email(EmailRequest(
                     to=user_email,
                     subject=f"🌙 {user_name} - Bilan du {now.strftime('%d/%m/%Y')}",
                     body=email_body
                 ))
-                email_sent = True
-                logger.info("📧 Email bilan du soir envoyé")
+                
+                if email_result.get("success"):
+                    email_sent = True
+                    logger.info("📧 Email bilan du soir envoyé")
+                else:
+                    logger.error(f"❌ Erreur envoi email soir: {email_result.get('error')}")
+                    
             except Exception as e:
-                logger.error(f"Erreur envoi email soir: {e}")
+                logger.error(f"❌ Erreur envoi email soir: {e}")
+
         
         # ========== 7. LOGGER L'ENVOI ==========
         supabase.table("notifications_log").insert({
