@@ -150,7 +150,7 @@ def run_hourly_checks():
     if current_minute == 0:
         # ========== MATIN (7h-9h) ==========
         send_morning_checkin()
-        send_morning_brief()      # ← Brief matinal complet avec communications
+        send_morning_brief()      
         send_morning_notification()
         
         # ========== RAPPELS QUOTIDIENS (une fois par jour) ==========
@@ -201,6 +201,27 @@ def run_continuous():
             last_minute = current_minute
         
         time.sleep(60)  # Vérifier toutes les minutes
+
+
+
+
+def send_morning_checkin():
+    """Envoie le check-in matinal proactif (une fois par jour entre 7h et 9h)"""
+    current_hour = datetime.now().hour
+    
+    # Entre 7h et 9h seulement
+    if 7 <= current_hour <= 9:
+        try:
+            response = requests.post(f"{BACKEND_URL}/api/morning-checkin", timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("sent"):
+                    print(f"[{datetime.now()}] 🌅 Check-in matinal envoyé")
+                else:
+                    print(f"[{datetime.now()}] 🌅 Check-in matinal déjà envoyé aujourd'hui")
+        except Exception as e:
+            print(f"[{datetime.now()}] ❌ Erreur check-in matinal: {e}")
+
 
 if __name__ == "__main__":
     run_continuous()
