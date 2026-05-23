@@ -9165,30 +9165,21 @@ async def get_notification_preferences(user_id: Optional[str] = None):
 # MORNING CHECK-IN PROACTIF (POST et GET)
 # =====================================================
 
-@app.api_route("/api/morning-checkin", methods=["POST", "GET"])
-async def send_morning_checkin(request: Request = None):
+# =====================================================
+# CHECK-IN PROACTIF MATINAL
+# =====================================================
+
+@app.post("/api/morning-checkin")
+async def send_morning_checkin(request: Dict[str, Any] = None):
     """
-    Envoie une notification proactive le matin.
-    Accepte POST (avec body JSON) et GET (avec query params)
+    Envoie une notification proactive le matin avec un message personnalisé.
+    À appeler via cron tous les matins entre 7h et 9h.
     """
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
-        # Récupérer user_id des query params (GET) ou du body (POST)
-        user_id = None
-        if request and request.method == "GET":
-            user_id = request.query_params.get("user_id")
-            request_data = {"user_id": user_id} if user_id else {}
-        else:
-            # Pour POST, lire le body
-            try:
-                body = await request.json()
-                request_data = body if body else {}
-            except:
-                request_data = {}
-            user_id = get_request_user_id(request_data)
-        
+        user_id = get_request_user_id(request or {})
         now = datetime.now()
         hour = now.hour
         today = now.date().isoformat()
@@ -9203,18 +9194,38 @@ async def send_morning_checkin(request: Request = None):
         if existing.data:
             return {"success": True, "sent": False, "message": "Déjà envoyé aujourd'hui"}
         
-        # Récupérer les données
+        # ========== RÉCUPÉRER LES DONNÉES ==========
+        
+        # 1. Humeur d'hier
         yesterday = (now.date() - timedelta(days=1)).isoformat()
         mood_result = supabase.table("mood_entries").select("mood").eq("date", yesterday).eq("user_id", user_id).execute()
         yesterday_mood = mood_result.data[0]["mood"] if mood_result.data else None
         
-        tasks_today = supabase.table("tasks").select("*").eq("user_id", user_id).eq("due_date", today).neq("status", "done").execute()
-        overdue_docs = supabase.table("documents").select("*").lt("due_date", today).neq("status", "approved").execute()
+        # 2. Tâches d'aujourd'hui
+        tasks_today = supabase.table("tasks").select("title, priority").eq("user_id", user_id).eq("due_date", today).neq("status", "done").execute()
+        tasks_count = len(tasks_today.data)
+        urgent_tasks = [t for t in tasks_today.data if t.get("priority") in ["critical", "high"]]
         
+        # 3. Documents en retard
+        overdue_docs = supabase.table("documents").select("name").lt("due_date", today).neq("status", "approved").execute()
+        overdue_count = len(overdue_docs.data)
+        
+        # 4. Victoires récentes (7 jours)
+        week_ago = (now.date() - timedelta(days=7)).isoformat()
+        recent_wins = supabase.table("wins").select("title").gte("date", week_ago).execute()
+        wins_count = len(recent_wins.data)
+        
+        # 5. Missions actives
+        active_missions = supabase.table("missions").select("name").eq("status", "active").execute()
+        missions_count = len(active_missions.data)
+        
+        # 6. Prénom de l'utilisateur
         profile = supabase.table("user_profile").select("preferred_name").eq("user_id", user_id).execute()
         user_name = profile.data[0].get("preferred_name", "Rebecca") if profile.data else "Rebecca"
         
-        # Générer le message
+        # ========== GÉNÉRER LE MESSAGE PERSONNALISÉ ==========
+        
+        # Salutation selon l'heure
         if hour < 9:
             greeting = "☀️ Bonjour"
         elif hour < 12:
@@ -9222,56 +9233,98 @@ async def send_morning_checkin(request: Request = None):
         else:
             greeting = "👋 Bonjour"
         
+        # Message selon l'humeur d'hier
         if yesterday_mood == "stressée":
-            mood_message = "Je sens que hier était stressant. Aujourd'hui, on y va doucement."
+            mood_message = "Je sais qu'hier était stressant. Aujourd'hui, on y va doucement."
         elif yesterday_mood == "fatiguée":
             mood_message = "Tu étais fatiguée hier. Priorise ton énergie aujourd'hui."
+        elif yesterday_mood == "excellent":
+            mood_message = "Tu étais en forme hier ! Continue sur cette lancée."
         else:
             mood_message = "J'espère que tu as bien dormi."
         
-        if len(tasks_today.data) > 0:
-            task_message = f"Tu as {len(tasks_today.data)} tâche(s) aujourd'hui."
-            if len(tasks_today.data) == 1:
-                task_message = f"Ta tâche du jour : {tasks_today.data[0]['title']}"
+        # Message sur les tâches
+        if tasks_count > 0:
+            if urgent_tasks:
+                task_message = f"📋 {tasks_count} tâche(s) aujourd'hui, dont {len(urgent_tasks)} prioritaire(s)."
+            else:
+                task_message = f"📋 {tasks_count} tâche(s) à faire aujourd'hui."
         else:
-            task_message = "Aucune tâche planifiée. Une journée pour respirer ?"
+            task_message = "📋 Aucune tâche planifiée. Une journée pour respirer ?"
         
-        if len(overdue_docs.data) > 0:
-            doc_message = f"⚠️ {len(overdue_docs.data)} document(s) en retard."
+        # Message sur les documents
+        if overdue_count > 0:
+            doc_message = f"⚠️ {overdue_count} document(s) en retard."
         else:
             doc_message = "✅ Aucun document en retard."
         
-        final_message = f"{greeting} {user_name}.\n\n{mood_message}\n\n📋 {task_message}\n{doc_message}\n\nJe suis là pour t'aider. 👑"
+        # Message sur les victoires
+        if wins_count > 0:
+            win_message = f"🏆 {wins_count} victoire(s) récente(s) à célébrer !"
+        else:
+            win_message = "✨ Une petite victoire aujourd'hui à ajouter ?"
         
-        # Envoyer la notification push
+        # Message sur les missions
+        if missions_count > 0:
+            mission_message = f"🎯 {missions_count} mission(s) active(s)."
+        else:
+            mission_message = ""
+        
+        # Construction du message final
+        final_message = f"{greeting} {user_name}.\n\n{mood_message}\n\n{task_message}\n{doc_message}\n{win_message}\n{mission_message}\n\nJe suis là pour t'aider. 👑"
+        
+        # ========== ENVOI DE LA NOTIFICATION ==========
         send_notification_sync({
-            "title": f"🌅 {user_name}",
-            "body": final_message[:200],
+            "title": f"🌅 {user_name} - Bonjour",
+            "body": final_message[:200],  # Limite de caractères pour la notification
             "url": "/",
             "type": "morning",
-            "user_id": user_id
+            "user_id": user_id,
+            "sound": "/sounds/notification.mp3",
+            "vibrate": [200, 100, 200],
+            "requireInteraction": False
         })
         
-        # Logger
+        # ========== LOGGER L'ENVOI ==========
         supabase.table("notifications_log").insert({
             "type": "morning_checkin",
             "date": today,
             "user_id": user_id,
             "sent_at": now.isoformat(),
             "metadata": {
-                "tasks_count": len(tasks_today.data),
-                "overdue_docs": len(overdue_docs.data),
+                "tasks_count": tasks_count,
+                "urgent_tasks": len(urgent_tasks),
+                "overdue_docs": overdue_count,
+                "wins_count": wins_count,
+                "missions_count": missions_count,
                 "yesterday_mood": yesterday_mood
             }
         }).execute()
         
         logger.info(f"🌅 Morning check-in envoyé à {user_name}")
         
-        return {"success": True, "sent": True, "message": final_message}
+        return {
+            "success": True,
+            "sent": True,
+            "message": final_message,
+            "stats": {
+                "tasks": tasks_count,
+                "urgent": len(urgent_tasks),
+                "overdue_docs": overdue_count,
+                "wins": wins_count,
+                "missions": missions_count
+            }
+        }
         
     except Exception as e:
         logger.error(f"Erreur morning_checkin: {e}")
         return {"success": False, "error": str(e)}
+
+
+@app.get("/api/morning-checkin")
+async def get_morning_checkin(user_id: Optional[str] = None):
+    """Version GET pour tester rapidement"""
+    return await send_morning_checkin({"user_id": user_id})
 
 @app.get("/api/morning-checkin/test")
 async def test_morning_checkin():
