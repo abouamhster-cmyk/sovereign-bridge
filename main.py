@@ -12597,3 +12597,102 @@ Retourne UNIQUEMENT le message, rien d'autre."""
             f"{user_name}... ravie de te voir. {emoji}"
         ]
         return {"success": True, "greeting": random.choice(fallbacks)}
+
+
+# Dans main.py
+
+@app.post("/api/priorities/score")
+async def score_priorities(request: Dict[str, Any]):
+    """
+    Calcule les scores de priorité pour une liste de tâches ou opportunités
+    """
+    items = request.get("items", [])
+    if not items:
+        return {"success": False, "error": "Aucun élément à scorer"}
+    
+    scored_items = []
+    for item in items:
+        # Extraire les paramètres
+        title = item.get("title", "")
+        due_date = item.get("due_date")
+        priority = item.get("priority", "normal")
+        has_revenue = item.get("has_revenue_potential", False)
+        is_family = item.get("is_family_related", False)
+        estimated_minutes = item.get("estimated_minutes", 30)
+        
+        # Calculer l'urgence basée sur la date
+        urgency = 3
+        if due_date:
+            days_until = (datetime.fromisoformat(due_date).date() - datetime.now().date()).days
+            if days_until < 0: urgency = 5
+            elif days_until == 0: urgency = 5
+            elif days_until <= 2: urgency = 4
+            elif days_until <= 5: urgency = 3
+            elif days_until <= 10: urgency = 2
+            else: urgency = 1
+        
+        # Impact revenu
+        revenue_impact = 2
+        revenue_keywords = ["argent", "revenu", "client", "vente", "contrat", "grant", "facture"]
+        if any(k in title.lower() for k in revenue_keywords):
+            revenue_impact = 4 if has_revenue else 3
+        elif has_revenue:
+            revenue_impact = 4
+        
+        # Valeur stratégique
+        strategic_value = 3
+        if priority == "critical": strategic_value = 5
+        elif priority == "high": strategic_value = 4
+        elif priority == "normal": strategic_value = 3
+        else: strategic_value = 2
+        
+        # Impact famille
+        family_impact = 1
+        family_keywords = ["enfant", "fille", "école", "famille", "maison", "routine"]
+        if is_family or any(k in title.lower() for k in family_keywords):
+            family_impact = 5
+        
+        # Coût énergie
+        energy_cost = 3
+        if estimated_minutes <= 5: energy_cost = 1
+        elif estimated_minutes <= 15: energy_cost = 2
+        elif estimated_minutes <= 45: energy_cost = 3
+        elif estimated_minutes <= 120: energy_cost = 4
+        else: energy_cost = 5
+        
+        # Score total
+        total_score = urgency + revenue_impact + strategic_value + family_impact - energy_cost
+        
+        # Niveau
+        if total_score >= 15: level = "critical"
+        elif total_score >= 12: level = "high"
+        elif total_score >= 8: level = "normal"
+        else: level = "low"
+        
+        scored_items.append({
+            "id": item.get("id"),
+            "title": title,
+            "scores": {
+                "urgency": urgency,
+                "revenue_impact": revenue_impact,
+                "strategic_value": strategic_value,
+                "family_impact": family_impact,
+                "energy_cost": energy_cost
+            },
+            "total_score": total_score,
+            "level": level,
+            "recommendation": get_priority_recommendation(level)
+        })
+    
+    return {"success": True, "scored_items": scored_items}
+
+
+def get_priority_recommendation(level: str) -> str:
+    """Retourne une recommandation textuelle"""
+    if level == "critical":
+        return "⚠️ À faire IMMÉDIATEMENT. Cette tâche est critique."
+    if level == "high":
+        return "🔴 Priorité haute. À faire aujourd'hui ou demain."
+    if level == "normal":
+        return "🟡 Priorité normale. Planifie cette semaine."
+    return "🟢 Priorité basse. Peut attendre ou être déléguée."
