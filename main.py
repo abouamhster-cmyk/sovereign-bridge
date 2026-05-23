@@ -12785,20 +12785,27 @@ def get_priority_recommendation(level: str) -> str:
 # =====================================================
 
 @app.api_route("/api/whatsapp/suggest-reply", methods=["POST", "GET"])
-async def suggest_whatsapp_reply(request: Request = None):
+async def suggest_whatsapp_reply(request: Request):
     """Analyse un message WhatsApp et propose des réponses adaptées"""
     
-    # Gérer GET (query params) et POST (body JSON)
+    # Récupérer les paramètres selon la méthode
     if request.method == "GET":
         message = request.query_params.get("message", "")
         contact_name = request.query_params.get("contact_name", "")
     else:
-        body = await request.json()
-        message = body.get("message", "")
-        contact_name = body.get("contact_name", "")
+        try:
+            body = await request.json()
+            message = body.get("message", "")
+            contact_name = body.get("contact_name", "")
+        except:
+            message = ""
+            contact_name = ""
     
     if not message:
-        return {"success": False, "error": "Message requis"}
+        return {
+            "success": False, 
+            "error": "Message requis. Utilisez ?message=...&contact_name=..."
+        }
     
     prompt = f"""Analyse ce message WhatsApp de {contact_name} et propose 3 réponses adaptées.
 
@@ -12806,19 +12813,14 @@ Message : "{message}"
 
 Retourne UNIQUEMENT du JSON (pas de texte avant ou après) :
 {{
-  "analysis": "analyse courte du message (ton, urgence, sujet) - 10 mots max",
+  "analysis": "analyse courte (10 mots max)",
   "suggestions": [
     {{"text": "réponse 1 courte", "style": "professionnel/doux/direct", "emoji": "🙏"}},
     {{"text": "réponse 2 courte", "style": "professionnel/doux/direct", "emoji": "✅"}},
     {{"text": "réponse 3 courte", "style": "professionnel/doux/direct", "emoji": "💪"}}
   ],
   "quick_actions": ["✅ OK", "📅 Plus tard", "🔜 Je reviens", "❌ Non merci"]
-}}
-
-Règles :
-- Les réponses doivent être courtes (max 10 mots)
-- Adaptées au contexte professionnel de Love & Fire Sport ou Santé Plus
-- Ne pas inventer d'informations"""
+}}"""
 
     try:
         response = client.chat.completions.create(
@@ -12829,7 +12831,6 @@ Règles :
         )
         
         result = response.choices[0].message.content
-        # Nettoyer le résultat
         result = result.replace("```json", "").replace("```", "").strip()
         suggestions = json.loads(result)
         
@@ -12840,7 +12841,7 @@ Règles :
         # Fallback
         return {
             "success": True,
-            "analysis": "Message à traiter rapidement",
+            "analysis": f"Message de {contact_name} à traiter",
             "suggestions": [
                 {"text": "OK, je m'en occupe", "style": "doux", "emoji": "✅"},
                 {"text": "Je te redis ça demain", "style": "doux", "emoji": "📅"},
@@ -12848,23 +12849,50 @@ Règles :
             ],
             "quick_actions": ["✅ OK", "📅 Plus tard", "🔜 Je reviens"]
         }
-
+# =====================================================
+# WHATSAPP - RÉSUMÉ IA DES CONVERSATIONS
+# =====================================================
 
 # =====================================================
 # WHATSAPP - RÉSUMÉ IA DES CONVERSATIONS
 # =====================================================
 
-@app.post("/api/whatsapp/summary")
-async def get_whatsapp_conversation_summary(request: Dict[str, Any]):
+@app.api_route("/api/whatsapp/summary", methods=["POST", "GET"])
+async def get_whatsapp_conversation_summary(request: Request):
     """Génère un résumé IA d'une conversation WhatsApp"""
-    contact_name = request.get("contact_name", "Contact")
-    messages = request.get("messages", [])
+    
+    # Récupérer les paramètres selon la méthode
+    if request.method == "GET":
+        contact_name = request.query_params.get("contact_name", "Contact")
+        messages_str = request.query_params.get("messages", "[]")
+        try:
+            messages = json.loads(messages_str)
+        except:
+            messages = []
+    else:
+        try:
+            body = await request.json()
+            contact_name = body.get("contact_name", "Contact")
+            messages = body.get("messages", [])
+        except:
+            contact_name = "Contact"
+            messages = []
     
     if not messages:
-        return {"success": False, "error": "Messages requis"}
+        return {"success": False, "error": "Messages requis (format: liste avec role et content)"}
     
-    # Formater les messages pour le prompt
-    conversation_text = "\n".join([f"{m.get('role', 'user')}: {m.get('content', '')}" for m in messages[-20:]])
+    # Formater les messages
+    conversation_lines = []
+    for m in messages:
+        role = m.get("role", "user")
+        content = m.get("content", "")
+        if content:
+            conversation_lines.append(f"{role}: {content}")
+    
+    if not conversation_lines:
+        return {"success": False, "error": "Aucun message valide"}
+    
+    conversation_text = "\n".join(conversation_lines[-20:])
     
     prompt = f"""Résume cette conversation WhatsApp avec {contact_name}.
 
@@ -12898,14 +12926,13 @@ Retourne UNIQUEMENT du JSON (pas de texte avant ou après) :
         logger.error(f"Erreur résumé conversation: {e}")
         return {
             "success": True,
-            "summary": f"Conversation avec {contact_name} - à relire attentivement",
-            "key_points": ["Message reçu de " + contact_name],
-            "action_items": ["Relire la conversation et répondre"],
+            "summary": f"Conversation avec {contact_name} - à relire",
+            "key_points": [],
+            "action_items": ["Relire la conversation", "Répondre si nécessaire"],
             "sentiment": "neutre",
-            "next_step": "Prendre le temps de lire et répondre"
+            "next_step": "Lire attentivement et répondre"
         }
-
-
+        
 # =====================================================
 # WHATSAPP - RÉPONSE AUTOMATIQUE AUX MESSAGES SIMPLES
 # =====================================================
@@ -12948,22 +12975,50 @@ async def auto_reply_if_needed(message: str, contact_name: str, from_number: str
 # =====================================================
 # WHATSAPP - PLANNING (VERSION CORRIGÉE)
 # =====================================================
+# =====================================================
+# WHATSAPP - ENVOIS DIFFÉRÉS (VERSION CORRIGÉE)
+# =====================================================
 
-@app.post("/api/whatsapp/schedule")
-async def schedule_whatsapp_message(request: Dict[str, Any]):
+@app.api_route("/api/whatsapp/schedule", methods=["POST", "GET"])
+async def schedule_whatsapp_message(request: Request):
     """Programme un message WhatsApp pour plus tard"""
-    recipient = request.get("recipient")  # ← "recipient" au lieu de "to"
-    message = request.get("message")
-    scheduled_for = request.get("scheduled_for")
-    user_id = get_request_user_id(request)
+    
+    # Récupérer les paramètres selon la méthode
+    if request.method == "GET":
+        recipient = request.query_params.get("recipient", "")
+        message = request.query_params.get("message", "")
+        scheduled_for = request.query_params.get("scheduled_for", "")
+        user_id = request.query_params.get("user_id", None)
+    else:
+        try:
+            body = await request.json()
+            recipient = body.get("recipient", "")
+            message = body.get("message", "")
+            scheduled_for = body.get("scheduled_for", "")
+            user_id = body.get("user_id", None)
+        except:
+            recipient = ""
+            message = ""
+            scheduled_for = ""
+            user_id = None
     
     if not recipient or not message or not scheduled_for:
-        return {"success": False, "error": "recipient, message et scheduled_for requis"}
+        return {
+            "success": False, 
+            "error": "recipient, message et scheduled_for requis"
+        }
+    
+    # Gérer user_id
+    if not user_id:
+        user_id = get_request_user_id({})
     
     try:
-        scheduled_date = datetime.fromisoformat(scheduled_for)
+        scheduled_date = datetime.fromisoformat(scheduled_for.replace('Z', '+00:00'))
         if scheduled_date < datetime.now():
-            return {"success": False, "error": "La date doit être dans le futur"}
+            return {
+                "success": False, 
+                "error": f"La date doit être dans le futur. Date actuelle: {datetime.now().isoformat()}"
+            }
         
         # Sauvegarder dans la base
         result = supabase.table("whatsapp_scheduled_messages").insert({
@@ -12982,10 +13037,12 @@ async def schedule_whatsapp_message(request: Dict[str, Any]):
             "message": f"✅ Message programmé pour {scheduled_date.strftime('%d/%m/%Y à %H:%M')}"
         }
         
+    except ValueError as e:
+        logger.error(f"Erreur format date: {e}")
+        return {"success": False, "error": f"Format de date invalide. Utilisez YYYY-MM-DDTHH:MM:SS (ex: 2026-05-25T10:00:00)"}
     except Exception as e:
         logger.error(f"Erreur planification: {e}")
         return {"success": False, "error": str(e)}
-
 
 # =====================================================
 # WHATSAPP - CATÉGORISATION DES CONTACTS (VÉRIFIÉ)
