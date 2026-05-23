@@ -170,117 +170,9 @@ async def whatsapp_webhook(request: Request):
 
 
 # =====================================================
-# WHATSAPP - TEMPLATES INTELLIGENTS
-# =====================================================
-
-@app.post("/api/whatsapp/suggest-reply")
-async def suggest_whatsapp_reply(request: Dict[str, Any]):
-    """Analyse un message WhatsApp et propose des réponses adaptées"""
-    message = request.get("message", "")
-    contact_name = request.get("contact_name", "")
-    
-    if not message:
-        return {"success": False, "error": "Message requis"}
-    
-    prompt = f"""Analyse ce message WhatsApp de {contact_name} et propose 3 réponses adaptées.
-
-Message : "{message}"
-
-Retourne UNIQUEMENT du JSON :
-{{
-  "analysis": "analyse courte du message (ton, urgence, sujet)",
-  "suggestions": [
-    {{"text": "réponse 1", "style": "professionnel/doux/direct", "emoji": "🙏"}},
-    {{"text": "réponse 2", "style": "professionnel/doux/direct", "emoji": "✅"}},
-    {{"text": "réponse 3", "style": "professionnel/doux/direct", "emoji": "💪"}}
-  ],
-  "quick_actions": ["✅ OK", "📅 Plus tard", "🔜 Je reviens", "❌ Non merci"]
-}}"""
-
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
-            max_tokens=300
-        )
-        
-        result = response.choices[0].message.content
-        result = result.replace("```json", "").replace("```", "").strip()
-        suggestions = json.loads(result)
-        
-        return {"success": True, **suggestions}
-        
-    except Exception as e:
-        logger.error(f"Erreur suggestion réponse: {e}")
-        # Fallback
-        return {
-            "success": True,
-            "analysis": "Message à traiter",
-            "suggestions": [
-                {"text": "OK, je m'en occupe", "style": "doux", "emoji": "✅"},
-                {"text": "Je te redis ça demain", "style": "doux", "emoji": "📅"},
-                {"text": "Merci pour ton message", "style": "professionnel", "emoji": "🙏"}
-            ],
-            "quick_actions": ["✅ OK", "📅 Plus tard", "🔜 Je reviens"]
-        }
-# =====================================================
 # WHATSAPP - SCAN DES MESSAGES NON LUS
 # =====================================================
 
-@app.post("/api/whatsapp/scan-unread")
-async def scan_unread_whatsapp(request: Dict[str, Any] = None):
-    """Scanne les messages WhatsApp non répondus et envoie des notifications"""
-    if not supabase:
-        return {"success": False, "error": "Supabase non configuré"}
-    
-    try:
-        user_id = get_request_user_id(request or {})
-        
-        # Récupérer les messages non répondus des dernières 24h
-        yesterday = (datetime.now() - timedelta(days=1)).isoformat()
-        unread_messages = supabase.table("whatsapp_messages")\
-            .select("id, from_name, message, importance, created_at")\
-            .eq("user_id", user_id)\
-            .eq("replied", False)\
-            .gte("created_at", yesterday)\
-            .order("importance", desc=True)\
-            .execute()
-        
-        if not unread_messages.data:
-            return {"success": True, "unread_count": 0, "message": "Aucun message non lu"}
-        
-        # Compter par importance
-        high_priority = [m for m in unread_messages.data if m.get("importance") == "high"]
-        medium_priority = [m for m in unread_messages.data if m.get("importance") == "medium"]
-        
-        # Envoyer une notification groupée
-        if high_priority:
-            notification_title = f"📱 {len(high_priority)} message(s) WhatsApp important(s)"
-            notification_body = f"De: {', '.join([m['from_name'] for m in high_priority[:3]])}"
-        else:
-            notification_title = f"📱 {len(unread_messages.data)} message(s) WhatsApp non lu(s)"
-            notification_body = f"De: {', '.join([m['from_name'] for m in unread_messages.data[:3]])}"
-        
-        send_notification_sync({
-            "title": notification_title,
-            "body": notification_body,
-            "url": "/chat?mode=whatsapp",
-            "type": "whatsapp",
-            "user_id": user_id,
-            "requireInteraction": len(high_priority) > 0
-        })
-        
-        return {
-            "success": True,
-            "unread_count": len(unread_messages.data),
-            "high_priority_count": len(high_priority),
-            "messages": unread_messages.data[:5]
-        }
-        
-    except Exception as e:
-        logger.error(f"Erreur scan WhatsApp: {e}")
-        return {"success": False, "error": str(e)}
 
 
 def scan_whatsapp_messages():
@@ -301,227 +193,8 @@ def run_hourly_checks():
         scan_whatsapp_messages()  # Toutes les heures
         
 
-# =====================================================
-# WHATSAPP - ENVOIS DIFFÉRÉS
-# =====================================================
 
 
-
-@app.post("/api/whatsapp/schedule")
-async def schedule_whatsapp_message(request: Dict[str, Any]):
-    """Programme un message WhatsApp pour plus tard"""
-    recipient = request.get("recipient")  # ← changer "to" en "recipient"
-    message = request.get("message")
-    scheduled_for = request.get("scheduled_for")
-    user_id = get_request_user_id(request)
-    
-    if not recipient or not message or not scheduled_for:
-        return {"success": False, "error": "recipient, message et scheduled_for requis"}
-    
-    try:
-        scheduled_date = datetime.fromisoformat(scheduled_for)
-        if scheduled_date < datetime.now():
-            return {"success": False, "error": "La date doit être dans le futur"}
-        
-        # Sauvegarder dans la base avec le bon nom de table
-        result = supabase.table("whatsapp_scheduled_messages").insert({
-            "recipient": recipient,     
-            "message": message,
-            "scheduled_for": scheduled_for,
-            "status": "pending",
-            "user_id": user_id,
-            "created_at": datetime.now().isoformat()
-        }).execute()
-        
-        return {
-            "success": True,
-            "scheduled_id": result.data[0]["id"] if result.data else None,
-            "scheduled_for": scheduled_for,
-            "message": f"✅ Message programmé pour {scheduled_date.strftime('%d/%m/%Y à %H:%M')}"
-        }
-        
-    except Exception as e:
-        logger.error(f"Erreur planification: {e}")
-        return {"success": False, "error": str(e)}
-
-@app.post("/api/whatsapp/process-scheduled")
-async def process_scheduled_messages():
-    """Exécute les messages programmés (à appeler toutes les minutes)"""
-    now = datetime.now().isoformat()
-    
-    # Récupérer les messages à envoyer avec le bon nom de table
-    pending = supabase.table("whatsapp_scheduled_messages")\
-        .select("*")\
-        .eq("status", "pending")\
-        .lte("scheduled_for", now)\
-        .execute()
-    
-    results = []
-    for msg in pending.data:
-        # Formater le numéro pour WhatsApp
-        recipient = msg["recipient"]
-        if not recipient.endswith("@c.us"):
-            recipient = recipient + "@c.us" if not recipient.startswith("+") else recipient.replace("+", "") + "@c.us"
-        
-        # Envoyer le message
-        success = await whatsapp_send_message(recipient, msg["message"])
-        
-        # Mettre à jour le statut
-        supabase.table("whatsapp_scheduled_messages").update({
-            "status": "sent" if success else "failed",
-            "sent_at": datetime.now().isoformat()
-        }).eq("id", msg["id"]).execute()
-        
-        results.append({
-            "id": msg["id"],
-            "recipient": msg["recipient"],
-            "success": success
-        })
-    
-    return {"success": True, "processed": len(results), "results": results}
-
-
-# =====================================================
-# WHATSAPP - CATÉGORISATION DES CONTACTS
-# =====================================================
-
-
-@app.post("/api/whatsapp/contacts/categorize")
-async def categorize_contact(request: Dict[str, Any]):
-    """Catégorise un contact WhatsApp"""
-    phone = request.get("phone")
-    category = request.get("category")  # client, family, partner, prospect, other
-    name = request.get("name", "")
-    user_id = get_request_user_id(request)
-    
-    if not phone or not category:
-        return {"success": False, "error": "phone et category requis"}
-    
-    valid_categories = ["client", "family", "partner", "prospect", "other"]
-    if category not in valid_categories:
-        return {"success": False, "error": f"Catégorie invalide. Choisir: {valid_categories}"}
-    
-    # Upsert le contact
-    result = supabase.table("whatsapp_contacts").upsert({
-        "phone": phone,
-        "name": name,
-        "category": category,
-        "user_id": user_id,
-        "updated_at": datetime.now().isoformat()
-    }).execute()
-    
-    return {"success": True, "contact": result.data[0] if result.data else None}
-
-@app.get("/api/whatsapp/contacts")
-async def get_whatsapp_contacts(category: str = None, user_id: Optional[str] = None):
-    """Récupère les contacts par catégorie"""
-    if not supabase:
-        return {"success": False, "error": "Supabase non configuré"}
-    
-    user_id = require_user_id(user_id)
-    
-    query = supabase.table("whatsapp_contacts").select("*").eq("user_id", user_id)
-    if category:
-        query = query.eq("category", category)
-    
-    result = query.execute()
-    
-    return {"success": True, "contacts": result.data}
-
-
-
-
-
-
-# =====================================================
-# WHATSAPP - RÉSUMÉ IA DES CONVERSATIONS
-# =====================================================
-
-@app.post("/api/whatsapp/summary")
-async def get_whatsapp_conversation_summary(request: Dict[str, Any]):
-    """Génère un résumé IA d'une conversation WhatsApp"""
-    contact_name = request.get("contact_name", "")
-    messages = request.get("messages", [])
-    
-    if not messages:
-        return {"success": False, "error": "Messages requis"}
-    
-    # Formater les messages pour le prompt
-    conversation_text = "\n".join([f"{m['role']}: {m['content']}" for m in messages[-20:]])
-    
-    prompt = f"""Résume cette conversation WhatsApp avec {contact_name}.
-
-Conversation :
-{conversation_text}
-
-Retourne UNIQUEMENT du JSON :
-{{
-  "summary": "résumé court de la conversation (2-3 phrases)",
-  "key_points": ["point important 1", "point important 2"],
-  "action_items": ["action à prendre 1", "action à prendre 2"],
-  "sentiment": "positif/neutre/négatif/urgent",
-  "next_step": "prochaine action recommandée"
-}}"""
-
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.5,
-            max_tokens=300
-        )
-        
-        result = response.choices[0].message.content
-        result = result.replace("```json", "").replace("```", "").strip()
-        summary = json.loads(result)
-        
-        return {"success": True, **summary}
-        
-    except Exception as e:
-        logger.error(f"Erreur résumé conversation: {e}")
-        return {
-            "success": True,
-            "summary": f"Conversation avec {contact_name} à relire",
-            "key_points": [],
-            "action_items": ["Relire la conversation"],
-            "sentiment": "neutre",
-            "next_step": "Prendre le temps de lire"
-        }
-
-
-# =====================================================
-# WHATSAPP - RÉPONSE AUTOMATIQUE
-# =====================================================
-
-async def auto_reply_if_needed(message: str, contact_name: str, from_number: str) -> tuple[bool, str | None]:
-    """Vérifie si une réponse automatique peut être envoyée"""
-    
-    message_lower = message.lower().strip()
-    
-    # Réponses automatiques pour les messages simples
-    auto_responses = {
-        "ok": "👍",
-        "merci": "Avec plaisir ! 🙏",
-        "c'est bon": "Super ! 👌",
-        "parfait": "Génial ! 😊",
-        "ça marche": "Nickel ! 👌",
-        "d'accord": "👍",
-        "oui": "Super ! ✅",
-        "non": "D'accord, pas de souci.",
-        "bonjour": f"Bonjour {contact_name} ! Comment allez-vous ? ☀️",
-        "cc": f"Cc {contact_name} ! En quoi puis-je vous aider ? 🌸",
-        "coucou": f"Coucou {contact_name} ! 👋",
-        "bien et toi": "Je vais bien, merci et toi. 💖",
-        "ça va": "Tant mieux ! 😊",
-    }
-    
-    for key, response in auto_responses.items():
-        if key in message_lower:
-            # Envoyer la réponse automatique
-            await whatsapp_send_message(from_number, response)
-            return True, response
-    
-    return False, None
 
 async def process_incoming_message(data: dict):
     """Traite un message entrant"""
@@ -13105,3 +12778,353 @@ def get_priority_recommendation(level: str) -> str:
     if level == "normal":
         return "🟡 Priorité normale. Planifie cette semaine."
     return "🟢 Priorité basse. Peut attendre ou être déléguée."
+
+
+# =====================================================
+# WHATSAPP - SUGGESTIONS DE RÉPONSES INTELLIGENTES
+# =====================================================
+
+@app.post("/api/whatsapp/suggest-reply")
+async def suggest_whatsapp_reply(request: Dict[str, Any]):
+    """Analyse un message WhatsApp et propose des réponses adaptées"""
+    message = request.get("message", "")
+    contact_name = request.get("contact_name", "")
+    
+    if not message:
+        return {"success": False, "error": "Message requis"}
+    
+    prompt = f"""Analyse ce message WhatsApp de {contact_name} et propose 3 réponses adaptées.
+
+Message : "{message}"
+
+Retourne UNIQUEMENT du JSON (pas de texte avant ou après) :
+{{
+  "analysis": "analyse courte du message (ton, urgence, sujet) - 10 mots max",
+  "suggestions": [
+    {{"text": "réponse 1 courte", "style": "professionnel/doux/direct", "emoji": "🙏"}},
+    {{"text": "réponse 2 courte", "style": "professionnel/doux/direct", "emoji": "✅"}},
+    {{"text": "réponse 3 courte", "style": "professionnel/doux/direct", "emoji": "💪"}}
+  ],
+  "quick_actions": ["✅ OK", "📅 Plus tard", "🔜 Je reviens", "❌ Non merci"]
+}
+
+Règles :
+- Les réponses doivent être courtes (max 10 mots)
+- Adaptées au contexte professionnel de Love & Fire Sport ou Santé Plus
+- Ne pas inventer d'informations"""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=400
+        )
+        
+        result = response.choices[0].message.content
+        # Nettoyer le résultat
+        result = result.replace("```json", "").replace("```", "").strip()
+        suggestions = json.loads(result)
+        
+        return {"success": True, **suggestions}
+        
+    except Exception as e:
+        logger.error(f"Erreur suggestion réponse: {e}")
+        # Fallback
+        return {
+            "success": True,
+            "analysis": "Message à traiter rapidement",
+            "suggestions": [
+                {"text": "OK, je m'en occupe", "style": "doux", "emoji": "✅"},
+                {"text": "Je te redis ça demain", "style": "doux", "emoji": "📅"},
+                {"text": "Merci pour ton message", "style": "professionnel", "emoji": "🙏"}
+            ],
+            "quick_actions": ["✅ OK", "📅 Plus tard", "🔜 Je reviens"]
+        }
+
+
+# =====================================================
+# WHATSAPP - RÉSUMÉ IA DES CONVERSATIONS
+# =====================================================
+
+@app.post("/api/whatsapp/summary")
+async def get_whatsapp_conversation_summary(request: Dict[str, Any]):
+    """Génère un résumé IA d'une conversation WhatsApp"""
+    contact_name = request.get("contact_name", "Contact")
+    messages = request.get("messages", [])
+    
+    if not messages:
+        return {"success": False, "error": "Messages requis"}
+    
+    # Formater les messages pour le prompt
+    conversation_text = "\n".join([f"{m.get('role', 'user')}: {m.get('content', '')}" for m in messages[-20:]])
+    
+    prompt = f"""Résume cette conversation WhatsApp avec {contact_name}.
+
+Conversation :
+{conversation_text}
+
+Retourne UNIQUEMENT du JSON (pas de texte avant ou après) :
+{{
+  "summary": "résumé court de la conversation (2-3 phrases)",
+  "key_points": ["point important 1", "point important 2"],
+  "action_items": ["action à prendre 1", "action à prendre 2"],
+  "sentiment": "positif/neutre/négatif/urgent",
+  "next_step": "prochaine action recommandée"
+}}"""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.5,
+            max_tokens=400
+        )
+        
+        result = response.choices[0].message.content
+        result = result.replace("```json", "").replace("```", "").strip()
+        summary = json.loads(result)
+        
+        return {"success": True, **summary}
+        
+    except Exception as e:
+        logger.error(f"Erreur résumé conversation: {e}")
+        return {
+            "success": True,
+            "summary": f"Conversation avec {contact_name} - à relire attentivement",
+            "key_points": ["Message reçu de " + contact_name],
+            "action_items": ["Relire la conversation et répondre"],
+            "sentiment": "neutre",
+            "next_step": "Prendre le temps de lire et répondre"
+        }
+
+
+# =====================================================
+# WHATSAPP - RÉPONSE AUTOMATIQUE AUX MESSAGES SIMPLES
+# =====================================================
+
+async def auto_reply_if_needed(message: str, contact_name: str, from_number: str) -> tuple[bool, str | None]:
+    """Vérifie si une réponse automatique peut être envoyée et l'envoie"""
+    
+    message_lower = message.lower().strip()
+    
+    # Réponses automatiques pour les messages simples
+    auto_responses = {
+        "ok": "👍",
+        "merci": "Avec plaisir ! 🙏",
+        "c'est bon": "Super ! 👌",
+        "parfait": "Génial ! 😊",
+        "ça marche": "Nickel ! 👌",
+        "d'accord": "👍",
+        "oui": "Super ! ✅",
+        "non": "D'accord, pas de souci.",
+        "bonjour": f"Bonjour {contact_name} ! Comment allez-vous ? ☀️",
+        "cc": f"Cc {contact_name} ! En quoi puis-je vous aider ? 🌸",
+        "coucou": f"Coucou {contact_name} ! 👋",
+        "bien et toi": "Je vais bien, merci ! Ravie de vous parler. 💖",
+        "ça va": "Tant mieux ! 😊",
+        "hello": f"Hello {contact_name} ! 👋",
+        "salut": f"Salut {contact_name} ! 👋",
+    }
+    
+    for key, response in auto_responses.items():
+        if key in message_lower:
+            # Envoyer la réponse automatique
+            success = await whatsapp_send_message(from_number, response)
+            if success:
+                logger.info(f"🤖 Réponse automatique envoyée à {contact_name}: {response}")
+            return True, response
+    
+    return False, None
+
+
+# =====================================================
+# WHATSAPP - PLANNING (VERSION CORRIGÉE)
+# =====================================================
+
+@app.post("/api/whatsapp/schedule")
+async def schedule_whatsapp_message(request: Dict[str, Any]):
+    """Programme un message WhatsApp pour plus tard"""
+    recipient = request.get("recipient")  # ← "recipient" au lieu de "to"
+    message = request.get("message")
+    scheduled_for = request.get("scheduled_for")
+    user_id = get_request_user_id(request)
+    
+    if not recipient or not message or not scheduled_for:
+        return {"success": False, "error": "recipient, message et scheduled_for requis"}
+    
+    try:
+        scheduled_date = datetime.fromisoformat(scheduled_for)
+        if scheduled_date < datetime.now():
+            return {"success": False, "error": "La date doit être dans le futur"}
+        
+        # Sauvegarder dans la base
+        result = supabase.table("whatsapp_scheduled_messages").insert({
+            "recipient": recipient,
+            "message": message,
+            "scheduled_for": scheduled_for,
+            "status": "pending",
+            "user_id": user_id,
+            "created_at": datetime.now().isoformat()
+        }).execute()
+        
+        return {
+            "success": True,
+            "scheduled_id": result.data[0]["id"] if result.data else None,
+            "scheduled_for": scheduled_for,
+            "message": f"✅ Message programmé pour {scheduled_date.strftime('%d/%m/%Y à %H:%M')}"
+        }
+        
+    except Exception as e:
+        logger.error(f"Erreur planification: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# =====================================================
+# WHATSAPP - CATÉGORISATION DES CONTACTS (VÉRIFIÉ)
+# =====================================================
+
+@app.post("/api/whatsapp/contacts/categorize")
+async def categorize_contact(request: Dict[str, Any]):
+    """Catégorise un contact WhatsApp"""
+    phone = request.get("phone")
+    category = request.get("category")
+    name = request.get("name", "")
+    user_id = get_request_user_id(request)
+    
+    if not phone or not category:
+        return {"success": False, "error": "phone et category requis"}
+    
+    valid_categories = ["client", "family", "partner", "prospect", "other"]
+    if category not in valid_categories:
+        return {"success": False, "error": f"Catégorie invalide. Choisir: {valid_categories}"}
+    
+    # Upsert le contact
+    result = supabase.table("whatsapp_contacts").upsert({
+        "phone": phone,
+        "name": name,
+        "category": category,
+        "user_id": user_id,
+        "updated_at": datetime.now().isoformat()
+    }).execute()
+    
+    return {"success": True, "contact": result.data[0] if result.data else None}
+
+
+@app.get("/api/whatsapp/contacts")
+async def get_whatsapp_contacts(category: str = None, user_id: Optional[str] = None):
+    """Récupère les contacts par catégorie"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    user_id = require_user_id(user_id)
+    
+    query = supabase.table("whatsapp_contacts").select("*").eq("user_id", user_id)
+    if category:
+        query = query.eq("category", category)
+    
+    result = query.execute()
+    
+    return {"success": True, "contacts": result.data}
+
+
+# =====================================================
+# WHATSAPP - SCAN DES MESSAGES NON LUS
+# =====================================================
+
+@app.post("/api/whatsapp/scan-unread")
+async def scan_unread_whatsapp(request: Dict[str, Any] = None):
+    """Scanne les messages WhatsApp non répondus et envoie des notifications"""
+    if not supabase:
+        return {"success": False, "error": "Supabase non configuré"}
+    
+    try:
+        user_id = get_request_user_id(request or {})
+        
+        # Récupérer les messages non répondus des dernières 24h
+        yesterday = (datetime.now() - timedelta(days=1)).isoformat()
+        unread_messages = supabase.table("whatsapp_messages")\
+            .select("id, from_name, message, importance, created_at")\
+            .eq("user_id", user_id)\
+            .eq("replied", False)\
+            .gte("created_at", yesterday)\
+            .order("importance", desc=True)\
+            .execute()
+        
+        if not unread_messages.data:
+            return {"success": True, "unread_count": 0, "message": "Aucun message non lu"}
+        
+        # Compter par importance
+        high_priority = [m for m in unread_messages.data if m.get("importance") == "high"]
+        
+        # Envoyer une notification groupée
+        if high_priority:
+            notification_title = f"📱 {len(high_priority)} message(s) WhatsApp important(s)"
+            notification_body = f"De: {', '.join([m['from_name'] for m in high_priority[:3]])}"
+        else:
+            notification_title = f"📱 {len(unread_messages.data)} message(s) WhatsApp non lu(s)"
+            notification_body = f"De: {', '.join([m['from_name'] for m in unread_messages.data[:3]])}"
+        
+        send_notification_sync({
+            "title": notification_title,
+            "body": notification_body,
+            "url": "/chat?mode=whatsapp",
+            "type": "whatsapp",
+            "user_id": user_id,
+            "requireInteraction": len(high_priority) > 0
+        })
+        
+        return {
+            "success": True,
+            "unread_count": len(unread_messages.data),
+            "high_priority_count": len(high_priority),
+            "messages": unread_messages.data[:5]
+        }
+        
+    except Exception as e:
+        logger.error(f"Erreur scan WhatsApp: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# =====================================================
+# WHATSAPP - TRAITEMENT DES MESSAGES PROGRAMMÉS
+# =====================================================
+
+@app.post("/api/whatsapp/process-scheduled")
+async def process_scheduled_messages():
+    """Exécute les messages programmés (à appeler toutes les minutes)"""
+    now = datetime.now().isoformat()
+    
+    # Récupérer les messages à envoyer
+    pending = supabase.table("whatsapp_scheduled_messages")\
+        .select("*")\
+        .eq("status", "pending")\
+        .lte("scheduled_for", now)\
+        .execute()
+    
+    results = []
+    for msg in pending.data:
+        recipient = msg["recipient"]
+        if not recipient.endswith("@c.us"):
+            if recipient.startswith("+"):
+                recipient = recipient[1:] + "@c.us"
+            else:
+                recipient = recipient + "@c.us"
+        
+        # Envoyer le message
+        success = await whatsapp_send_message(recipient, msg["message"])
+        
+        # Mettre à jour le statut
+        supabase.table("whatsapp_scheduled_messages").update({
+            "status": "sent" if success else "failed",
+            "sent_at": datetime.now().isoformat()
+        }).eq("id", msg["id"]).execute()
+        
+        results.append({
+            "id": msg["id"],
+            "recipient": msg["recipient"],
+            "success": success
+        })
+    
+    return {"success": True, "processed": len(results), "results": results}
+
