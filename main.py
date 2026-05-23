@@ -8143,192 +8143,308 @@ Retourne UNIQUEMENT le message, rien d'autre."""
 
 @app.get("/api/dashboard/today")
 async def get_today_dashboard(user_id: Optional[str] = None):
-    """Retourne toutes les données nécessaires pour le dashboard du jour avec des messages HUMAINS et VARIÉS"""
+    """
+    Retourne un message de dashboard basé UNIQUEMENT sur des données réelles.
+    INTERDICTION formelle : phrases génériques, conseils vagues, "prends soin de toi".
+    """
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
         user_id = require_user_id(user_id)
         today = datetime.now().date().isoformat()
+        now = datetime.now()
+        hour = now.hour
         
-        # Récupérer le nom de l'utilisateur
-        profile_result = supabase.table("user_profile").select("preferred_name").eq("user_id", user_id).execute()
-        user_name = profile_result.data[0].get("preferred_name", "Rebecca") if profile_result.data else "Rebecca"
+        # ========== 1. RÉCUPÉRATION DES DONNÉES RÉELLES ==========
         
-        # Récupérer les données
-        tasks_today = supabase.table("tasks").select("*").eq("user_id", user_id).eq("due_date", today).neq("status", "done").execute()
-        overdue_tasks = supabase.table("tasks").select("*").eq("user_id", user_id).lt("due_date", today).neq("status", "done").execute()
-        active_missions = supabase.table("missions").select("*").eq("user_id", user_id).eq("status", "active").execute()
-        pending_docs = supabase.table("documents").select("*").eq("user_id", user_id).neq("status", "approved").execute()
+        # Tâches du jour
+        tasks_today = supabase.table("tasks").select("*")\
+            .eq("user_id", user_id)\
+            .eq("due_date", today)\
+            .neq("status", "done")\
+            .execute()
+        tasks_today_list = tasks_today.data
+        
+        # Tâches en retard
+        overdue_tasks = supabase.table("tasks").select("*")\
+            .eq("user_id", user_id)\
+            .lt("due_date", today)\
+            .neq("status", "done")\
+            .execute()
+        overdue_tasks_list = overdue_tasks.data
+        
+        # Documents urgents (échéance dépassée ou aujourd'hui)
+        urgent_docs = supabase.table("documents").select("*")\
+            .eq("user_id", user_id)\
+            .lte("due_date", today)\
+            .neq("status", "approved")\
+            .execute()
+        urgent_docs_list = urgent_docs.data
+        
+        # Missions actives
+        active_missions = supabase.table("missions").select("*")\
+            .eq("user_id", user_id)\
+            .eq("status", "active")\
+            .execute()
+        active_missions_list = active_missions.data
+        
+        # Messages WhatsApp non répondus
+        whatsapp_pending = supabase.table("whatsapp_messages").select("from_name, importance, created_at")\
+            .eq("user_id", user_id)\
+            .eq("replied", False)\
+            .order("created_at", desc=True)\
+            .limit(5)\
+            .execute()
+        whatsapp_list = whatsapp_pending.data
+        whatsapp_urgent = [w for w in whatsapp_list if w.get("importance") == "high"]
+        
+        # Victoires récentes (7 jours)
         week_ago = (datetime.now().date() - timedelta(days=7)).isoformat()
-        recent_wins = supabase.table("wins").select("*").eq("user_id", user_id).gte("date", week_ago).execute()
-        family_today = supabase.table("family_events").select("*").eq("user_id", user_id).eq("date", today).neq("status", "done").execute()
-        mood_result = supabase.table("mood_entries").select("mood").eq("user_id", user_id).eq("date", today).execute()
+        recent_wins = supabase.table("wins").select("title, date")\
+            .eq("user_id", user_id)\
+            .gte("date", week_ago)\
+            .order("date", desc=True)\
+            .limit(3)\
+            .execute()
+        wins_list = recent_wins.data
+        
+        # Événements familiaux aujourd'hui
+        family_today = supabase.table("family_events").select("title, child_name")\
+            .eq("user_id", user_id)\
+            .eq("date", today)\
+            .neq("status", "done")\
+            .execute()
+        family_list = family_today.data
+        
+        # Humeur du jour
+        mood_result = supabase.table("mood_entries").select("mood")\
+            .eq("user_id", user_id)\
+            .eq("date", today)\
+            .execute()
         current_mood = mood_result.data[0]["mood"] if mood_result.data else None
         
-        # Calculer les priorités
-        priorities = []
-        for task in overdue_tasks.data[:2]:
-            priorities.append({
-                "id": task["id"],
-                "title": task["title"],
-                "reason": "⚠️ En retard",
-                "score": 40
-            })
-        for task in tasks_today.data[:3 - len(priorities)]:
-            if task["id"] not in [p["id"] for p in priorities]:
-                priorities.append({
-                    "id": task["id"],
-                    "title": task["title"],
-                    "reason": "📅 À faire aujourd'hui",
-                    "score": 30
-                })
-        if len(priorities) < 3:
-            for mission in active_missions.data[:3 - len(priorities)]:
-                priorities.append({
-                    "id": mission["id"],
-                    "title": f"🎯 {mission['name']}",
-                    "reason": "Mission stratégique",
-                    "score": 20
-                })
+        # Prénom
+        profile = supabase.table("user_profile").select("preferred_name").eq("user_id", user_id).execute()
+        user_name = profile.data[0].get("preferred_name", "Rebecca") if profile.data else "Rebecca"
         
-        # ============================================
-        # GÉNÉRATION DU MESSAGE VIVANT ET NATUREL
-        # ============================================
+        # ========== 2. GÉNÉRATION DU MESSAGE AVEC CONTRAINTES STRICTES ==========
         
-        hour = datetime.now().hour
-        if hour < 12:
-            emoji = random.choice(["☀️", "🌅", "🌄", "🌸"])
-            time_context = "matin"
-        elif hour < 18:
-            emoji = random.choice(["🌤️", "🍃", "💫", "🌿"])
-            time_context = "après-midi"
-        else:
-            emoji = random.choice(["🌙", "🌃", "✨", "💖"])
-            time_context = "soir"
-        
-        # Expressions d'accueil variées
-        greetings_variations = ["Coucou", "Salut", "Hey", "Bonjour", "Hello", "Hola", "Yo", "Eh", "Coucou toi", "Ah te voilà"]
-        greeting_start = random.choice(greetings_variations)
-        
-        # Construire le prompt pour l'IA (avec interdictions)
-        prompt = f"""Génère un message d'accueil pour {user_name}.
-
-CONTEXTE :
-- {len(tasks_today.data)} tâche(s) aujourd'hui
-- {len(overdue_tasks.data)} tâche(s) en retard  
-- {len(active_missions.data)} mission(s) active(s)
-- {len(pending_docs.data)} document(s) en attente
-- {len(recent_wins.data)} victoire(s) récente(s)
-- Humeur : {current_mood if current_mood else "neutre"}
-- Moment : {time_context}
+        # Construction du prompt avec TOUTES les données réelles
+        prompt = f"""Génère un message pour {user_name} basé UNIQUEMENT sur ces données réelles.
 
 🚨 INTERDICTION FORMELLE 🚨
-Tu ne dois ABSOLUMENT PAS utiliser ces phrases :
+Tu ne dois ABSOLUMENT PAS utiliser ces phrases ou leurs variantes :
 - "Je suis là pour toi"
 - "Prends soin de toi"
 - "N'hésite pas à me solliciter"
-- "Tu es une personne formidable"  
+- "Tu es une personne formidable"
 - "Bonne journée"
 - "Courage"
-- "Respire profondément"
 - "Une chose à la fois"
-- "Je comprends ce que tu ressens"
+- "Tout va bien se passer"
+- "Tu gères"
+- "Respire profondément"
 
-✅ À LA PLACE, parle VRAIMENT :
+✅ À LA PLACE, parle VRAIMENT des données concrètes.
 
-Exemples de BONS messages (inspire-toi, ne copie pas) :
-- "Coucou {user_name}. T'as l'air {current_mood if current_mood else 'calme'}. {emoji}"
-- "Eh toi ! {len(tasks_today.data)} truc(s) à faire aujourd'hui. La plus chiante d'abord ? {emoji}"
-- "Salut ma belle. Comment tu te sens VRAIMENT aujourd'hui ? {emoji}"
-- "Ah te voilà ! J'ai pensé à toi. Alors, quoi de neuf ? {emoji}"
-- "Hey... t'as l'air fatiguée. T'as dormi ? {emoji}"
+DONNÉES RÉELLES DU JOUR :
 
-RÈGLES :
-- 8 à 25 mots maximum
-- Sois NATURELLE, comme une amie
-- Ne donne AUCUN conseil, juste un constat + une question ouverte
-- Varie les expressions (ne répète jamais la même chose)
-- Utilise le prénom {user_name} une fois
-- Place l'emoji {emoji} à la fin
+1. Tâches à faire AUJOURD'HUI ({len(tasks_today_list)}) :
+{[f"• {t['title']} (priorité: {t.get('priority', 'normal')})" for t in tasks_today_list[:5]]}
 
-Retourne UNIQUEMENT le message, rien d'autre."""
+2. Tâches en RETARD ({len(overdue_tasks_list)}) :
+{[f"• {t['title']} (en retard de {get_days_late(t['due_date'])} jour(s))" for t in overdue_tasks_list[:3]]}
+
+3. Documents URGENTS ({len(urgent_docs_list)}) :
+{[f"• {d['name']} - à rendre pour le {d['due_date']}" for d in urgent_docs_list[:3]]}
+
+4. Missions ACTIVES ({len(active_missions_list)}) :
+{[f"• {m['name']} (priorité: {m.get('priority', 'normal')})" for m in active_missions_list[:3]]}
+
+5. Messages WhatsApp NON RÉPONDUS ({len(whatsapp_list)}) :
+{[f"• De {w['from_name']} - {len(whatsapp_urgent)} urgent(s)" for w in whatsapp_list[:2]]}
+
+6. Événements familiaux AUJOURD'HUI ({len(family_list)}) :
+{[f"• {f['title']} ({f['child_name']})" for f in family_list[:2]]}
+
+7. Humeur enregistrée : {current_mood if current_mood else "non renseignée"}
+
+RÈGLES DE RÉDACTION :
+1. Cite les titres EXACTS des tâches, documents, missions
+2. Mentionne les retards (X jours) si applicable
+3. Si humeur = "fatiguée" ou "stressée", ne propose qu'UNE seule action
+4. Si aucun élément important, dis simplement "Aucune urgence à signaler"
+5. Termine par UNE seule question ouverte
+6. Maximum 40 mots
+
+Retourne UNIQUEMENT le message, rien d'autre avant ou après."""
 
         try:
             response = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.9,
-                max_tokens=150,
-                presence_penalty=0.4,
-                frequency_penalty=0.3,
-                timeout=15.0
+                temperature=0.5,  # Plus bas = moins d'invention
+                max_tokens=200
             )
             greeting = response.choices[0].message.content.strip()
+            
+            # Nettoyer les guillemets résiduels
             greeting = greeting.replace('"', '').replace("'", '')
-        except Exception as e:
-            logger.error(f"Erreur génération greeting: {e}")
-            # Fallbacks NATURELS (pas génériques)
-            fallbacks = [
-                f"Coucou {user_name}. {len(tasks_today.data)} chose(s) à faire. On attaque ? {emoji}",
-                f"Salut toi ! {len(overdue_tasks.data)} truc(s) qui traînent. On en prend un ? {emoji}",
-                f"{greeting_start} {user_name} ! Comment tu te sens ? {emoji}",
-                f"Hey {user_name}... t'as l'air {current_mood if current_mood else 'bien'}. Raconte. {emoji}",
-                f"Ah te voilà ! J'ai failli m'inquiéter. Alors, quoi ? {emoji}"
+            
+            # Vérification anti-phrases génériques (fallback si l'IA désobéit)
+            forbidden_phrases = [
+                "je suis là pour toi", "prends soin de toi", "n'hésite pas",
+                "tu es formidable", "bonne journée", "courage", 
+                "une chose à la fois", "tout va bien se passer", "tu gères"
             ]
-            greeting = random.choice(fallbacks)
+            for phrase in forbidden_phrases:
+                if phrase in greeting.lower():
+                    # Fallback : construire un message basé sur les données, sans IA
+                    greeting = build_fallback_message(
+                        user_name, tasks_today_list, overdue_tasks_list, 
+                        urgent_docs_list, whatsapp_urgent, current_mood
+                    )
+                    break
+                    
+        except Exception as e:
+            logger.error(f"Erreur génération dashboard: {e}")
+            greeting = build_fallback_message(
+                user_name, tasks_today_list, overdue_tasks_list,
+                urgent_docs_list, whatsapp_urgent, current_mood
+            )
         
-        # Suggestions de moves personnalisées
-        suggestions = {
-            "money_move": "Vérifier les finances du jour",
-            "family_move": "Prendre des nouvelles des enfants",
-            "business_move": "Avancer sur une mission prioritaire",
-            "stabilization_move": "Prendre 5 minutes pour respirer"
-        }
+        # ========== 3. CONSTRUCTION DES PRIORITÉS AVEC SOURCES ==========
         
-        if active_missions.data:
-            suggestions["business_move"] = f"Avancer sur {active_missions.data[0]['name']}"
-        if family_today.data:
-            suggestions["family_move"] = f"{family_today.data[0]['title']} aujourd'hui"
-        if recent_wins.data:
-            suggestions["stabilization_move"] = f"Célébrer {len(recent_wins.data)} victoire(s) récente(s)"
+        priorities = []
         
-        # Message de guidance calme (naturel et VARIÉ)
-        calm_options = [
-            "Respire. On y va doucement.",
-            "Ralentis. T'inquiète, on gère.",
-            "Une petite pause ? Ça peut aider.",
-            "T'es pas seule. Je suis là.",
-            "On prend ça par étapes, ok ?"
-        ]
+        # Ajouter les tâches en retard (les plus critiques)
+        for task in overdue_tasks_list[:2]:
+            days_late = get_days_late(task["due_date"])
+            priorities.append({
+                "id": task["id"],
+                "title": task["title"],
+                "reason": f"⚠️ En retard de {days_late} jour(s)",
+                "score": 40,
+                "source": "task",
+                "source_id": task["id"]
+            })
+        
+        # Ajouter les documents urgents
+        for doc in urgent_docs_list[:2]:
+            priorities.append({
+                "id": doc["id"],
+                "title": doc["name"],
+                "reason": f"📄 À rendre pour le {doc['due_date']}",
+                "score": 35,
+                "source": "document",
+                "source_id": doc["id"]
+            })
+        
+        # Ajouter les tâches du jour
+        for task in tasks_today_list[:3 - len(priorities)]:
+            if task["id"] not in [p["id"] for p in priorities]:
+                priorities.append({
+                    "id": task["id"],
+                    "title": task["title"],
+                    "reason": f"📅 À faire aujourd'hui",
+                    "score": 30,
+                    "source": "task",
+                    "source_id": task["id"]
+                })
+        
+        # Compléter avec les missions si besoin
+        if len(priorities) < 3:
+            for mission in active_missions_list[:3 - len(priorities)]:
+                priorities.append({
+                    "id": mission["id"],
+                    "title": f"🎯 {mission['name']}",
+                    "reason": f"Mission active",
+                    "score": 20,
+                    "source": "mission",
+                    "source_id": mission["id"]
+                })
+        
+        # Ajouter les messages WhatsApp urgents si pas assez de priorités
+        if len(priorities) < 3 and whatsapp_urgent:
+            for msg in whatsapp_urgent[:2]:
+                priorities.append({
+                    "id": msg.get("id", f"wa_{msg.get('from_name')}"),
+                    "title": f"📱 Répondre à {msg['from_name']}",
+                    "reason": f"Message WhatsApp en attente",
+                    "score": 25,
+                    "source": "whatsapp",
+                    "source_id": msg.get("id")
+                })
+        
+        # ========== 4. SUGGESTIONS BASÉES SUR LES DONNÉES ==========
+        
+        suggestions = {}
+        
+        # Suggestion argent
+        if len(urgent_docs_list) > 0 and any("grant" in d["name"].lower() or "contrat" in d["name"].lower() for d in urgent_docs_list):
+            suggestions["money_move"] = "Finaliser le document urgent"
+        elif len(overdue_tasks_list) > 0:
+            suggestions["money_move"] = "Rattraper la tâche en retard"
+        else:
+            suggestions["money_move"] = "Vérifier les finances du jour"
+        
+        # Suggestion famille
+        if len(family_list) > 0:
+            suggestions["family_move"] = f"{family_list[0]['title']} aujourd'hui"
+        elif current_mood in ["fatiguée", "stressée"]:
+            suggestions["family_move"] = "Prendre 10 minutes pour toi"
+        else:
+            suggestions["family_move"] = "Prendre des nouvelles des enfants"
+        
+        # Suggestion business
+        if len(active_missions_list) > 0:
+            suggestions["business_move"] = f"Avancer sur {active_missions_list[0]['name']}"
+        else:
+            suggestions["business_move"] = "Planifier la prochaine mission"
+        
+        # Suggestion stabilisation
+        if current_mood == "fatiguée":
+            suggestions["stabilization_move"] = "Te reposer (je rappelle dans 30 min)"
+        elif current_mood == "stressée":
+            suggestions["stabilization_move"] = "Prendre 3 respirations"
+        elif len(overdue_tasks_list) > 2:
+            suggestions["stabilization_move"] = "Ne faire qu'UNE seule tâche"
+        else:
+            suggestions["stabilization_move"] = "Respirer 1 minute"
+        
+        # ========== 5. MESSAGE DE GUIDANCE CALME (basé sur les données) ==========
         
         if current_mood == "stressée":
-            calm_guidance = random.choice(["Respire. Rien n'est aussi urgent qu'il n'y paraît.", "On va y aller doucement, pas de panique.", "Je suis là. On respire ensemble."])
+            calm_guidance = "Ralentis. On ne fait qu'une chose."
         elif current_mood == "fatiguée":
-            calm_guidance = random.choice(["Repose-toi d'abord. Le reste peut attendre.", "T'as besoin de souffler. Je veille.", "Va poser ta tête 10 minutes."])
-        elif overdue_tasks.data:
-            calm_guidance = random.choice(["On va gérer ces retards un par un.", "Pas de stress, on les prend dans l'ordre.", "Chaque chose en son temps."])
+            calm_guidance = "Repose-toi d'abord. Le reste attendra."
+        elif len(overdue_tasks_list) > 0:
+            calm_guidance = f"On rattrape d'abord {'cette tâche' if len(overdue_tasks_list) == 1 else 'ces retards'}."
         else:
-            calm_guidance = random.choice(calm_options)
+            calm_guidance = "Avance à ton rythme. Je suis là."
         
         return {
             "success": True,
             "greeting": greeting,
-            "top_priorities": priorities,
-            "tasks_today": tasks_today.data[:5],
-            "overdue_tasks": overdue_tasks.data[:5],
-            "active_missions": active_missions.data[:5],
-            "pending_docs": pending_docs.data[:5],
-            "recent_wins": len(recent_wins.data),
-            "family_today_count": len(family_today.data),
+            "top_priorities": priorities[:3],
+            "tasks_today": tasks_today_list[:5],
+            "overdue_tasks": overdue_tasks_list[:5],
+            "active_missions": active_missions_list[:5],
+            "pending_docs": urgent_docs_list[:5],
+            "recent_wins": len(wins_list),
+            "family_today_count": len(family_list),
+            "whatsapp_pending_count": len(whatsapp_list),
+            "whatsapp_urgent_count": len(whatsapp_urgent),
             "suggestions": suggestions,
             "calm_guidance": calm_guidance,
             "stats": {
-                "tasks_count": len(tasks_today.data),
-                "overdue_count": len(overdue_tasks.data),
-                "missions_count": len(active_missions.data),
-                "docs_count": len(pending_docs.data),
-                "wins_count": len(recent_wins.data)
+                "tasks_count": len(tasks_today_list),
+                "overdue_count": len(overdue_tasks_list),
+                "missions_count": len(active_missions_list),
+                "docs_count": len(urgent_docs_list),
+                "wins_count": len(wins_list),
+                "whatsapp_pending": len(whatsapp_list)
             },
             "current_mood": current_mood
         }
@@ -8336,6 +8452,44 @@ Retourne UNIQUEMENT le message, rien d'autre."""
     except Exception as e:
         logger.error(f"Erreur dashboard today: {e}")
         return {"success": False, "error": str(e)}
+
+
+def build_fallback_message(
+    user_name: str,
+    tasks_today: list,
+    overdue_tasks: list,
+    urgent_docs: list,
+    whatsapp_urgent: list,
+    current_mood: str = None
+) -> str:
+    """
+    Construit un message de fallback basé UNIQUEMENT sur les données réelles.
+    Pas de phrases génériques.
+    """
+    parts = []
+    
+    if overdue_tasks:
+        task = overdue_tasks[0]
+        days = get_days_late(task.get("due_date"))
+        parts.append(f"Rebecca, {task['title']} est en retard de {days} jour(s).")
+    elif tasks_today:
+        task = tasks_today[0]
+        parts.append(f"Rebecca, {task['title']} est à faire aujourd'hui.")
+    elif urgent_docs:
+        doc = urgent_docs[0]
+        parts.append(f"Rebecca, {doc['name']} est à rendre pour le {doc['due_date']}.")
+    elif whatsapp_urgent:
+        msg = whatsapp_urgent[0]
+        parts.append(f"Rebecca, {msg['from_name']} t'a envoyé un message WhatsApp.")
+    else:
+        parts.append(f"Rebecca, aucune urgence à signaler aujourd'hui.")
+    
+    if current_mood == "fatiguée":
+        parts.append("Ne fais qu'une chose.")
+    elif current_mood == "stressée":
+        parts.append("Ralentis.")
+    
+    return " ".join(parts)
 
 
 @app.post("/api/morning-notification")
