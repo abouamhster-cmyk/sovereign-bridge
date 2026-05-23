@@ -13171,3 +13171,98 @@ Retourne UNIQUEMENT du JSON (pas de texte avant ou après) :
             "sentiment": "neutre",
             "next_step": "Lire et répondre"
         }
+
+
+# =====================================================
+# VOICE - TRAITEMENT AUDIO SIMPLE
+# =====================================================
+
+@app.post("/api/voice/process")
+async def process_voice(request: Dict[str, Any]):
+    """Reçoit l'audio, le transcrit et répond"""
+    audio_base64 = request.get("audio", "")
+    user_id = request.get("user_id", "")
+    
+    if not audio_base64:
+        return {"success": False, "error": "Audio requis"}
+    
+    try:
+        import base64
+        import tempfile
+        import os
+        
+        # Décoder l'audio
+        audio_bytes = base64.b64decode(audio_base64)
+        
+        # Sauvegarder temporairement
+        with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp:
+            tmp.write(audio_bytes)
+            tmp_path = tmp.name
+        
+        # Transcrire avec Whisper
+        with open(tmp_path, "rb") as audio_file:
+            transcript = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file,
+                language="fr"
+            )
+        
+        os.unlink(tmp_path)
+        user_text = transcript.text
+        
+        # Récupérer le contexte de la conversation
+        conversation_history = []
+        if user_id:
+            # Récupérer les derniers messages de la conversation active
+            conv_result = supabase.table("conversation_messages")\
+                .select("role, content")\
+                .eq("user_id", user_id)\
+                .order("created_at", desc=True)\
+                .limit(10)\
+                .execute()
+            
+            for msg in reversed(conv_result.data or []):
+                try:
+                    parsed = json.loads(msg["content"])
+                    conversation_history.append({
+                        "role": msg["role"],
+                        "content": parsed.get("content", "")
+                    })
+                except:
+                    conversation_history.append({
+                        "role": msg["role"],
+                        "content": msg["content"]
+                    })
+        
+        # Générer réponse avec GPT
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "Tu es Becks. Réponds brièvement et naturellement, comme une amie."},
+                *conversation_history[-5:],
+                {"role": "user", "content": user_text}
+            ],
+            max_tokens=200,
+            temperature=0.8
+        )
+        
+        reply = response.choices[0].message.content
+        
+        # Sauvegarder la conversation
+        if user_id:
+            supabase.table("conversation_messages").insert({
+                "user_id": user_id,
+                "role": "user",
+                "content": json.dumps({"content": user_text})
+            }).execute()
+            supabase.table("conversation_messages").insert({
+                "user_id": user_id,
+                "role": "assistant",
+                "content": json.dumps({"content": reply})
+            }).execute()
+        
+        return {"success": True, "transcript": user_text, "reply": reply}
+        
+    except Exception as e:
+        logger.error(f"Erreur voice process: {e}")
+        return {"success": False, "error": str(e)}
