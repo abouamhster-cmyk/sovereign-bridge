@@ -12789,24 +12789,32 @@ async def suggest_whatsapp_reply(request: Request):
     """Analyse un message WhatsApp et propose des réponses adaptées"""
     
     # Récupérer les paramètres selon la méthode
+    message = ""
+    contact_name = ""
+    
     if request.method == "GET":
         message = request.query_params.get("message", "")
         contact_name = request.query_params.get("contact_name", "")
     else:
         try:
-            body = await request.json()
-            message = body.get("message", "")
-            contact_name = body.get("contact_name", "")
-        except:
+            # Lire le body correctement
+            body_text = await request.body()
+            if body_text:
+                import json
+                body = json.loads(body_text.decode('utf-8'))
+                message = body.get("message", "")
+                contact_name = body.get("contact_name", "")
+        except Exception as e:
+            logger.error(f"Erreur lecture body: {e}")
             message = ""
             contact_name = ""
     
     if not message:
         return {
             "success": False, 
-            "error": "Message requis. Utilisez ?message=...&contact_name=..."
+            "error": "Message requis. En GET: ?message=...&contact_name=... ou en POST: {\"message\":\"...\",\"contact_name\":\"...\"}"
         }
-    
+        
     prompt = f"""Analyse ce message WhatsApp de {contact_name} et propose 3 réponses adaptées.
 
 Message : "{message}"
@@ -12849,9 +12857,7 @@ Retourne UNIQUEMENT du JSON (pas de texte avant ou après) :
             ],
             "quick_actions": ["✅ OK", "📅 Plus tard", "🔜 Je reviens"]
         }
-# =====================================================
-# WHATSAPP - RÉSUMÉ IA DES CONVERSATIONS
-# =====================================================
+
 
 # =====================================================
 # WHATSAPP - RÉSUMÉ IA DES CONVERSATIONS
@@ -12861,39 +12867,53 @@ Retourne UNIQUEMENT du JSON (pas de texte avant ou après) :
 async def get_whatsapp_conversation_summary(request: Request):
     """Génère un résumé IA d'une conversation WhatsApp"""
     
-    # Récupérer les paramètres selon la méthode
+    contact_name = "Contact"
+    messages = []
+    
     if request.method == "GET":
         contact_name = request.query_params.get("contact_name", "Contact")
         messages_str = request.query_params.get("messages", "[]")
         try:
+            import json
             messages = json.loads(messages_str)
         except:
             messages = []
     else:
         try:
-            body = await request.json()
-            contact_name = body.get("contact_name", "Contact")
-            messages = body.get("messages", [])
-        except:
-            contact_name = "Contact"
+            body_text = await request.body()
+            if body_text:
+                import json
+                body = json.loads(body_text.decode('utf-8'))
+                contact_name = body.get("contact_name", "Contact")
+                messages = body.get("messages", [])
+        except Exception as e:
+            logger.error(f"Erreur lecture body summary: {e}")
             messages = []
     
     if not messages:
-        return {"success": False, "error": "Messages requis (format: liste avec role et content)"}
+        return {
+            "success": False, 
+            "error": "Messages requis. Format: {\"contact_name\":\"...\",\"messages\":[{\"role\":\"user\",\"content\":\"...\"}]}"
+        }
+    
+    # Vérifier que messages est une liste
+    if not isinstance(messages, list):
+        return {"success": False, "error": "messages doit être une liste"}
     
     # Formater les messages
     conversation_lines = []
     for m in messages:
-        role = m.get("role", "user")
-        content = m.get("content", "")
-        if content:
-            conversation_lines.append(f"{role}: {content}")
+        if isinstance(m, dict):
+            role = m.get("role", "user")
+            content = m.get("content", "")
+            if content:
+                conversation_lines.append(f"{role}: {content}")
     
     if not conversation_lines:
-        return {"success": False, "error": "Aucun message valide"}
+        return {"success": False, "error": "Aucun message valide trouvé"}
     
     conversation_text = "\n".join(conversation_lines[-20:])
-    
+        
     prompt = f"""Résume cette conversation WhatsApp avec {contact_name}.
 
 Conversation :
