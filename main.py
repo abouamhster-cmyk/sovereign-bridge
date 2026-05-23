@@ -13420,3 +13420,321 @@ async def process_voice(request: Dict[str, Any]):
     except Exception as e:
         logger.error(f"Erreur voice process: {e}")
         return {"success": False, "error": str(e)}
+
+
+# =====================================================
+# DÉTECTION D'INTENTION
+# =====================================================
+
+INTENT_PROMPT = """Détecte l'intention de ce message parmi les catégories suivantes :
+
+- EMOTIONAL : plainte, fatigue, stress, débordement, tristesse, colère, "j'en ai marre", besoin de soutien émotionnel
+- DOCUMENT : email, lettre, contrat, formulaire, "rédige", "écris", "prépare un email", "fais une lettre"
+- EXECUTION : action concrète, tâche, "fais", "crée", "prépare", "aide-moi à avancer", "je veux faire"
+- LOVE_FIRE_SPORT : grant, DDA, contrat public, subvention, sport adapté, Love & Fire
+- FAMILY : enfant, école, routine, "mes enfants", "ma fille", Neriah, Nylah, Norah, Sheyi
+- BUSINESS : argent, opportunité, revenu, client, "trouver de l'argent", "opportunité"
+- FARM : ferme, poisson, poulet, jardin, Ifè, pisciculture
+- STRATEGIC : décision, vision, avenir, "je ne sais plus quoi faire", "quel projet prioriser"
+- OTHER : conversation normale, simple salutation
+
+Message: "{message}"
+
+Retourne UNIQUEMENT le nom de l'intention (EMOTIONAL, DOCUMENT, EXECUTION, LOVE_FIRE_SPORT, FAMILY, BUSINESS, FARM, STRATEGIC, OTHER), rien d'autre."""
+
+async def detect_intent(message: str) -> str:
+    """Détecte l'intention de l'utilisateur en moins de 0.5s"""
+    try:
+        response = await asyncio.to_thread(
+            client.chat.completions.create,
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": INTENT_PROMPT.format(message=message[:500])}],
+            max_tokens=20,
+            temperature=0
+        )
+        intent = response.choices[0].message.content.strip().upper()
+        if intent not in ["EMOTIONAL", "DOCUMENT", "EXECUTION", "LOVE_FIRE_SPORT", "FAMILY", "BUSINESS", "FARM", "STRATEGIC", "OTHER"]:
+            return "OTHER"
+        return intent
+    except Exception as e:
+        logger.error(f"Erreur détection intention: {e}")
+        return "OTHER"
+
+
+# =====================================================
+# PROMPTS PAR INTENTION
+# =====================================================
+
+def get_prompt_for_intent(intent: str, user_name: str = "Rebecca", context: str = "") -> str:
+    """Retourne le prompt système adapté à l'intention"""
+    
+    base_context = f"""
+Tu es Becks, la conseillère personnelle de {user_name}.
+Tu connais sa vie, ses projets, ses enfants, ses émotions.
+{context}
+"""
+    
+    prompts = {
+        "EMOTIONAL": base_context + """
+🎭 MODE ÉMOTIONNEL
+
+Tu es douce, rassurante, présente.
+- Écoute et reformule ce qu'elle ressent
+- Ne donne PAS de conseils tout de suite
+- Propose une seule petite action après l'avoir écoutée
+- Si elle est fatiguée : propose de ne faire qu'une chose
+- Si elle est stressée : aide à prioriser UNE seule urgence
+
+Ne sois PAS générique. Parle comme une vraie amie.
+""",
+        
+        "DOCUMENT": base_context + """
+📄 MODE DOCUMENTS
+
+Tu aides à rédiger, résumer, ou préparer des documents.
+- Si elle demande un email : prépare-le directement
+- Si elle demande une lettre : structure proprement
+- Demande uniquement les informations manquantes
+- Propose le document prêt à copier
+
+Format de réponse : contenu du document + [ACTION:{"type":"copy_text","params":{},"label":"📋 Copier"}]
+""",
+        
+        "EXECUTION": base_context + """
+⚡ MODE EXÉCUTION
+
+Tu transformes la demande en plan d'action CONCRET.
+- Crée un plan avec 3-5 étapes simples
+- Chaque étape = action faisable en <15 min
+- Propose immédiatement le plan
+
+Format :
+"Ok, je m'occupe de [objectif].
+
+[ACTION:{"type":"create_execution_plan","params":{"title":"[titre]","steps":["étape 1","étape 2","étape 3"]},"label":"📋 Démarrer le plan"}]
+
+On commence par l'étape 1 : [première action]."
+""",
+        
+        "LOVE_FIRE_SPORT": base_context + """
+🏆 MODE LOVE & FIRE SPORT
+
+Tu aides sur les grants, DDA, contrats publics.
+- Structurer les dossiers
+- Lister les documents manquants
+- Proposer la prochaine action concrète
+- Préparer des emails professionnels
+
+Sois précise et organisée.
+""",
+        
+        "FAMILY": base_context + """
+👨‍👩‍👧‍👦 MODE FAMILLE
+
+Tu connais ses filles : Neriah, Nylah, Norah, Sheyi Coco.
+- Aide à organiser les routines
+- Propose des rappels
+- Structure les rendez-vous
+- Sois douce et soutenante
+""",
+        
+        "BUSINESS": base_context + """
+💰 MODE BUSINESS
+
+Aide à identifier et prioriser les opportunités.
+- Compare vitesse/effort/revenu
+- Recommande UNE action prioritaire
+- Crée une tâche associée si pertinent
+""",
+        
+        "FARM": base_context + """
+🌾 MODE FERME
+
+Aide sur Ifè Farm.
+- Suivi des dépenses
+- Organisation des travaux
+- Planification des productions
+- Rapports et documentation
+""",
+        
+        "STRATEGIC": base_context + """
+👑 MODE STRATÉGIQUE
+
+Aide aux décisions importantes.
+- Clarifie ce qui compte vraiment
+- Distingue urgence et importance
+- Aide à prioriser sur 90 jours
+- Questions profondes, réponses concises
+""",
+        
+        "OTHER": base_context + """
+💬 MODE GÉNÉRAL
+
+Sois naturelle, chaleureuse, humaine.
+Réponds simplement, sans forcer d'action.
+"""
+    }
+    
+    return prompts.get(intent, prompts["OTHER"])
+
+
+# =====================================================
+# CONTEXTE UTILISATEUR (mémoire + état)
+# =====================================================
+
+async def get_user_context(user_id: str) -> str:
+    """Récupère le contexte utilisateur pour enrichir les prompts"""
+    if not supabase:
+        return ""
+    
+    try:
+        # Récupérer la mémoire (5 derniers souvenirs)
+        memories = supabase.table("user_memory").select("*").eq("user_id", user_id).limit(5).execute()
+        
+        # Récupérer l'humeur du jour
+        today = datetime.now().date().isoformat()
+        mood_result = supabase.table("mood_entries").select("mood").eq("user_id", user_id).eq("date", today).execute()
+        mood = mood_result.data[0]["mood"] if mood_result.data else None
+        
+        # Récupérer les tâches en retard
+        overdue = supabase.table("tasks").select("title").eq("user_id", user_id).lt("due_date", today).neq("status", "done").limit(3).execute()
+        
+        context_parts = []
+        
+        if mood:
+            context_parts.append(f"Humeur aujourd'hui : {mood}")
+        
+        if overdue.data and len(overdue.data) > 0:
+            tasks = ", ".join([t["title"] for t in overdue.data[:2]])
+            context_parts.append(f"Tâches en retard : {tasks}")
+        
+        if memories.data:
+            recent = [f"{m['key']}: {m['value'][:50]}" for m in memories.data[:3]]
+            context_parts.append(f"Elle se souvient : {' | '.join(recent)}")
+        
+        return "\n".join(context_parts) if context_parts else ""
+        
+    except Exception as e:
+        logger.error(f"Erreur contexte: {e}")
+        return ""
+
+
+# =====================================================
+# ENDPOINT PRINCIPAL
+# =====================================================
+
+@app.post("/api/chat/intelligent")
+async def intelligent_chat(request: ChatRequest):
+    """
+    Chat unique avec détection d'intention automatique.
+    Plus besoin de sélectionner un mode manuellement.
+    """
+    logger.info(f"📨 Intelligent chat - {len(request.messages)} messages")
+    
+    user_id = require_user_id(request.user_id)
+    last_message = request.messages[-1].get("content", "") if request.messages else ""
+    
+    # 1. Récupérer le prénom de l'utilisateur
+    user_name = "Rebecca"
+    if supabase:
+        profile = supabase.table("user_profile").select("preferred_name").eq("user_id", user_id).execute()
+        if profile.data:
+            user_name = profile.data[0].get("preferred_name", "Rebecca")
+    
+    # 2. Détecter l'intention
+    intent = await detect_intent(last_message)
+    logger.info(f"🎯 Intention détectée: {intent}")
+    
+    # 3. Récupérer le contexte utilisateur
+    context = await get_user_context(user_id)
+    
+    # 4. Sélectionner le prompt système
+    system_prompt = get_prompt_for_intent(intent, user_name, context)
+    
+    # 5. Construire les messages
+    messages_payload = [
+        {"role": "system", "content": system_prompt},
+        *request.messages[-10:]  # Derniers 10 messages pour le contexte
+    ]
+    
+    # 6. Appeler l'IA
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages_payload,
+            max_tokens=800,
+            temperature=0.7
+        )
+        
+        assistant_response = response.choices[0].message.content
+        
+        # 7. Si intention EXECUTION, vérifier si un plan doit être généré
+        if intent == "EXECUTION" and "create_execution_plan" not in assistant_response:
+            # Vérifier si la demande nécessite un plan
+            needs_plan = any(word in last_message.lower() for word in [
+                "aide-moi", "fais", "crée", "prépare", "organise", "avancer", "étape"
+            ])
+            
+            if needs_plan and len(last_message) > 10 and len(last_message) < 500:
+                # Générer un plan d'exécution
+                plan_response = await generate_simple_plan(last_message)
+                if plan_response:
+                    assistant_response = plan_response
+        
+        # 8. Sauvegarder la conversation
+        store_chat_session(last_message, assistant_response, [intent], user_id)
+        
+        return {
+            "success": True,
+            "reply": assistant_response,
+            "detected_intent": intent,
+            "intent_label": {
+                "EMOTIONAL": "💬 Parle-moi",
+                "DOCUMENT": "📄 Documents",
+                "EXECUTION": "⚡ Exécution",
+                "LOVE_FIRE_SPORT": "🏆 Love & Fire",
+                "FAMILY": "👨‍👩‍👧‍👦 Famille",
+                "BUSINESS": "💰 Business",
+                "FARM": "🌾 Ferme",
+                "STRATEGIC": "👑 Stratégique",
+                "OTHER": "💬 Général"
+            }.get(intent, "💬 Général")
+        }
+        
+    except Exception as e:
+        logger.error(f"Erreur intelligent chat: {e}")
+        return {
+            "success": False,
+            "reply": "❌ Je rencontre un problème technique. Peux-tu reformuler ?",
+            "detected_intent": "OTHER"
+        }
+
+
+async def generate_simple_plan(query: str) -> str:
+    """Génère un plan d'exécution simple"""
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": """Génère un plan d'exécution en 3 étapes simples.
+
+Retourne UNIQUEMENT ce format :
+"Ok, je m'occupe de [objectif].
+
+[ACTION:{"type":"create_execution_plan","params":{"title":"[titre du plan]","steps":["étape 1","étape 2","étape 3"]},"label":"📋 Démarrer le plan"}]
+
+Voici le plan :
+1. [étape 1]
+2. [étape 2]
+3. [étape 3]
+
+On commence par l'étape 1."""},
+                {"role": "user", "content": query}
+            ],
+            max_tokens=400,
+            temperature=0.5
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        logger.error(f"Erreur génération plan: {e}")
+        return None
