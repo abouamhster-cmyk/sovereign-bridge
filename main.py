@@ -13090,12 +13090,13 @@ async def scan_unread_whatsapp(request: Dict[str, Any] = None):
 # WHATSAPP - TRAITEMENT DES MESSAGES PROGRAMMÉS
 # =====================================================
 
+# ... tout le reste du code ...
+
 @app.post("/api/whatsapp/process-scheduled")
 async def process_scheduled_messages():
     """Exécute les messages programmés (à appeler toutes les minutes)"""
     now = datetime.now().isoformat()
     
-    # Récupérer les messages à envoyer
     pending = supabase.table("whatsapp_scheduled_messages")\
         .select("*")\
         .eq("status", "pending")\
@@ -13111,10 +13112,8 @@ async def process_scheduled_messages():
             else:
                 recipient = recipient + "@c.us"
         
-        # Envoyer le message
         success = await whatsapp_send_message(recipient, msg["message"])
         
-        # Mettre à jour le statut
         supabase.table("whatsapp_scheduled_messages").update({
             "status": "sent" if success else "failed",
             "sent_at": datetime.now().isoformat()
