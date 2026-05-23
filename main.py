@@ -12806,7 +12806,7 @@ Retourne UNIQUEMENT du JSON (pas de texte avant ou après) :
     {{"text": "réponse 3 courte", "style": "professionnel/doux/direct", "emoji": "💪"}}
   ],
   "quick_actions": ["✅ OK", "📅 Plus tard", "🔜 Je reviens", "❌ Non merci"]
-}
+}}
 
 Règles :
 - Les réponses doivent être courtes (max 10 mots)
@@ -13090,8 +13090,6 @@ async def scan_unread_whatsapp(request: Dict[str, Any] = None):
 # WHATSAPP - TRAITEMENT DES MESSAGES PROGRAMMÉS
 # =====================================================
 
-# ... tout le reste du code ...
-
 @app.post("/api/whatsapp/process-scheduled")
 async def process_scheduled_messages():
     """Exécute les messages programmés (à appeler toutes les minutes)"""
@@ -13126,4 +13124,3 @@ async def process_scheduled_messages():
         })
     
     return {"success": True, "processed": len(results), "results": results}
-
