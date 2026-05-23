@@ -13036,35 +13036,23 @@ async def process_scheduled_messages():
 # =====================================================
 
 # =====================================================
-# WHATSAPP - SUGGESTIONS DE RÉPONSES INTELLIGENTES
+# WHATSAPP - SUGGESTIONS (VERSION CORRIGÉE)
 # =====================================================
 
-@app.api_route("/api/whatsapp/suggest-reply", methods=["POST", "GET"])
+@app.post("/api/whatsapp/suggest-reply")
 async def suggest_whatsapp_reply(request: Request):
     """Analyse un message WhatsApp et propose des réponses adaptées"""
     
-    message = ""
-    contact_name = ""
-    
-    if request.method == "GET":
-        message = request.query_params.get("message", "")
-        contact_name = request.query_params.get("contact_name", "")
-    else:
-        try:
-            body = await request.body()
-            if body:
-                import json
-                data = json.loads(body.decode('utf-8'))
-                message = data.get("message", "")
-                contact_name = data.get("contact_name", "")
-        except Exception as e:
-            logger.error(f"Erreur parsing: {e}")
+    try:
+        data = await request.json()
+        message = data.get("message", "")
+        contact_name = data.get("contact_name", "")
+    except Exception as e:
+        logger.error(f"Erreur lecture JSON: {e}")
+        return {"success": False, "error": "Format JSON invalide"}
     
     if not message:
-        return {
-            "success": False, 
-            "error": "Message requis"
-        }
+        return {"success": False, "error": "Message requis"}
     
     prompt = f"""Analyse ce message WhatsApp de {contact_name} et propose 3 réponses adaptées.
 
@@ -13097,7 +13085,6 @@ Retourne UNIQUEMENT du JSON (pas de texte avant ou après) :
         
     except Exception as e:
         logger.error(f"Erreur OpenAI: {e}")
-        # Fallback
         return {
             "success": True,
             "analysis": f"Message de {contact_name} à traiter",
@@ -13108,44 +13095,26 @@ Retourne UNIQUEMENT du JSON (pas de texte avant ou après) :
             ],
             "quick_actions": ["✅ OK", "📅 Plus tard", "🔜 Je reviens"]
         }
+
+
 # =====================================================
-# WHATSAPP - RÉSUMÉ (VERSION SIMPLIFIÉE POUR TEST)
-# =====================================================
-# =====================================================
-# WHATSAPP - RÉSUMÉ IA DES CONVERSATIONS
+# WHATSAPP - RÉSUMÉ (VERSION CORRIGÉE)
 # =====================================================
 
-@app.api_route("/api/whatsapp/summary", methods=["POST", "GET"])
+@app.post("/api/whatsapp/summary")
 async def get_whatsapp_conversation_summary(request: Request):
     """Génère un résumé IA d'une conversation WhatsApp"""
     
-    contact_name = "Contact"
-    messages = []
-    
-    if request.method == "GET":
-        contact_name = request.query_params.get("contact_name", "Contact")
-        messages_str = request.query_params.get("messages", "[]")
-        try:
-            import json
-            messages = json.loads(messages_str)
-        except Exception as e:
-            logger.error(f"GET - Erreur JSON: {e}")
-    else:
-        try:
-            body = await request.body()
-            if body:
-                import json
-                data = json.loads(body.decode('utf-8'))
-                contact_name = data.get("contact_name", "Contact")
-                messages = data.get("messages", [])
-        except Exception as e:
-            logger.error(f"POST - Erreur parsing: {e}")
+    try:
+        data = await request.json()
+        contact_name = data.get("contact_name", "Contact")
+        messages = data.get("messages", [])
+    except Exception as e:
+        logger.error(f"Erreur lecture JSON summary: {e}")
+        return {"success": False, "error": "Format JSON invalide"}
     
     if not messages:
-        return {
-            "success": False, 
-            "error": "Messages requis"
-        }
+        return {"success": False, "error": "Messages requis"}
     
     if not isinstance(messages, list):
         return {"success": False, "error": "messages doit être une liste"}
