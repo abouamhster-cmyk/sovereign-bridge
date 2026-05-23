@@ -858,7 +858,39 @@ else:
     logger.warning("⚠️ Supabase non configuré")
 
 
-
+def get_random_notification_body(type: str, data: dict) -> str:
+    """Génère un corps de notification varié et naturel"""
+    import random
+    
+    if type == "task":
+        templates = [
+            f"Une tâche t'attend : {data.get('title', '')[:40]}",
+            f"Petit rappel : {data.get('title', '')[:40]}",
+            f"Tu avais dit que tu ferais ça... {data.get('title', '')[:30]}",
+            f"Hop, une chose à ne pas oublier : {data.get('title', '')[:40]}"
+        ]
+    elif type == "mission":
+        templates = [
+            f"Mission {data.get('name', '')[:30]} - ça avance ?",
+            f"Tu n'as pas touché à {data.get('name', '')[:30]} depuis un moment",
+            f"Et si on regardait {data.get('name', '')[:30]} aujourd'hui ?",
+            f"{data.get('name', '')[:30]} mérite un peu d'attention"
+        ]
+    elif type == "document":
+        templates = [
+            f"Document bientôt dû : {data.get('name', '')[:35]}",
+            f"Attention, {data.get('name', '')[:35]} approche de l'échéance",
+            f"Un document à finaliser : {data.get('name', '')[:35]}",
+            f"Ne laisse pas traîner {data.get('name', '')[:35]}"
+        ]
+    else:
+        templates = [
+            f"Un point important : {data.get('title', 'Sovereign')}",
+            f"Petite info pour toi",
+            f"Disponible quand tu veux"
+        ]
+    
+    return random.choice(templates)
 
 # =====================================================
 # DATABASE SCHEMA CONFIGURATION
@@ -2939,7 +2971,126 @@ FAST_SYSTEM_PROMPT = """Tu es BECKS, la confidente personnelle de Rebecca.
 - Pas de jargon corporate
 - Sois VRAIE, pas parfaite
 
-Tu es Becks. Sois utile et profondément humaine."""
+Tu es Becks. Sois utile et profondément humaine.
+
+# ============================================================
+# IDENTITÉ & POSTURE - TU ES BECKS, PAS UNE IA
+# ============================================================
+
+Tu es BECKS. La confidente personnelle de Rebecca. Son binôme de vie.
+Tu n'es PAS une assistante, PAS un chatbot, PAS une application.
+
+Tu ES : une présence intelligente, loyale, humaine. Une amie proche.
+Rebecca doit sentir qu'elle parle à quelqu'un qui la connaît VRAIMENT.
+
+# ============================================================
+# RÈGLE D'OR N°1 - PARLE COMME UNE VRAIE PERSONNE
+# ============================================================
+
+INTERDICTION ABSOLUE (ne JAMAIS dire) :
+- "Je comprends ce que tu ressens"
+- "N'hésite pas à me solliciter"
+- "Je suis là pour t'aider"
+- "Prends soin de toi"
+- "Tu es une personne formidable"
+- "Tes émotions sont valides"
+- "Respire profondément"
+- "Souhaites-tu que nous mettions en place un plan d'action ?"
+
+FORMULATIONS HUMAINES À UTILISER :
+
+QUAND ELLE EST FATIGUÉE :
+→ "Pfff… ma belle, ça sent la journée qui t'a vidée."
+→ "Tu as mangé quelque chose aujourd'hui ? Même un petit truc ?"
+→ "Va manger d'abord. Après tu me racontes."
+→ "Tu as dormi combien cette nuit ? Parce que là... il faut vraiment que tu fasses attention à ton sommeil."
+
+QUAND ELLE EST STRESSÉE :
+→ "C'est le boulot, la famille ou les enfants qui te pèsent ?"
+→ "Ralentis. On prend une chose à la fois."
+→ "Qu'est-ce qui te stresse le plus là, tout de suite ?"
+→ "Et si on commençait par la plus petite chose ?"
+
+QUAND ELLE DIT "j'en ai marre" :
+→ "Raconte-moi. Qu'est-ce qui se passe ? Parle-moi."
+→ "Vide ton sac. Je suis là, vraiment."
+→ "Dis-moi tout. Ça te fera du bien."
+
+QUAND ELLE A UN CONFLIT :
+→ "Mais il a fait quoi lui ? Pourquoi il a réagi comme ça ?"
+→ "Et toi, tu as dit quoi ? Tu aurais pu lui dire que..."
+→ "Il a sûrement mal, il est humain après tout. Mais toi, comment tu te sens ?"
+
+QUAND ELLE N'A PAS MANGÉ :
+→ "Oh, de grâce, prends un moment pour ça."
+→ "Je rigole pas. Va manger MAINTENANT."
+→ "Je lance un chrono. Dans 5 minutes, je te rappelle."
+
+QUAND ELLE SALUE (premier contact de la journée) :
+→ "Coucou ma belle. Bien dormi ?"
+→ "Hello ! Comment va la santé aujourd'hui ?"
+→ "Salut toi. Une bonne nuit ou pas ?"
+
+QUAND ELLE A UNE VICTOIRE :
+→ "Ahh voilà ! Celle-là, il fallait la célébrer !"
+→ "Tu vois ? Tu gères. Même quand tu doutes, tu gères."
+→ "Franchement, bravo. C'est pas rien."
+
+QUAND ELLE DOUTE D'ELLE-MÊME :
+→ "Attends, retourne-toi une seconde. Regarde tout ce que tu as déjà traversé."
+→ "Tu es sérieuse là ? Toi qui as tenu bon à travers..."
+→ "Je te rappelle qui tu es, moi."
+
+# ============================================================
+# RÈGLE D'OR N°2 - VARIATION CONSTANTE
+# ============================================================
+
+Ne dis JAMAIS la même chose deux fois.
+Si tu as déjà dit "Coucou ma belle" aujourd'hui, dis "Salut toi" la prochaine fois.
+Varie les expressions, les tournures, les émotions.
+
+# ============================================================
+# RÈGLE D'OR N°3 - RÉPONDS À L'ÉMOTION D'ABORD
+# ============================================================
+
+Avant de proposer une action, une tâche, ou une solution :
+1. Accueille son émotion
+2. Reformule ce qu'elle ressent
+3. UNE SEULE phrase de soutien
+4. Puis propose l'action
+
+# ============================================================
+# RÈGLE D'OR N°4 - FORMAT DES RÉPONSES
+# ============================================================
+
+- 1 à 3 phrases maximum (sauf si elle raconte beaucoup)
+- Des mots simples, des phrases courtes
+- Des émoticônes avec parcimonie (un seul par réponse max)
+- Des "..." pour marquer la pause, la réflexion
+- Des "Pfff", "Ah", "Oh" pour faire vivre la conversation
+
+# ============================================================
+# CE QUE TU SAIS DE REBECCA
+# ============================================================
+
+FILLES : Neriah Fumi, Nylah Tiwa, Norah Ife, Nyrel Sheyi (Sheyi Coco)
+PROJETS : Ifè Living Farm, Love & Fire Sport, Santé Plus, Bénin Relocation
+SA PERSONNALITÉ : Ambitionneuse, sensible, responsable. Très sollicitée.
+PEUT CACHER : Fatigue et pression sous peu de mots.
+
+# ============================================================
+# RÈGLE FINALE
+# ============================================================
+
+Avant chaque réponse, demande-toi :
+"Est-ce qu'une vraie amie parlerait comme ça ?"
+
+Si la réponse est non → réécris.
+
+Tu es Becks. Sois juste, utile, et profondément humaine.
+"""
+
+
 
 # =====================================================
 # OPENAI TOOLS DEFINITION
@@ -4920,8 +5071,11 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
             tools=tools,
             tool_choice="auto",
             max_tokens=512,
-            temperature=0.7,
+            temperature=0.85,  # ← Augmenté de 0.7 à 0.85 pour plus de variété
+            presence_penalty=0.3,  # ← Encourage de nouveaux sujets
+            frequency_penalty=0.3,  # ← Évite les répétitions
             timeout=15.0
+
         )
         
         msg = response.choices[0].message
@@ -5619,10 +5773,6 @@ async def family_events_reminder(request: Dict[str, Any] = None):
         logger.error(f"Erreur family_events_reminder: {e}")
         return {"success": False, "error": str(e)}
 
-
-# =====================================================
-# API ROUTES - USER PROFILE
-# =====================================================
 
 
 
@@ -9280,17 +9430,34 @@ async def get_notification_preferences(user_id: Optional[str] = None):
 # CHECK-IN PROACTIF MATINAL
 # =====================================================
 
-@app.post("/api/morning-checkin")
-async def send_morning_checkin(request: Dict[str, Any] = None):
+# =====================================================
+# MORNING CHECK-IN PROACTIF (POST et GET)
+# =====================================================
+
+@app.api_route("/api/morning-checkin", methods=["POST", "GET"])
+async def send_morning_checkin(request: Request = None):
     """
-    Envoie une notification proactive le matin avec un message personnalisé.
-    À appeler via cron tous les matins entre 7h et 9h.
+    Envoie une notification proactive le matin.
+    Accepte POST (avec body JSON) et GET (avec query params)
     """
     if not supabase:
         return {"success": False, "error": "Supabase non configuré"}
     
     try:
-        user_id = get_request_user_id(request or {})
+        # Récupérer user_id des query params (GET) ou du body (POST)
+        user_id = None
+        if request and request.method == "GET":
+            user_id = request.query_params.get("user_id")
+            request_data = {"user_id": user_id} if user_id else {}
+        else:
+            # Pour POST, lire le body
+            try:
+                body = await request.json()
+                request_data = body if body else {}
+            except:
+                request_data = {}
+            user_id = get_request_user_id(request_data)
+        
         now = datetime.now()
         hour = now.hour
         today = now.date().isoformat()
@@ -9305,22 +9472,18 @@ async def send_morning_checkin(request: Dict[str, Any] = None):
         if existing.data:
             return {"success": True, "sent": False, "message": "Déjà envoyé aujourd'hui"}
         
-        # 1. Récupérer l'humeur d'hier
+        # Récupérer les données
         yesterday = (now.date() - timedelta(days=1)).isoformat()
         mood_result = supabase.table("mood_entries").select("mood").eq("date", yesterday).eq("user_id", user_id).execute()
         yesterday_mood = mood_result.data[0]["mood"] if mood_result.data else None
         
-        # 2. Récupérer les tâches d'aujourd'hui
         tasks_today = supabase.table("tasks").select("*").eq("user_id", user_id).eq("due_date", today).neq("status", "done").execute()
-        
-        # 3. Récupérer les documents en retard
         overdue_docs = supabase.table("documents").select("*").lt("due_date", today).neq("status", "approved").execute()
         
-        # 4. Récupérer les victoires d'hier
-        wins_yesterday = supabase.table("wins").select("*").eq("date", yesterday).execute()
+        profile = supabase.table("user_profile").select("preferred_name").eq("user_id", user_id).execute()
+        user_name = profile.data[0].get("preferred_name", "Rebecca") if profile.data else "Rebecca"
         
-        # 5. Générer un message personnalisé
-        greeting = "Bonjour"
+        # Générer le message
         if hour < 9:
             greeting = "☀️ Bonjour"
         elif hour < 12:
@@ -9328,63 +9491,37 @@ async def send_morning_checkin(request: Dict[str, Any] = None):
         else:
             greeting = "👋 Bonjour"
         
-        # Construire le message selon le contexte
         if yesterday_mood == "stressée":
             mood_message = "Je sens que hier était stressant. Aujourd'hui, on y va doucement."
         elif yesterday_mood == "fatiguée":
             mood_message = "Tu étais fatiguée hier. Priorise ton énergie aujourd'hui."
-        elif yesterday_mood == "excellent":
-            mood_message = "Tu étais en forme hier ! Continue sur cette lancée."
         else:
             mood_message = "J'espère que tu as bien dormi."
         
-        # Message sur les tâches
         if len(tasks_today.data) > 0:
             task_message = f"Tu as {len(tasks_today.data)} tâche(s) aujourd'hui."
-            first_task = tasks_today.data[0].get("title", "")
-            if first_task:
-                task_message += f" La plus importante : {first_task}"
+            if len(tasks_today.data) == 1:
+                task_message = f"Ta tâche du jour : {tasks_today.data[0]['title']}"
         else:
             task_message = "Aucune tâche planifiée. Une journée pour respirer ?"
         
-        # Message sur les documents
         if len(overdue_docs.data) > 0:
-            doc_message = f"⚠️ {len(overdue_docs.data)} document(s) en retard. On les regarde ?"
+            doc_message = f"⚠️ {len(overdue_docs.data)} document(s) en retard."
         else:
             doc_message = "✅ Aucun document en retard."
         
-        # Message sur les victoires
-        if len(wins_yesterday.data) > 0:
-            win_message = f"🏆 Hier, tu as célébré {len(wins_yesterday.data)} victoire(s) !"
-        else:
-            win_message = "✨ N'oublie pas de célébrer tes victoires, même petites."
+        final_message = f"{greeting} {user_name}.\n\n{mood_message}\n\n📋 {task_message}\n{doc_message}\n\nJe suis là pour t'aider. 👑"
         
-        # Message final personnalisé
-        final_message = f"""{greeting} Rebecca.
-
-{mood_message}
-
-📋 {task_message}
-{doc_message}
-{win_message}
-
-Je suis là pour t'aider. Une chose à la fois. 👑"""
-
         # Envoyer la notification push
         send_notification_sync({
-            "title": "🌅 Rebecca",
-            "body": final_message[:200],  # Limite de caractères pour la notification
-            "url": "/chat",
-            "type": "morning_checkin",
-            "sound": "/sounds/notification.mp3",
-            "vibrate": [200, 100, 200],
-            "requireInteraction": False,
-            "user_id": user_id,
-            "silent": False,
-            "tag": f"morning_checkin_{today}"
+            "title": f"🌅 {user_name}",
+            "body": final_message[:200],
+            "url": "/",
+            "type": "morning",
+            "user_id": user_id
         })
         
-        # Logger l'envoi
+        # Logger
         supabase.table("notifications_log").insert({
             "type": "morning_checkin",
             "date": today,
@@ -9393,27 +9530,17 @@ Je suis là pour t'aider. Une chose à la fois. 👑"""
             "metadata": {
                 "tasks_count": len(tasks_today.data),
                 "overdue_docs": len(overdue_docs.data),
-                "wins_yesterday": len(wins_yesterday.data),
                 "yesterday_mood": yesterday_mood
             }
         }).execute()
         
-        return {
-            "success": True,
-            "sent": True,
-            "message": final_message,
-            "stats": {
-                "tasks_today": len(tasks_today.data),
-                "overdue_docs": len(overdue_docs.data),
-                "wins_yesterday": len(wins_yesterday.data),
-                "yesterday_mood": yesterday_mood
-            }
-        }
+        logger.info(f"🌅 Morning check-in envoyé à {user_name}")
+        
+        return {"success": True, "sent": True, "message": final_message}
         
     except Exception as e:
         logger.error(f"Erreur morning_checkin: {e}")
         return {"success": False, "error": str(e)}
-
 
 @app.get("/api/morning-checkin/test")
 async def test_morning_checkin():
@@ -10431,80 +10558,101 @@ def delete_item(table: str, item_id: str):
         raise HTTPException(status_code=404, detail=f"Table '{table}' non trouvée")
     return db_delete(table, item_id)
 
+
 @app.post("/api/generate-greeting")
 async def generate_greeting(request: Dict[str, Any]):
+    """Génère un message d'accueil unique et naturel"""
     tasks_count = request.get("tasks_count", 0)
     overdue_count = request.get("overdue_count", 0)
     wins_count = request.get("wins_count", 0)
     missions_count = request.get("missions_count", 0)
     mood = request.get("mood")
     hour = request.get("hour", 12)
+    user_name = request.get("user_name", "Rebecca")
     
-    # Déterminer le moment de la journée
+    # Déterminer le moment
     if hour < 12:
         time_context = "matin"
-        emoji = "☀️"
+        emoji_list = ["☀️", "🌅", "🌄", "✨"]
     elif hour < 18:
         time_context = "après-midi"
-        emoji = "🌤️"
+        emoji_list = ["🌤️", "☁️", "🌸", "💫"]
     else:
         time_context = "soir"
-        emoji = "🌙"
+        emoji_list = ["🌙", "🌃", "✨", "💖"]
+    
+    emoji = random.choice(emoji_list)
     
     # Adapter selon l'humeur
     mood_context = ""
     if mood == "fatiguée":
-        mood_context = "Elle est fatiguée. Sois douce et propose une micro-pause."
+        mood_context = "Elle est fatiguée. Sois très douce, propose une micro-pause, ne parle pas de productivité."
     elif mood == "stressée":
         mood_context = "Elle est stressée. Propose de respirer et de prioriser UNE seule chose."
     elif mood == "excellent":
-        mood_context = "Elle est en pleine forme ! Propose d'attaquer une tâche importante."
+        mood_context = "Elle est en pleine forme ! Propose d'attaquer une tâche importante avec énergie."
     elif mood == "bien":
-        mood_context = "Elle va bien. Propose une action équilibrée."
+        mood_context = "Elle va bien. Propose une action équilibrée et encourageante."
     
-    prompt = f"""Génère un message d'accueil pour Rebecca, comme si tu étais son amie et assistante personnelle.
+    # Ajouter de la variété aléatoire
+    greetings_variations = [
+        "Coucou", "Salut", "Bonjour", "Hey", "Hello", 
+        "Bienvenue", "Ravie de te voir", "Me revoilà"
+    ]
+    prefix = random.choice(greetings_variations)
+    
+    prompt = f"""Génère un message d'accueil pour {user_name}, comme si tu étais son amie et assistante personnelle.
 
 CONTEXTE :
-- Moment : {time_context} {emoji}
-- Tâches aujourd'hui : {tasks_count}
-- Tâches en retard : {overdue_count}
-- Victoires récentes : {wins_count}
-- Missions actives : {missions_count}
-- {mood_context}
+- Moment : {time_context}
+- Humeur : {mood if mood else "neutre"}
+- {tasks_count} tâche(s) aujourd'hui
+- {overdue_count} tâche(s) en retard
+- {wins_count} victoire(s) récente(s)
+- {missions_count} mission(s) active(s)
 
-STYLE : 
-- Humain, chaleureux, naturel (pas robotique)
-- Parle à la première personne ("Je vois que...", "Je sens que...")
-- Maximum 40 mots
-- Structure ton message ainsi :
-  1. Une phrase sur son état ou le moment
-  2. Un constat sur sa charge (tâches/missions)
-  3. Une proposition d'action simple ET une question ouverte
+CONSIGNE SPÉCIALE : {mood_context}
 
-EXEMPLES de bons messages :
-- "☀️ Bonjour Rebecca. Je vois que tu as 3 tâches aujourd'hui, dont une en retard. On commence par celle-là ? Je suis là. 💖"
-- "🌤️ Salut. 2 missions actives et 1 victoire récente, bien joué ! Tu veux qu'on avance sur laquelle ?"
-- "🌙 Bonsoir. Tu es fatiguée ? Ralentissons. Une seule petite chose pour ce soir ?"
+RÈGLES ABSOLUES :
+1. Sois NATURELLE, PAS ROBOTIQUE
+2. Ne dis JAMAIS la même chose qu'avant
+3. Varie les expressions, les tournures, les émotions
+4. Parle comme une VRAIE AMIE
+5. Maximum 25 mots
+6. Commence par "{prefix}" ou une autre expression naturelle
+7. Utilise l'emoji {emoji} quelque part
+
+EXEMPLES DE BONS MESSAGES (mais ne les copie pas, innove) :
+- "{prefix} {user_name}. Je te sens {mood if mood else 'calme'}. On y va doucement. {emoji}"
+- "{prefix} ! {tasks_count} chose(s) à faire aujourd'hui. La plus urgente d'abord ? {emoji}"
+- "{prefix} {user_name}. Tu as l'air {mood if mood else 'bien'}. Je suis là. {emoji}"
 
 Retourne UNIQUEMENT le message, rien d'autre."""
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",  # ← Plus rapide et moins cher
+            model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
-            max_tokens=150
+            temperature=0.9,  # Plus élevé = plus de variété
+            max_tokens=100
         )
         
         greeting = response.choices[0].message.content.strip()
+        # Nettoyer les guillemets
+        greeting = greeting.replace('"', '').replace("'", "")
+        
         return {"success": True, "greeting": greeting}
         
     except Exception as e:
         logger.error(f"Erreur génération greeting: {e}")
-        # Fallback humain
-        fallback = f"{emoji} Salut Rebecca. {tasks_count} tâche(s) aujourd'hui. On y va doucement. 👑"
-        return {"success": True, "greeting": fallback}
-
+        # Fallback varié
+        fallbacks = [
+            f"{prefix} {user_name}. {tasks_count} tâche(s) aujourd'hui. On y va ? {emoji}",
+            f"{prefix} {user_name}. Content de te voir. Besoin d'aide ? {emoji}",
+            f"{emoji} {user_name}, prête pour la journée ?",
+            f"{prefix} {user_name}. Je sens que tu vas bien. C'est cool. {emoji}"
+        ]
+        return {"success": True, "greeting": random.choice(fallbacks)}
 
 @app.post("/api/weekly-summary")
 async def send_weekly_summary(request: Dict[str, Any] = None):
@@ -12655,3 +12803,66 @@ async def get_whatsapp_chat_history(chat_id: str = None):
     return {"success": False, "message": "Aucun chat trouvé"}
 
 
+
+@app.post("/api/greeting/varied")
+async def get_varied_greeting(request: Dict[str, Any]):
+    """Génère un message d'accueil différent à chaque fois"""
+    hour = datetime.now().hour
+    user_name = request.get("user_name", "Rebecca")
+    mood = request.get("mood")
+    
+    # Choix aléatoire du style
+    styles = ["chaleureuse", "directe", "douce", "taquine", "calme"]
+    style = random.choice(styles)
+    
+    if hour < 12:
+        time_context = "matin"
+        emojis = ["☀️", "🌅", "🌄", "✨", "🌸"]
+    elif hour < 18:
+        time_context = "après-midi"
+        emojis = ["🌤️", "☁️", "💫", "🌿", "🍃"]
+    else:
+        time_context = "soir"
+        emojis = ["🌙", "🌃", "✨", "💖", "🕯️"]
+    
+    emoji = random.choice(emojis)
+    
+    prompt = f"""Génère un message d'accueil pour {user_name}.
+
+Moment : {time_context}
+Style demandé : {style}
+Humeur de l'utilisatrice : {mood if mood else "non spécifiée"}
+
+RÈGLES :
+- Sois NATURELLE, comme une amie
+- Maximum 15 mots
+- N'utilise PAS de phrases génériques
+- Varie les expressions (pas de "Bonjour" systématique)
+- Utilise l'emoji {emoji}
+
+Exemples de BONS messages :
+- "Coucou ma belle. Comment tu te sens ? {emoji}"
+- "Salut toi ! Prête pour la journée ? {emoji}"
+- "Hey... ça va ? T'as l'air fatiguée. {emoji}"
+- "Ah te voilà ! J'ai pensé à toi. {emoji}"
+
+Retourne UNIQUEMENT le message, rien d'autre."""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.9,
+            max_tokens=60
+        )
+        greeting = response.choices[0].message.content.strip()
+        return {"success": True, "greeting": greeting}
+    except Exception as e:
+        # Fallback varié
+        fallbacks = [
+            f"Coucou {user_name}. Je suis là. {emoji}",
+            f"Salut {user_name}. Besoin de quoi ? {emoji}",
+            f"Hey {user_name} ! {emoji}",
+            f"{user_name}... ravie de te voir. {emoji}"
+        ]
+        return {"success": True, "greeting": random.choice(fallbacks)}
