@@ -12781,179 +12781,6 @@ def get_priority_recommendation(level: str) -> str:
 
 
 # =====================================================
-# WHATSAPP - SUGGESTIONS DE RÉPONSES INTELLIGENTES
-# =====================================================
-
-@app.api_route("/api/whatsapp/suggest-reply", methods=["POST", "GET"])
-async def suggest_whatsapp_reply(request: Request):
-    """Analyse un message WhatsApp et propose des réponses adaptées"""
-    
-    # Récupérer les paramètres selon la méthode
-    message = ""
-    contact_name = ""
-    
-    if request.method == "GET":
-        message = request.query_params.get("message", "")
-        contact_name = request.query_params.get("contact_name", "")
-    else:
-        try:
-            # Lire le body correctement
-            body_text = await request.body()
-            if body_text:
-                import json
-                body = json.loads(body_text.decode('utf-8'))
-                message = body.get("message", "")
-                contact_name = body.get("contact_name", "")
-        except Exception as e:
-            logger.error(f"Erreur lecture body: {e}")
-            message = ""
-            contact_name = ""
-    
-    if not message:
-        return {
-            "success": False, 
-            "error": "Message requis. En GET: ?message=...&contact_name=... ou en POST: {\"message\":\"...\",\"contact_name\":\"...\"}"
-        }
-        
-    prompt = f"""Analyse ce message WhatsApp de {contact_name} et propose 3 réponses adaptées.
-
-Message : "{message}"
-
-Retourne UNIQUEMENT du JSON (pas de texte avant ou après) :
-{{
-  "analysis": "analyse courte (10 mots max)",
-  "suggestions": [
-    {{"text": "réponse 1 courte", "style": "professionnel/doux/direct", "emoji": "🙏"}},
-    {{"text": "réponse 2 courte", "style": "professionnel/doux/direct", "emoji": "✅"}},
-    {{"text": "réponse 3 courte", "style": "professionnel/doux/direct", "emoji": "💪"}}
-  ],
-  "quick_actions": ["✅ OK", "📅 Plus tard", "🔜 Je reviens", "❌ Non merci"]
-}}"""
-
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
-            max_tokens=400
-        )
-        
-        result = response.choices[0].message.content
-        result = result.replace("```json", "").replace("```", "").strip()
-        suggestions = json.loads(result)
-        
-        return {"success": True, **suggestions}
-        
-    except Exception as e:
-        logger.error(f"Erreur suggestion réponse: {e}")
-        # Fallback
-        return {
-            "success": True,
-            "analysis": f"Message de {contact_name} à traiter",
-            "suggestions": [
-                {"text": "OK, je m'en occupe", "style": "doux", "emoji": "✅"},
-                {"text": "Je te redis ça demain", "style": "doux", "emoji": "📅"},
-                {"text": "Merci pour ton message", "style": "professionnel", "emoji": "🙏"}
-            ],
-            "quick_actions": ["✅ OK", "📅 Plus tard", "🔜 Je reviens"]
-        }
-
-
-# =====================================================
-# WHATSAPP - RÉSUMÉ IA DES CONVERSATIONS
-# =====================================================
-
-@app.api_route("/api/whatsapp/summary", methods=["POST", "GET"])
-async def get_whatsapp_conversation_summary(request: Request):
-    """Génère un résumé IA d'une conversation WhatsApp"""
-    
-    contact_name = "Contact"
-    messages = []
-    
-    if request.method == "GET":
-        contact_name = request.query_params.get("contact_name", "Contact")
-        messages_str = request.query_params.get("messages", "[]")
-        try:
-            import json
-            messages = json.loads(messages_str)
-        except:
-            messages = []
-    else:
-        try:
-            body_text = await request.body()
-            if body_text:
-                import json
-                body = json.loads(body_text.decode('utf-8'))
-                contact_name = body.get("contact_name", "Contact")
-                messages = body.get("messages", [])
-        except Exception as e:
-            logger.error(f"Erreur lecture body summary: {e}")
-            messages = []
-    
-    if not messages:
-        return {
-            "success": False, 
-            "error": "Messages requis. Format: {\"contact_name\":\"...\",\"messages\":[{\"role\":\"user\",\"content\":\"...\"}]}"
-        }
-    
-    # Vérifier que messages est une liste
-    if not isinstance(messages, list):
-        return {"success": False, "error": "messages doit être une liste"}
-    
-    # Formater les messages
-    conversation_lines = []
-    for m in messages:
-        if isinstance(m, dict):
-            role = m.get("role", "user")
-            content = m.get("content", "")
-            if content:
-                conversation_lines.append(f"{role}: {content}")
-    
-    if not conversation_lines:
-        return {"success": False, "error": "Aucun message valide trouvé"}
-    
-    conversation_text = "\n".join(conversation_lines[-20:])
-        
-    prompt = f"""Résume cette conversation WhatsApp avec {contact_name}.
-
-Conversation :
-{conversation_text}
-
-Retourne UNIQUEMENT du JSON (pas de texte avant ou après) :
-{{
-  "summary": "résumé court de la conversation (2-3 phrases)",
-  "key_points": ["point important 1", "point important 2"],
-  "action_items": ["action à prendre 1", "action à prendre 2"],
-  "sentiment": "positif/neutre/négatif/urgent",
-  "next_step": "prochaine action recommandée"
-}}"""
-
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.5,
-            max_tokens=400
-        )
-        
-        result = response.choices[0].message.content
-        result = result.replace("```json", "").replace("```", "").strip()
-        summary = json.loads(result)
-        
-        return {"success": True, **summary}
-        
-    except Exception as e:
-        logger.error(f"Erreur résumé conversation: {e}")
-        return {
-            "success": True,
-            "summary": f"Conversation avec {contact_name} - à relire",
-            "key_points": [],
-            "action_items": ["Relire la conversation", "Répondre si nécessaire"],
-            "sentiment": "neutre",
-            "next_step": "Lire attentivement et répondre"
-        }
-        
-# =====================================================
 # WHATSAPP - RÉPONSE AUTOMATIQUE AUX MESSAGES SIMPLES
 # =====================================================
 
@@ -13208,3 +13035,91 @@ async def process_scheduled_messages():
         })
     
     return {"success": True, "processed": len(results), "results": results}
+
+
+# =====================================================
+# WHATSAPP - SUGGESTIONS (VERSION SIMPLIFIÉE POUR TEST)
+# =====================================================
+
+@app.api_route("/api/whatsapp/suggest-reply", methods=["POST", "GET"])
+async def suggest_whatsapp_reply(request: Request):
+    """Version simplifiée pour test"""
+    
+    message = ""
+    contact_name = ""
+    
+    if request.method == "GET":
+        message = request.query_params.get("message", "")
+        contact_name = request.query_params.get("contact_name", "")
+        logger.info(f"GET - message: {message}, contact: {contact_name}")
+    else:
+        try:
+            # Lire le body brute
+            body = await request.body()
+            logger.info(f"POST - Body reçu: {body}")
+            
+            if body:
+                import json
+                data = json.loads(body.decode('utf-8'))
+                message = data.get("message", "")
+                contact_name = data.get("contact_name", "")
+                logger.info(f"POST - Parsed: message={message}, contact={contact_name}")
+        except Exception as e:
+            logger.error(f"Erreur parsing: {e}")
+    
+    # Réponse directe pour test
+    return {
+        "success": True,
+        "analysis": f"Message de {contact_name}: '{message}'",
+        "suggestions": [
+            {"text": "OK, je m'en occupe", "style": "doux", "emoji": "✅"},
+            {"text": "Je te redis ça demain", "style": "doux", "emoji": "📅"},
+            {"text": "Merci pour ton message", "style": "professionnel", "emoji": "🙏"}
+        ],
+        "quick_actions": ["✅ OK", "📅 Plus tard", "🔜 Je reviens"]
+    }
+
+
+# =====================================================
+# WHATSAPP - RÉSUMÉ (VERSION SIMPLIFIÉE POUR TEST)
+# =====================================================
+
+@app.api_route("/api/whatsapp/summary", methods=["POST", "GET"])
+async def get_whatsapp_conversation_summary(request: Request):
+    """Version simplifiée pour test"""
+    
+    contact_name = "Contact"
+    messages = []
+    
+    if request.method == "GET":
+        contact_name = request.query_params.get("contact_name", "Contact")
+        messages_str = request.query_params.get("messages", "[]")
+        logger.info(f"GET - messages_str: {messages_str}")
+        try:
+            import json
+            messages = json.loads(messages_str)
+        except Exception as e:
+            logger.error(f"GET - Erreur JSON: {e}")
+    else:
+        try:
+            body = await request.body()
+            logger.info(f"POST - Body reçu: {body}")
+            
+            if body:
+                import json
+                data = json.loads(body.decode('utf-8'))
+                contact_name = data.get("contact_name", "Contact")
+                messages = data.get("messages", [])
+                logger.info(f"POST - Parsed: contact={contact_name}, messages={len(messages)}")
+        except Exception as e:
+            logger.error(f"POST - Erreur parsing: {e}")
+    
+    # Réponse directe pour test
+    return {
+        "success": True,
+        "summary": f"Résumé de la conversation avec {contact_name} - {len(messages)} message(s)",
+        "key_points": ["Premier point important", "Deuxième point important"],
+        "action_items": ["Répondre rapidement", "Planifier un suivi"],
+        "sentiment": "positif",
+        "next_step": "Prendre contact rapidement"
+    }
