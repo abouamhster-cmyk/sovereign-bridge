@@ -12785,10 +12785,17 @@ def get_priority_recommendation(level: str) -> str:
 # =====================================================
 
 @app.api_route("/api/whatsapp/suggest-reply", methods=["POST", "GET"])
-async def suggest_whatsapp_reply(request: Dict[str, Any]):
+async def suggest_whatsapp_reply(request: Request = None):
     """Analyse un message WhatsApp et propose des réponses adaptées"""
-    message = request.get("message", "")
-    contact_name = request.get("contact_name", "")
+    
+    # Gérer GET (query params) et POST (body JSON)
+    if request.method == "GET":
+        message = request.query_params.get("message", "")
+        contact_name = request.query_params.get("contact_name", "")
+    else:
+        body = await request.json()
+        message = body.get("message", "")
+        contact_name = body.get("contact_name", "")
     
     if not message:
         return {"success": False, "error": "Message requis"}
