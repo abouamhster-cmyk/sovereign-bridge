@@ -12826,54 +12826,48 @@ async def auto_reply_if_needed(message: str, contact_name: str, from_number: str
 # WHATSAPP - ENVOIS DIFFÉRÉS (VERSION CORRIGÉE)
 # =====================================================
 
+# =====================================================
+# WHATSAPP - ENVOIS DIFFÉRÉS
+# =====================================================
+
 @app.api_route("/api/whatsapp/schedule", methods=["POST", "GET"])
 async def schedule_whatsapp_message(request: Request):
     """Programme un message WhatsApp pour plus tard"""
     
-    # Récupérer les paramètres selon la méthode
+    recipient = ""
+    message = ""
+    scheduled_for = ""
+    
     if request.method == "GET":
         recipient = request.query_params.get("recipient", "")
         message = request.query_params.get("message", "")
         scheduled_for = request.query_params.get("scheduled_for", "")
-        user_id = request.query_params.get("user_id", None)
     else:
         try:
-            body = await request.json()
-            recipient = body.get("recipient", "")
-            message = body.get("message", "")
-            scheduled_for = body.get("scheduled_for", "")
-            user_id = body.get("user_id", None)
-        except:
-            recipient = ""
-            message = ""
-            scheduled_for = ""
-            user_id = None
+            body = await request.body()
+            if body:
+                import json
+                data = json.loads(body.decode('utf-8'))
+                recipient = data.get("recipient", "")
+                message = data.get("message", "")
+                scheduled_for = data.get("scheduled_for", "")
+        except Exception as e:
+            logger.error(f"Erreur parsing schedule: {e}")
     
     if not recipient or not message or not scheduled_for:
-        return {
-            "success": False, 
-            "error": "recipient, message et scheduled_for requis"
-        }
-    
-    # Gérer user_id
-    if not user_id:
-        user_id = get_request_user_id({})
+        return {"success": False, "error": "recipient, message et scheduled_for requis"}
     
     try:
         scheduled_date = datetime.fromisoformat(scheduled_for.replace('Z', '+00:00'))
         if scheduled_date < datetime.now():
-            return {
-                "success": False, 
-                "error": f"La date doit être dans le futur. Date actuelle: {datetime.now().isoformat()}"
-            }
+            return {"success": False, "error": "La date doit être dans le futur"}
         
-        # Sauvegarder dans la base
         result = supabase.table("whatsapp_scheduled_messages").insert({
             "recipient": recipient,
             "message": message,
             "scheduled_for": scheduled_for,
             "status": "pending",
-            "user_id": user_id,
+            "user_id": get_request_user_id({}),
             "created_at": datetime.now().isoformat()
         }).execute()
         
@@ -12884,13 +12878,10 @@ async def schedule_whatsapp_message(request: Request):
             "message": f"✅ Message programmé pour {scheduled_date.strftime('%d/%m/%Y à %H:%M')}"
         }
         
-    except ValueError as e:
-        logger.error(f"Erreur format date: {e}")
-        return {"success": False, "error": f"Format de date invalide. Utilisez YYYY-MM-DDTHH:MM:SS (ex: 2026-05-25T10:00:00)"}
     except Exception as e:
         logger.error(f"Erreur planification: {e}")
         return {"success": False, "error": str(e)}
-
+        
 # =====================================================
 # WHATSAPP - CATÉGORISATION DES CONTACTS (VÉRIFIÉ)
 # =====================================================
@@ -13000,10 +12991,13 @@ async def scan_unread_whatsapp(request: Dict[str, Any] = None):
 # =====================================================
 # WHATSAPP - TRAITEMENT DES MESSAGES PROGRAMMÉS
 # =====================================================
+# =====================================================
+# WHATSAPP - TRAITEMENT DES MESSAGES PROGRAMMÉS
+# =====================================================
 
 @app.post("/api/whatsapp/process-scheduled")
 async def process_scheduled_messages():
-    """Exécute les messages programmés (à appeler toutes les minutes)"""
+    """Exécute les messages programmés"""
     now = datetime.now().isoformat()
     
     pending = supabase.table("whatsapp_scheduled_messages")\
@@ -13041,9 +13035,13 @@ async def process_scheduled_messages():
 # WHATSAPP - SUGGESTIONS (VERSION SIMPLIFIÉE POUR TEST)
 # =====================================================
 
+# =====================================================
+# WHATSAPP - SUGGESTIONS DE RÉPONSES INTELLIGENTES
+# =====================================================
+
 @app.api_route("/api/whatsapp/suggest-reply", methods=["POST", "GET"])
 async def suggest_whatsapp_reply(request: Request):
-    """Version simplifiée pour test"""
+    """Analyse un message WhatsApp et propose des réponses adaptées"""
     
     message = ""
     contact_name = ""
@@ -13051,42 +13049,75 @@ async def suggest_whatsapp_reply(request: Request):
     if request.method == "GET":
         message = request.query_params.get("message", "")
         contact_name = request.query_params.get("contact_name", "")
-        logger.info(f"GET - message: {message}, contact: {contact_name}")
     else:
         try:
-            # Lire le body brute
             body = await request.body()
-            logger.info(f"POST - Body reçu: {body}")
-            
             if body:
                 import json
                 data = json.loads(body.decode('utf-8'))
                 message = data.get("message", "")
                 contact_name = data.get("contact_name", "")
-                logger.info(f"POST - Parsed: message={message}, contact={contact_name}")
         except Exception as e:
             logger.error(f"Erreur parsing: {e}")
     
-    # Réponse directe pour test
-    return {
-        "success": True,
-        "analysis": f"Message de {contact_name}: '{message}'",
-        "suggestions": [
-            {"text": "OK, je m'en occupe", "style": "doux", "emoji": "✅"},
-            {"text": "Je te redis ça demain", "style": "doux", "emoji": "📅"},
-            {"text": "Merci pour ton message", "style": "professionnel", "emoji": "🙏"}
-        ],
-        "quick_actions": ["✅ OK", "📅 Plus tard", "🔜 Je reviens"]
-    }
+    if not message:
+        return {
+            "success": False, 
+            "error": "Message requis"
+        }
+    
+    prompt = f"""Analyse ce message WhatsApp de {contact_name} et propose 3 réponses adaptées.
 
+Message : "{message}"
 
+Retourne UNIQUEMENT du JSON (pas de texte avant ou après) :
+{{
+  "analysis": "analyse courte (10 mots max)",
+  "suggestions": [
+    {{"text": "réponse 1 courte", "style": "professionnel/doux/direct", "emoji": "🙏"}},
+    {{"text": "réponse 2 courte", "style": "professionnel/doux/direct", "emoji": "✅"}},
+    {{"text": "réponse 3 courte", "style": "professionnel/doux/direct", "emoji": "💪"}}
+  ],
+  "quick_actions": ["✅ OK", "📅 Plus tard", "🔜 Je reviens", "❌ Non merci"]
+}}"""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=400
+        )
+        
+        result = response.choices[0].message.content
+        result = result.replace("```json", "").replace("```", "").strip()
+        suggestions = json.loads(result)
+        
+        return {"success": True, **suggestions}
+        
+    except Exception as e:
+        logger.error(f"Erreur OpenAI: {e}")
+        # Fallback
+        return {
+            "success": True,
+            "analysis": f"Message de {contact_name} à traiter",
+            "suggestions": [
+                {"text": "OK, je m'en occupe", "style": "doux", "emoji": "✅"},
+                {"text": "Je te redis ça demain", "style": "doux", "emoji": "📅"},
+                {"text": "Merci pour ton message", "style": "professionnel", "emoji": "🙏"}
+            ],
+            "quick_actions": ["✅ OK", "📅 Plus tard", "🔜 Je reviens"]
+        }
 # =====================================================
 # WHATSAPP - RÉSUMÉ (VERSION SIMPLIFIÉE POUR TEST)
+# =====================================================
+# =====================================================
+# WHATSAPP - RÉSUMÉ IA DES CONVERSATIONS
 # =====================================================
 
 @app.api_route("/api/whatsapp/summary", methods=["POST", "GET"])
 async def get_whatsapp_conversation_summary(request: Request):
-    """Version simplifiée pour test"""
+    """Génère un résumé IA d'une conversation WhatsApp"""
     
     contact_name = "Contact"
     messages = []
@@ -13094,7 +13125,6 @@ async def get_whatsapp_conversation_summary(request: Request):
     if request.method == "GET":
         contact_name = request.query_params.get("contact_name", "Contact")
         messages_str = request.query_params.get("messages", "[]")
-        logger.info(f"GET - messages_str: {messages_str}")
         try:
             import json
             messages = json.loads(messages_str)
@@ -13103,23 +13133,72 @@ async def get_whatsapp_conversation_summary(request: Request):
     else:
         try:
             body = await request.body()
-            logger.info(f"POST - Body reçu: {body}")
-            
             if body:
                 import json
                 data = json.loads(body.decode('utf-8'))
                 contact_name = data.get("contact_name", "Contact")
                 messages = data.get("messages", [])
-                logger.info(f"POST - Parsed: contact={contact_name}, messages={len(messages)}")
         except Exception as e:
             logger.error(f"POST - Erreur parsing: {e}")
     
-    # Réponse directe pour test
-    return {
-        "success": True,
-        "summary": f"Résumé de la conversation avec {contact_name} - {len(messages)} message(s)",
-        "key_points": ["Premier point important", "Deuxième point important"],
-        "action_items": ["Répondre rapidement", "Planifier un suivi"],
-        "sentiment": "positif",
-        "next_step": "Prendre contact rapidement"
-    }
+    if not messages:
+        return {
+            "success": False, 
+            "error": "Messages requis"
+        }
+    
+    if not isinstance(messages, list):
+        return {"success": False, "error": "messages doit être une liste"}
+    
+    # Formater les messages
+    conversation_lines = []
+    for m in messages:
+        if isinstance(m, dict):
+            role = m.get("role", "user")
+            content = m.get("content", "")
+            if content:
+                conversation_lines.append(f"{role}: {content}")
+    
+    if not conversation_lines:
+        return {"success": False, "error": "Aucun message valide"}
+    
+    conversation_text = "\n".join(conversation_lines[-20:])
+    
+    prompt = f"""Résume cette conversation WhatsApp avec {contact_name}.
+
+Conversation :
+{conversation_text}
+
+Retourne UNIQUEMENT du JSON (pas de texte avant ou après) :
+{{
+  "summary": "résumé court de la conversation (2-3 phrases)",
+  "key_points": ["point important 1", "point important 2"],
+  "action_items": ["action à prendre 1", "action à prendre 2"],
+  "sentiment": "positif/neutre/négatif/urgent",
+  "next_step": "prochaine action recommandée"
+}}"""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.5,
+            max_tokens=400
+        )
+        
+        result = response.choices[0].message.content
+        result = result.replace("```json", "").replace("```", "").strip()
+        summary = json.loads(result)
+        
+        return {"success": True, **summary}
+        
+    except Exception as e:
+        logger.error(f"Erreur OpenAI: {e}")
+        return {
+            "success": True,
+            "summary": f"Conversation avec {contact_name} - {len(messages)} message(s)",
+            "key_points": ["À relire attentivement"],
+            "action_items": ["Répondre dans les plus brefs délais"],
+            "sentiment": "neutre",
+            "next_step": "Lire et répondre"
+        }
