@@ -14214,3 +14214,23 @@ On commence par l'étape 1."""},
     except Exception as e:
         logger.error(f"Erreur génération plan: {e}")
         return None
+
+
+@app.get("/api/test/gmail-debug")
+async def test_gmail_debug():
+    """Test Gmail avec affichage de l'erreur détaillée"""
+    import os
+    
+    # Afficher les variables (sans le mot de passe complet)
+    email = os.environ.get("GMAIL_EMAIL", "NON CONFIGURÉ")
+    password_set = "OUI" if os.environ.get("GMAIL_APP_PASSWORD") else "NON"
+    
+    result = await get_gmail_messages_imap(5)
+    
+    return {
+        "config": {
+            "GMAIL_EMAIL": email,
+            "GMAIL_APP_PASSWORD_CONFIGURED": password_set,
+        },
+        "result": result
+    }
