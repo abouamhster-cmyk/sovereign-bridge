@@ -14359,3 +14359,46 @@ async def test_gmail_debug():
         },
         "result": result
     }
+
+@app.post("/api/execute/update-progress")
+async def update_execution_progress(request: Dict[str, Any]):
+    """Sauvegarde la progression d'un plan d'exécution"""
+    plan_id = request.get("plan_id")
+    completed_steps = request.get("completed_steps", [])
+    user_id = get_request_user_id(request)
+    
+    if not plan_id:
+        return {"success": False, "error": "plan_id requis"}
+    
+    try:
+        # Sauvegarder dans Supabase
+        result = supabase.table("execution_plans_progress").upsert({
+            "plan_id": plan_id,
+            "completed_steps": completed_steps,
+            "user_id": user_id,
+            "updated_at": datetime.now().isoformat()
+        }).execute()
+        
+        return {"success": True, "completed_steps": completed_steps}
+    except Exception as e:
+        logger.error(f"Erreur sauvegarde progression: {e}")
+        return {"success": False, "error": str(e)}
+
+@app.get("/api/execute/get-progress/{plan_id}")
+async def get_execution_progress(plan_id: str, user_id: Optional[str] = None):
+    """Récupère la progression d'un plan d'exécution"""
+    user_id = require_user_id(user_id)
+    
+    try:
+        result = supabase.table("execution_plans_progress")\
+            .select("completed_steps")\
+            .eq("plan_id", plan_id)\
+            .eq("user_id", user_id)\
+            .execute()
+        
+        if result.data:
+            return {"success": True, "completed_steps": result.data[0].get("completed_steps", [])}
+        return {"success": True, "completed_steps": []}
+    except Exception as e:
+        logger.error(f"Erreur récupération progression: {e}")
+        return {"success": False, "error": str(e)}
