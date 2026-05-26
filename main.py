@@ -12682,6 +12682,9 @@ async def chat_stream_endpoint(request: ChatRequest):
     return StreamingResponse(generate_stream(), media_type="text/event-stream")
 
 
+
+
+
 @app.post("/chat/stream-simple")
 async def chat_stream_simple(request: ChatRequest):
     """Version complète du chat avec streaming ET outils"""
@@ -12691,72 +12694,182 @@ async def chat_stream_simple(request: ChatRequest):
     last_message_lower = last_message.lower()
     
     # =====================================================
-    # INTERCEPTION DES EMAILS
+    # INTERCEPTION POUR OUVRIR UN EMAIL SPÉCIFIQUE
+    # =====================================================
+    import re
+    email_open_pattern = r'ouvre\s+(?:le |l\'|le )?email\s+(\d+)'
+    match = re.search(email_open_pattern, last_message_lower, re.IGNORECASE)
+    
+    if match:
+        email_num = int(match.group(1))
+        logger.info(f"📧 Demande d'ouverture de l'email #{email_num}")
+        
+        stored_emails = None
+        if user_id in pending_emails and "last_emails" in pending_emails[user_id]:
+            stored_emails = pending_emails[user_id]["last_emails"]
+        
+        if stored_emails and 1 <= email_num <= len(stored_emails):
+            email = stored_emails[email_num - 1]
+            from_clean = email.get('from', 'Inconnu').split('<')[0].strip()
+            subject = email.get('subject', 'Sans sujet')
+            snippet = email.get('snippet', '[Contenu non disponible]')
+            
+            reply = f"📧 **Email #{email_num}**\n\n"
+            reply += f"**De :** {from_clean}\n"
+            reply += f"**Email :** {email.get('from', 'Inconnu')}\n"
+            reply += f"**Objet :** {subject}\n"
+            reply += f"**Date :** {email.get('date', 'Date inconnue')}\n\n"
+            reply += f"**Contenu :**\n{snippet}\n\n"
+            reply += "---\n💡 Dis-moi :\n"
+            reply += "• 'réponds à cet email' pour répondre\n"
+            reply += "• 'marque comme lu' pour l'archiver"
+            
+            # Stocker l'email ouvert pour la réponse
+            if user_id not in pending_emails:
+                pending_emails[user_id] = {}
+            pending_emails[user_id]["last_opened_email"] = email
+            
+            async def gen_email_content():
+                yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
+            return StreamingResponse(gen_email_content(), media_type="text/event-stream")
+        else:
+            reply = f"❌ Email #{email_num} non trouvé. Utilise d'abord 'montre-moi mes emails' pour charger la liste."
+            async def gen_not_found():
+                yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
+            return StreamingResponse(gen_not_found(), media_type="text/event-stream")
+    
+    # =====================================================
+    # INTERCEPTION POUR RÉPONDRE À UN EMAIL
+    # =====================================================
+    if "réponds à cet email" in last_message_lower or "reponds a cet email" in last_message_lower:
+        logger.info(f"📧 Demande de réponse à l'email")
+        
+        if user_id in pending_emails and "last_opened_email" in pending_emails[user_id]:
+            last_email = pending_emails[user_id]["last_opened_email"]
+            reply = f"✏️ **Répondre à {last_email.get('from', 'Inconnu')}**\n\n"
+            reply += "Quel message veux-tu envoyer ?\n\n"
+            reply += "📝 Tape ta réponse, je l'enverrai pour toi."
+            
+            async def gen_reply_prompt():
+                yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
+            return StreamingResponse(gen_reply_prompt(), media_type="text/event-stream")
+        else:
+            reply = "❌ Aucun email sélectionné. Utilise d'abord 'ouvre l'email [numéro]'."
+            async def gen_no_email():
+                yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
+            return StreamingResponse(gen_no_email(), media_type="text/event-stream")
+    
+    # =====================================================
+    # INTERCEPTION DES EMAILS (LISTE)
     # =====================================================
     email_triggers = [
         "montre-moi mes emails", "affiche mes emails", "liste mes emails",
         "quels emails", "mes emails non lus", "voir mes emails",
-        "email non lus", "montre les emails", "affiche les emails"
+        "email non lus", "montre les emails", "affiche les emails",
+        "mes emails", "affiche emails", "liste emails"
     ]
     
     if any(trigger in last_message_lower for trigger in email_triggers):
-        logger.info(f"📧 Interception email dans stream-simple")
-        result = await get_gmail_messages_imap(20)
-        if result.get("success") and result.get("messages"):
-            emails = result["messages"]
-            email_list = []
-            for i, e in enumerate(emails[:20], 1):
-                from_clean = e.get('from', 'Inconnu').split('<')[0].strip()
-                subject_clean = e.get('subject', 'Sans sujet')[:80]
-                email_list.append(f"{i}. **{from_clean}**\n   📧 {subject_clean}")
-            reply = f"📧 **{len(emails)} email(s) non lu(s) :**\n\n" + "\n".join(email_list)
-            if len(emails) > 20:
-                reply += f"\n\n... et {len(emails) - 20} autre(s)"
-            reply += "\n\n💡 Dis-moi 'ouvre l'email [numéro]' pour voir le contenu"
-            async def gen_email():
+        logger.info(f"📧 Interception email dans stream-simple - message: {last_message[:50]}")
+        
+        try:
+            result = await get_gmail_messages_imap(20)
+            
+            if result.get("success") and result.get("messages"):
+                emails = result["messages"]
+                
+                if len(emails) == 0:
+                    reply = "📭 Aucun email non lu dans ta boîte."
+                else:
+                    email_list = []
+                    for i, e in enumerate(emails[:20], 1):
+                        from_clean = e.get('from', 'Inconnu').split('<')[0].strip()
+                        subject_clean = e.get('subject', 'Sans sujet')[:80]
+                        email_list.append(f"{i}. **{from_clean}**\n   📧 {subject_clean}")
+                    
+                    reply = f"📧 **{len(emails)} email(s) non lu(s) :**\n\n"
+                    reply += "\n".join(email_list)
+                    if len(emails) > 20:
+                        reply += f"\n\n... et {len(emails) - 20} autre(s)"
+                    reply += "\n\n💡 Dis-moi 'ouvre l'email [numéro]' pour voir le contenu"
+                    
+                    # Stocker pour ouverture ultérieure
+                    if user_id not in pending_emails:
+                        pending_emails[user_id] = {}
+                    pending_emails[user_id]["last_emails"] = emails
+                
+                async def gen_email():
+                    yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
+                return StreamingResponse(gen_email(), media_type="text/event-stream")
+            else:
+                error_msg = result.get('error', 'Erreur inconnue')
+                reply = f"❌ Impossible de récupérer les emails: {error_msg}"
+                async def gen_error():
+                    yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
+                return StreamingResponse(gen_error(), media_type="text/event-stream")
+                
+        except Exception as e:
+            logger.error(f"Exception interception email: {e}")
+            reply = f"❌ Erreur technique: {str(e)}"
+            async def gen_exception():
                 yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
-            return StreamingResponse(gen_email(), media_type="text/event-stream")
-        else:
-            reply = "📭 Aucun email non lu dans ta boîte."
-            async def gen_empty():
-                yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
-            return StreamingResponse(gen_empty(), media_type="text/event-stream")
+            return StreamingResponse(gen_exception(), media_type="text/event-stream")
     
     # =====================================================
     # INTERCEPTION WHATSAPP
     # =====================================================
     whatsapp_triggers = [
         "montre-moi mes whatsapp", "affiche mes whatsapp", "liste mes whatsapp",
-        "whatsapp non lus", "voir whatsapp"
+        "mes messages whatsapp", "whatsapp non lus", "voir whatsapp",
+        "affiche whatsapp", "mes whatsapp"
     ]
     
     if any(trigger in last_message_lower for trigger in whatsapp_triggers):
-        logger.info(f"📱 Interception WhatsApp dans stream-simple")
-        result = db_query("whatsapp_messages", {"replied": False}, 50)
-        if result.get("success") and result.get("data"):
-            messages_list = result["data"]
-            formatted = f"📱 **{len(messages_list)} message(s) WhatsApp non répondus :**\n\n"
-            for i, msg in enumerate(messages_list[:15], 1):
-                from_name = msg.get("from_name", "Contact inconnu")
-                message_text = msg.get("message", "")[:80]
-                importance = msg.get("importance", "normal")
-                urgent_flag = "⚠️ " if importance == "high" else ""
-                formatted += f"{i}. {urgent_flag}**{from_name}**\n   💬 {message_text}\n\n"
-            if len(messages_list) > 15:
-                formatted += f"... et {len(messages_list) - 15} autre(s) message(s)\n\n"
-            formatted += "💡 Dis-moi 'répondre à [nom]' pour envoyer une réponse."
-            async def gen_wa():
-                yield f"data: {json.dumps({'content': formatted, 'done': True})}\n\n"
-            return StreamingResponse(gen_wa(), media_type="text/event-stream")
-        else:
-            reply = "📭 Aucun message WhatsApp non lu."
-            async def gen_wa_empty():
+        logger.info(f"📱 Interception WhatsApp dans stream-simple - message: {last_message[:50]}")
+        
+        try:
+            result = db_query("whatsapp_messages", {"replied": False}, 50)
+            
+            if result.get("success") and result.get("data"):
+                messages_list = result["data"]
+                
+                if len(messages_list) == 0:
+                    reply = "📭 Aucun message WhatsApp non lu."
+                else:
+                    formatted = f"📱 **{len(messages_list)} message(s) WhatsApp non répondus :**\n\n"
+                    for i, msg in enumerate(messages_list[:15], 1):
+                        from_name = msg.get("from_name", "Contact inconnu")
+                        message_text = msg.get("message", "")[:80]
+                        importance = msg.get("importance", "normal")
+                        urgent_flag = "⚠️ " if importance == "high" else ""
+                        formatted += f"{i}. {urgent_flag}**{from_name}**\n   💬 {message_text}\n\n"
+                    
+                    if len(messages_list) > 15:
+                        formatted += f"... et {len(messages_list) - 15} autre(s) message(s)\n\n"
+                    
+                    formatted += "💡 Dis-moi 'répondre à [nom]' pour envoyer une réponse."
+                    reply = formatted
+                
+                async def gen_whatsapp():
+                    yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
+                return StreamingResponse(gen_whatsapp(), media_type="text/event-stream")
+            else:
+                reply = "📭 Aucun message WhatsApp non lu."
+                async def gen_wa_empty():
+                    yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
+                return StreamingResponse(gen_wa_empty(), media_type="text/event-stream")
+                
+        except Exception as e:
+            logger.error(f"Exception interception WhatsApp: {e}")
+            reply = f"❌ Erreur technique: {str(e)}"
+            async def gen_wa_error():
                 yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
-            return StreamingResponse(gen_wa_empty(), media_type="text/event-stream")
+            return StreamingResponse(gen_wa_error(), media_type="text/event-stream")
     
     # =====================================================
-    # CONSTRUCTION DES MESSAGES AVEC CONTEXTE
+    # PAS D'INTERCEPTION - APPEL NORMAL À L'IA AVEC OUTILS
     # =====================================================
+    
     messages_payload = []
     
     # Contexte utilisateur
@@ -12775,15 +12888,12 @@ async def chat_stream_simple(request: ChatRequest):
     for msg in request.messages[-10:]:
         messages_payload.append({"role": msg["role"], "content": msg["content"]})
     
-    # =====================================================
-    # APPEL À L'IA AVEC OUTILS
-    # =====================================================
     try:
         # Premier appel pour détecter les tool_calls
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=messages_payload,
-            tools=tools,  # ← LES OUTILS SONT INCLUS
+            tools=tools,
             tool_choice="auto",
             max_tokens=512,
             temperature=0.7
@@ -12799,7 +12909,6 @@ async def chat_stream_simple(request: ChatRequest):
                 args = json.loads(tool_call.function.arguments)
                 content = ""
                 
-                # Exécution des outils
                 if name == "read_table":
                     table = args.get("table")
                     filters = args.get("filters", {})
@@ -12856,7 +12965,7 @@ async def chat_stream_simple(request: ChatRequest):
                     "content": content
                 })
             
-            # Deuxième appel pour générer la réponse finale avec les résultats des outils
+            # Deuxième appel pour générer la réponse finale
             stream = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=messages_payload,
@@ -12902,104 +13011,6 @@ async def chat_stream_simple(request: ChatRequest):
         async def generate_error():
             yield f"data: {json.dumps({'error': str(e), 'done': True})}\n\n"
         return StreamingResponse(generate_error(), media_type="text/event-stream")
-    
-    # =====================================================
-    # INTERCEPTION WHATSAPP
-    # =====================================================
-    whatsapp_triggers = [
-        "montre-moi mes whatsapp", "affiche mes whatsapp", "liste mes whatsapp",
-        "mes messages whatsapp", "whatsapp non lus", "voir whatsapp",
-        "affiche whatsapp", "mes whatsapp"
-    ]
-    
-    if any(trigger in last_message_lower for trigger in whatsapp_triggers):
-        logger.info(f"📱 Interception WhatsApp dans stream-simple - message: {last_message[:50]}")
-        
-        try:
-            # Récupérer les messages WhatsApp non répondus
-            result = db_query("whatsapp_messages", {"replied": False}, 50)
-            
-            if result.get("success") and result.get("data"):
-                messages_list = result["data"]
-                
-                if len(messages_list) == 0:
-                    reply = "📭 Aucun message WhatsApp non lu."
-                else:
-                    formatted = f"📱 **{len(messages_list)} message(s) WhatsApp non répondus :**\n\n"
-                    for i, msg in enumerate(messages_list[:15], 1):
-                        from_name = msg.get("from_name", "Contact inconnu")
-                        message_text = msg.get("message", "")[:80]
-                        importance = msg.get("importance", "normal")
-                        urgent_flag = "⚠️ " if importance == "high" else ""
-                        formatted += f"{i}. {urgent_flag}**{from_name}**\n   💬 {message_text}\n\n"
-                    
-                    if len(messages_list) > 15:
-                        formatted += f"... et {len(messages_list) - 15} autre(s) message(s)\n\n"
-                    
-                    formatted += "💡 Dis-moi 'répondre à [nom]' pour envoyer une réponse."
-                    reply = formatted
-                
-                async def generate_whatsapp():
-                    yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
-                return StreamingResponse(generate_whatsapp(), media_type="text/event-stream")
-            else:
-                reply = "📭 Aucun message WhatsApp non lu."
-                async def generate_empty():
-                    yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
-                return StreamingResponse(generate_empty(), media_type="text/event-stream")
-                
-        except Exception as e:
-            logger.error(f"Exception interception WhatsApp: {e}")
-            reply = f"❌ Erreur technique: {str(e)}"
-            async def generate_whatsapp_error():
-                yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
-            return StreamingResponse(generate_whatsapp_error(), media_type="text/event-stream")
-    
-    # =====================================================
-    # PAS D'INTERCEPTION - APPEL NORMAL À L'IA
-    # =====================================================
-    
-    messages_payload = []
-    
-    # Contexte simplifié
-    memory_context = await get_quick_context(user_id, last_message)
-    profile_context = await get_profile_context(user_id=user_id)
-    
-    system_prompt = BASE_SYSTEM_PROMPT
-    if memory_context:
-        system_prompt += memory_context
-    if profile_context:
-        system_prompt += f"\n\n# PROFIL\n{profile_context}"
-    
-    messages_payload.append({"role": "system", "content": system_prompt})
-    
-    for msg in request.messages[-5:]:  # Derniers 5 messages seulement
-        messages_payload.append({"role": msg["role"], "content": msg["content"]})
-    
-    async def generate():
-        try:
-            stream = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=messages_payload,
-                max_tokens=512,
-                temperature=0.7,
-                stream=True
-            )
-            
-            full_response = ""
-            for chunk in stream:
-                if chunk.choices[0].delta.content:
-                    content = chunk.choices[0].delta.content
-                    full_response += content
-                    yield f"data: {json.dumps({'content': content, 'done': False})}\n\n"
-            
-            yield f"data: {json.dumps({'content': '', 'done': True, 'full_response': full_response})}\n\n"
-            
-        except Exception as e:
-            logger.error(f"Erreur streaming: {e}")
-            yield f"data: {json.dumps({'error': str(e), 'done': True})}\n\n"
-    
-    return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 @app.get("/api/gmail/direct-test")
