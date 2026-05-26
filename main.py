@@ -2468,12 +2468,17 @@ def db_query(table: str, filters: Dict = None, limit: int = 100) -> Dict:
         query = supabase.table(table).select("*").limit(limit)
         if filters:
             for key, value in filters.items():
-                query = query.eq(key, value)
+                # Gérer le cas spécial replied=False
+                if key == "replied":
+                    query = query.eq(key, value)
+                else:
+                    query = query.eq(key, value)
         result = query.execute()
         return {"success": True, "data": result.data, "count": len(result.data)}
     except Exception as e:
         logger.error(f"Erreur query {table}: {e}")
         return {"success": False, "data": [], "error": str(e)}
+        
 
 
 
@@ -4844,22 +4849,45 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
             args = json.loads(tool_call.function.arguments)
             content = ""
             
-            if name == "read_table":
+
+            elif name == "read_table":
                 table = args.get("table")
                 filters = args.get("filters", {})
                 
+                # CORRECTION POUR WHATSAPP
                 if table == "whatsapp_messages":
-                    if filters.get("status") == "unread":
+                    # Convertir status="unread" ou "pending" en replied=False
+                    if filters.get("status") in ["unread", "pending"]:
                         filters.pop("status", None)
                         filters["replied"] = False
-                    if filters.get("status") == "pending":
-                        filters.pop("status", None)
-                        filters["replied"] = False
+                    # Si aucun filtre, prendre replied=False par défaut
+                    if not filters:
+                        filters = {"replied": False}
                 
                 result = db_query(table, filters, args.get("limit", 50))
-                content = json.dumps(result, ensure_ascii=False)
+                
+                # Formater spécialement pour WhatsApp
+                if table == "whatsapp_messages" and result.get("data"):
+                    messages_list = result["data"]
+                    formatted = f"📱 **{len(messages_list)} message(s) WhatsApp non répondus :**\n\n"
+                    for i, msg in enumerate(messages_list[:10], 1):
+                        from_name = msg.get("from_name", "Contact inconnu")
+                        message_text = msg.get("message", "")[:80]
+                        importance = msg.get("importance", "normal")
+                        urgent_flag = "⚠️ " if importance == "high" else ""
+                        formatted += f"{i}. {urgent_flag}**{from_name}**\n   💬 {message_text}\n\n"
+                    
+                    if len(messages_list) > 10:
+                        formatted += f"... et {len(messages_list) - 10} autre(s) message(s)\n\n"
+                    
+                    formatted += "💡 Dis-moi 'répondre à [nom]' pour envoyer une réponse."
+                    content = formatted
+                    logger.info(f"📱 WhatsApp: {len(messages_list)} messages formatés")
+                else:
+                    content = json.dumps(result, ensure_ascii=False)
+                
                 logger.info(f"📖 Lecture {table}: {result.get('count', 0)} lignes")
-            
+    
             elif name == "send_email":
                 to = args.get("to", "")
                 subject = args.get("subject", "")
@@ -4913,7 +4941,7 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                         if not emails or len(emails) == 0:
                             content = "📭 Aucun email non lu dans ta boîte."
                         else:
-                            # FORMATAGE CLAIR POUR LE FRONTEND
+                            # FORMATAGE POUR LE FRONTEND
                             email_lines = []
                             for i, e in enumerate(emails[:15], 1):
                                 from_clean = e.get('from', 'Inconnu').split('<')[0].strip()
@@ -4925,50 +4953,18 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                             content += "\n".join(email_lines)
                             if len(emails) > 15:
                                 content += f"\n\n... et {len(emails) - 15} autre(s)"
+                            content += "\n\n💡 Dis-moi 'ouvre l'email [numéro]' pour voir le contenu complet."
                             
-                            # AJOUTER DES ACTIONS POUR CHAQUE EMAIL
-                            actions = []
-                            for i, e in enumerate(emails[:5], 1):
-                                actions.append({
-                                    "type": "open_email",
-                                    "params": {"email_number": i, "email_id": e.get('id')},
-                                    "label": f"📖 Lire email #{i}"
-                                })
-                            actions.append({
-                                "type": "mark_all_read",
-                                "params": {},
-                                "label": "✅ Tout marquer comme lu"
-                            })
-                            
-                            # Stocker dans content avec un marqueur spécial
-                            content = f"[EMAIL_LIST_START]\n{content}\n[EMAIL_LIST_END]"
-                            
-                            # Stocker les emails pour plus tard
+                            # Stocker les emails dans le cache
                             if user_id not in pending_emails:
                                 pending_emails[user_id] = {}
                             pending_emails[user_id]["last_emails"] = emails
                             
-                            # Ajouter les actions à la réponse
-                            # On va les passer via le content avec un format spécial
-                            content = json.dumps({
-                                "type": "email_list",
-                                "text": content,
-                                "emails": [
-                                    {
-                                        "number": i+1,
-                                        "from": e.get('from', 'Inconnu'),
-                                        "subject": e.get('subject', 'Sans sujet'),
-                                        "snippet": e.get('snippet', '')[:200],
-                                        "id": e.get('id')
-                                    }
-                                    for i, e in enumerate(emails[:10])
-                                ]
-                            })
                             logger.info(f"✅ {len(emails)} emails formatés avec succès")
                 except Exception as e:
                     logger.error(f"❌ Exception dans get_emails: {e}")
                     content = f"❌ Erreur technique: {str(e)}"
-            
+        
             elif name == "get_email_content":
                 email_number = args.get("email_number", 1)
                 
