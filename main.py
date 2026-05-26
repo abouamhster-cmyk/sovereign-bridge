@@ -4964,7 +4964,44 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                 except Exception as e:
                     logger.error(f"❌ Exception dans get_emails: {e}")
                     content = f"❌ Erreur technique: {str(e)}"
-        
+
+            elif name == "read_table":
+                table = args.get("table")
+                filters = args.get("filters", {})
+                
+                # CORRECTION POUR WHATSAPP
+                if table == "whatsapp_messages":
+                    # Convertir status="unread" ou "pending" en replied=False
+                    if filters.get("status") in ["unread", "pending"]:
+                        filters.pop("status", None)
+                        filters["replied"] = False
+                    # Si aucun filtre, prendre replied=False par défaut
+                    if not filters:
+                        filters = {"replied": False}
+                
+                result = db_query(table, filters, args.get("limit", 50))
+                
+                # Formater spécialement pour WhatsApp
+                if table == "whatsapp_messages" and result.get("data"):
+                    messages_list = result["data"]
+                    formatted = f"📱 **{len(messages_list)} message(s) WhatsApp non répondus :**\n\n"
+                    for i, msg in enumerate(messages_list[:10], 1):
+                        from_name = msg.get("from_name", "Contact inconnu")
+                        message_text = msg.get("message", "")[:80]
+                        importance = msg.get("importance", "normal")
+                        urgent_flag = "⚠️ " if importance == "high" else ""
+                        formatted += f"{i}. {urgent_flag}**{from_name}**\n   💬 {message_text}\n\n"
+                    
+                    if len(messages_list) > 10:
+                        formatted += f"... et {len(messages_list) - 10} autre(s) message(s)\n\n"
+                    
+                    formatted += "💡 Dis-moi 'répondre à [nom]' pour envoyer une réponse."
+                    content = formatted
+                    logger.info(f"📱 WhatsApp: {len(messages_list)} messages formatés")
+                else:
+                    content = json.dumps(result, ensure_ascii=False)
+                
+                logger.info(f"📖 Lecture {table}: {result.get('count', 0)} lignes")
             elif name == "get_email_content":
                 email_number = args.get("email_number", 1)
                 
