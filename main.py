@@ -4899,7 +4899,7 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                 logger.info(f"📝 Update {table}: {item_name}")
 
             elif name == "get_emails":
-                logger.info(f"🔍 get_emails appelé avec args: {args}")
+                logger.info(f"🔍 get_emails appelé")
                 limit = args.get("limit", 20)
                 
                 try:
@@ -4911,24 +4911,59 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                     else:
                         emails = result.get("messages", [])
                         if not emails or len(emails) == 0:
-                            content = "📧 Aucun email non lu dans ta boîte."
+                            content = "📭 Aucun email non lu dans ta boîte."
                         else:
-                            email_list = []
-                            for i, e in enumerate(emails[:20], 1):
+                            # FORMATAGE CLAIR POUR LE FRONTEND
+                            email_lines = []
+                            for i, e in enumerate(emails[:15], 1):
                                 from_clean = e.get('from', 'Inconnu').split('<')[0].strip()
-                                subject_clean = e.get('subject', 'Sans sujet')[:80]
-                                email_list.append(f"{i}. **{from_clean}**\n   📧 {subject_clean}")
+                                subject_clean = e.get('subject', 'Sans sujet')[:70]
+                                date_clean = e.get('date', '')[:16]
+                                email_lines.append(f"{i}. **{from_clean}** - {subject_clean}\n   📅 {date_clean}")
                             
                             content = f"📧 **{len(emails)} email(s) non lu(s) :**\n\n"
-                            content += "\n".join(email_list)
-                            if len(emails) > 20:
-                                content += f"\n\n... et {len(emails) - 20} autre(s)"
-                            content += "\n\n💡 Dis-moi 'ouvre l'email [numéro]' pour voir le contenu"
+                            content += "\n".join(email_lines)
+                            if len(emails) > 15:
+                                content += f"\n\n... et {len(emails) - 15} autre(s)"
                             
+                            # AJOUTER DES ACTIONS POUR CHAQUE EMAIL
+                            actions = []
+                            for i, e in enumerate(emails[:5], 1):
+                                actions.append({
+                                    "type": "open_email",
+                                    "params": {"email_number": i, "email_id": e.get('id')},
+                                    "label": f"📖 Lire email #{i}"
+                                })
+                            actions.append({
+                                "type": "mark_all_read",
+                                "params": {},
+                                "label": "✅ Tout marquer comme lu"
+                            })
+                            
+                            # Stocker dans content avec un marqueur spécial
+                            content = f"[EMAIL_LIST_START]\n{content}\n[EMAIL_LIST_END]"
+                            
+                            # Stocker les emails pour plus tard
                             if user_id not in pending_emails:
                                 pending_emails[user_id] = {}
                             pending_emails[user_id]["last_emails"] = emails
                             
+                            # Ajouter les actions à la réponse
+                            # On va les passer via le content avec un format spécial
+                            content = json.dumps({
+                                "type": "email_list",
+                                "text": content,
+                                "emails": [
+                                    {
+                                        "number": i+1,
+                                        "from": e.get('from', 'Inconnu'),
+                                        "subject": e.get('subject', 'Sans sujet'),
+                                        "snippet": e.get('snippet', '')[:200],
+                                        "id": e.get('id')
+                                    }
+                                    for i, e in enumerate(emails[:10])
+                                ]
+                            })
                             logger.info(f"✅ {len(emails)} emails formatés avec succès")
                 except Exception as e:
                     logger.error(f"❌ Exception dans get_emails: {e}")
