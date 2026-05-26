@@ -4548,12 +4548,21 @@ async def send_gmail_reply(message_id: str, body: str):
         logger.error(f"Erreur envoi réponse Gmail: {e}")
         return {"success": False, "error": str(e)}
 
+@app.get("/api/test/emails")
+async def test_emails_direct():
+    """Test direct de la récupération des emails"""
+    result = await get_gmail_messages_imap(10)
+    return result
+
 # =====================================================
 # API ROUTES - CHAT AMÉLIORÉ AVEC MÉMOIRE
 # =====================================================
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
     logger.info(f"📨 Reçu: {len(request.messages)} messages")
+    # Au début de la fonction chat_endpoint, après avoir récupéré last_message
+    logger.info(f"🔍 MESSAGE REÇU: '{last_message}'")
+    logger.info(f"🔍 MESSAGE LOWER: '{last_message_lower}'")
     
     # Récupérer l'utilisateur
     user_id = require_user_id(request.user_id)
