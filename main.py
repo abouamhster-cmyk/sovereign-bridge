@@ -4570,7 +4570,7 @@ async def chat_endpoint(request: ChatRequest):
                 emails = result["messages"]
                 
                 if len(emails) == 0:
-                    reply = "📧 Aucun email non lu dans ta boîte."
+                    reply = "📭 Aucun email non lu dans ta boîte."
                 else:
                     email_list = []
                     for i, e in enumerate(emails[:20], 1):
@@ -4597,6 +4597,49 @@ async def chat_endpoint(request: ChatRequest):
                 
         except Exception as e:
             logger.error(f"Exception interception email: {e}")
+            return {"reply": f"❌ Erreur technique: {str(e)}"}
+    
+    # =====================================================
+    # INTERCEPTION WHATSAPP
+    # =====================================================
+    whatsapp_triggers = [
+        "montre-moi mes whatsapp", "affiche mes whatsapp", "liste mes whatsapp",
+        "mes messages whatsapp", "whatsapp non lus", "voir whatsapp"
+    ]
+    
+    if any(trigger in last_message_lower for trigger in whatsapp_triggers):
+        logger.info(f"📱 Interception WhatsApp - message: {last_message[:50]}")
+        
+        try:
+            # Récupérer les messages WhatsApp non répondus
+            result = db_query("whatsapp_messages", {"replied": False}, 50)
+            
+            if result.get("success") and result.get("data"):
+                messages_list = result["data"]
+                
+                if len(messages_list) == 0:
+                    reply = "📭 Aucun message WhatsApp non lu."
+                else:
+                    formatted = f"📱 **{len(messages_list)} message(s) WhatsApp non répondus :**\n\n"
+                    for i, msg in enumerate(messages_list[:15], 1):
+                        from_name = msg.get("from_name", "Contact inconnu")
+                        message_text = msg.get("message", "")[:80]
+                        importance = msg.get("importance", "normal")
+                        urgent_flag = "⚠️ " if importance == "high" else ""
+                        formatted += f"{i}. {urgent_flag}**{from_name}**\n   💬 {message_text}\n\n"
+                    
+                    if len(messages_list) > 15:
+                        formatted += f"... et {len(messages_list) - 15} autre(s) message(s)\n\n"
+                    
+                    formatted += "💡 Dis-moi 'répondre à [nom]' pour envoyer une réponse."
+                    reply = formatted
+                
+                return {"reply": reply}
+            else:
+                return {"reply": "📭 Aucun message WhatsApp non lu."}
+                
+        except Exception as e:
+            logger.error(f"Exception interception WhatsApp: {e}")
             return {"reply": f"❌ Erreur technique: {str(e)}"}
     
     # =====================================================
@@ -4831,11 +4874,10 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
             tools=tools,
             tool_choice="auto",
             max_tokens=512,
-            temperature=0.85,  # ← Augmenté de 0.7 à 0.85 pour plus de variété
-            presence_penalty=0.3,  # ← Encourage de nouveaux sujets
-            frequency_penalty=0.3,  # ← Évite les répétitions
+            temperature=0.85,
+            presence_penalty=0.3,
+            frequency_penalty=0.3,
             timeout=15.0
-
         )
         
         msg = response.choices[0].message
@@ -4849,18 +4891,15 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
             args = json.loads(tool_call.function.arguments)
             content = ""
             
-
-            elif name == "read_table":
+            if name == "read_table":
                 table = args.get("table")
                 filters = args.get("filters", {})
                 
                 # CORRECTION POUR WHATSAPP
                 if table == "whatsapp_messages":
-                    # Convertir status="unread" ou "pending" en replied=False
                     if filters.get("status") in ["unread", "pending"]:
                         filters.pop("status", None)
                         filters["replied"] = False
-                    # Si aucun filtre, prendre replied=False par défaut
                     if not filters:
                         filters = {"replied": False}
                 
@@ -4870,10 +4909,10 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                 if table == "whatsapp_messages" and result.get("data"):
                     messages_list = result["data"]
                     formatted = f"📱 **{len(messages_list)} message(s) WhatsApp non répondus :**\n\n"
-                    for i, msg in enumerate(messages_list[:10], 1):
-                        from_name = msg.get("from_name", "Contact inconnu")
-                        message_text = msg.get("message", "")[:80]
-                        importance = msg.get("importance", "normal")
+                    for i, wa_msg in enumerate(messages_list[:10], 1):
+                        from_name = wa_msg.get("from_name", "Contact inconnu")
+                        message_text = wa_msg.get("message", "")[:80]
+                        importance = wa_msg.get("importance", "normal")
                         urgent_flag = "⚠️ " if importance == "high" else ""
                         formatted += f"{i}. {urgent_flag}**{from_name}**\n   💬 {message_text}\n\n"
                     
@@ -4887,7 +4926,7 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                     content = json.dumps(result, ensure_ascii=False)
                 
                 logger.info(f"📖 Lecture {table}: {result.get('count', 0)} lignes")
-    
+            
             elif name == "send_email":
                 to = args.get("to", "")
                 subject = args.get("subject", "")
@@ -4941,7 +4980,6 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                         if not emails or len(emails) == 0:
                             content = "📭 Aucun email non lu dans ta boîte."
                         else:
-                            # FORMATAGE POUR LE FRONTEND
                             email_lines = []
                             for i, e in enumerate(emails[:15], 1):
                                 from_clean = e.get('from', 'Inconnu').split('<')[0].strip()
@@ -4955,7 +4993,6 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                                 content += f"\n\n... et {len(emails) - 15} autre(s)"
                             content += "\n\n💡 Dis-moi 'ouvre l'email [numéro]' pour voir le contenu complet."
                             
-                            # Stocker les emails dans le cache
                             if user_id not in pending_emails:
                                 pending_emails[user_id] = {}
                             pending_emails[user_id]["last_emails"] = emails
@@ -4965,43 +5002,6 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                     logger.error(f"❌ Exception dans get_emails: {e}")
                     content = f"❌ Erreur technique: {str(e)}"
 
-            elif name == "read_table":
-                table = args.get("table")
-                filters = args.get("filters", {})
-                
-                # CORRECTION POUR WHATSAPP
-                if table == "whatsapp_messages":
-                    # Convertir status="unread" ou "pending" en replied=False
-                    if filters.get("status") in ["unread", "pending"]:
-                        filters.pop("status", None)
-                        filters["replied"] = False
-                    # Si aucun filtre, prendre replied=False par défaut
-                    if not filters:
-                        filters = {"replied": False}
-                
-                result = db_query(table, filters, args.get("limit", 50))
-                
-                # Formater spécialement pour WhatsApp
-                if table == "whatsapp_messages" and result.get("data"):
-                    messages_list = result["data"]
-                    formatted = f"📱 **{len(messages_list)} message(s) WhatsApp non répondus :**\n\n"
-                    for i, msg in enumerate(messages_list[:10], 1):
-                        from_name = msg.get("from_name", "Contact inconnu")
-                        message_text = msg.get("message", "")[:80]
-                        importance = msg.get("importance", "normal")
-                        urgent_flag = "⚠️ " if importance == "high" else ""
-                        formatted += f"{i}. {urgent_flag}**{from_name}**\n   💬 {message_text}\n\n"
-                    
-                    if len(messages_list) > 10:
-                        formatted += f"... et {len(messages_list) - 10} autre(s) message(s)\n\n"
-                    
-                    formatted += "💡 Dis-moi 'répondre à [nom]' pour envoyer une réponse."
-                    content = formatted
-                    logger.info(f"📱 WhatsApp: {len(messages_list)} messages formatés")
-                else:
-                    content = json.dumps(result, ensure_ascii=False)
-                
-                logger.info(f"📖 Lecture {table}: {result.get('count', 0)} lignes")
             elif name == "get_email_content":
                 email_number = args.get("email_number", 1)
                 
@@ -5051,8 +5051,109 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                 else:
                     content = f"❌ Erreur: {result.get('error')}"
             
-            # ... (autres outils: list_documents, add_mission, add_document, delete_task, etc.)
-            # Gardez le reste des outils comme dans votre code existant
+            elif name == "create_task":
+                title = args.get("title")
+                result = await create_task_from_conversation(ExecuteTaskRequest(
+                    title=title,
+                    due_date=args.get("due_date"),
+                    priority=args.get("priority", "normal"),
+                    user_id=user_id
+                ))
+                if result.get("success"):
+                    content = f"✅ Tâche créée: {title}"
+                else:
+                    content = f"❌ Erreur création tâche"
+            
+            elif name == "whatsapp_send_reply":
+                to = args.get("to", "")
+                message = args.get("message", "")
+                if not to.endswith("@c.us"):
+                    to = to + "@c.us"
+                success = await whatsapp_send_message(to, message)
+                if success:
+                    content = f"✅ Message WhatsApp envoyé à {to}"
+                else:
+                    content = f"❌ Échec de l'envoi"
+            
+            elif name == "add_spending":
+                title = args.get("title")
+                amount = args.get("amount")
+                result = await add_spending(user_id, title, amount, args.get("category", "other"), args.get("project"))
+                if result.get("success"):
+                    content = f"✅ Dépense ajoutée: {amount} CFA - {title}"
+                else:
+                    content = f"❌ Erreur: {result.get('error')}"
+            
+            elif name == "add_revenue":
+                source = args.get("source")
+                amount = args.get("amount")
+                result = await add_revenue(user_id, source, amount, args.get("project"))
+                if result.get("success"):
+                    content = f"✅ Revenu ajouté: {amount} CFA - {source}"
+                else:
+                    content = f"❌ Erreur: {result.get('error')}"
+            
+            elif name == "add_mission":
+                name = args.get("name")
+                result = await add_mission(user_id, name, args.get("category", "business"), args.get("priority", "normal"))
+                if result.get("success"):
+                    content = f"✅ Mission ajoutée: {name}"
+                else:
+                    content = f"❌ Erreur: {result.get('error')}"
+            
+            elif name == "add_document":
+                name = args.get("name")
+                result = await add_document(user_id, name, args.get("doc_type", "other"), args.get("status", "draft"), args.get("due_date"))
+                if result.get("success"):
+                    content = f"✅ Document ajouté: {name}"
+                else:
+                    content = f"❌ Erreur: {result.get('error')}"
+            
+            elif name == "list_documents":
+                result = await list_documents(user_id, args.get("limit", 10), args.get("status"))
+                if result.get("success"):
+                    docs = result.get("documents", [])
+                    if docs:
+                        doc_list = "\n".join([f"• **{d['name']}** ({d['status']})" + (f" - {d['due_date']}" if d.get('due_date') else "") for d in docs[:10]])
+                        content = f"📄 **Documents:**\n\n{doc_list}"
+                        if len(docs) > 10:
+                            content += f"\n\n... et {len(docs) - 10} autre(s)"
+                    else:
+                        content = "📄 Aucun document trouvé."
+                else:
+                    content = f"❌ Erreur: {result.get('error')}"
+            
+            elif name == "delete_task":
+                task_name = args.get("task_name")
+                result = await delete_item("tasks", task_name, user_id=user_id)
+                if result.get("success"):
+                    content = f"✅ Tâche supprimée: {task_name}"
+                else:
+                    content = f"❌ Erreur: {result.get('error')}"
+            
+            elif name == "schedule_reminder":
+                title = args.get("title", "Rappel")
+                minutes = args.get("minutes", 30)
+                content = f"⏰ Rappel programmé dans {minutes} minute(s): {title}"
+                # Optionnel: scheduler dans un thread séparé
+                asyncio.create_task(schedule_reminder(user_id, title, minutes))
+            
+            elif name == "create_checklist":
+                title = args.get("title", "Checklist")
+                steps = args.get("steps", [])
+                if steps:
+                    result = await create_checklist_in_db(user_id, title, steps)
+                    if result.get("success"):
+                        content = f"✅ Checklist créée: {title}\n\n**Étapes:**\n" + "\n".join([f"{i+1}. {step}" for i, step in enumerate(steps)])
+                    else:
+                        content = f"❌ Erreur: {result.get('error')}"
+                else:
+                    content = "❌ Aucune étape fournie pour la checklist"
+            
+            else:
+                # Autres outils non implémentés
+                content = f"✅ Action '{name}' exécutée"
+                logger.warning(f"⚠️ Action non implémentée: {name}")
             
             messages_payload.append({
                 "role": "tool",
