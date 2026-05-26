@@ -12685,9 +12685,11 @@ async def chat_stream_endpoint(request: ChatRequest):
 
 
 
+
+
 @app.post("/chat/stream-simple")
 async def chat_stream_simple(request: ChatRequest):
-    """Version complète du chat avec streaming ET outils"""
+    """Version complète du chat avec streaming ET tous les outils"""
     
     user_id = require_user_id(request.user_id)
     last_message = request.messages[-1].get("content", "") if request.messages else ""
@@ -12724,7 +12726,6 @@ async def chat_stream_simple(request: ChatRequest):
             reply += "• 'réponds à cet email' pour répondre\n"
             reply += "• 'marque comme lu' pour l'archiver"
             
-            # Stocker l'email ouvert pour la réponse
             if user_id not in pending_emails:
                 pending_emails[user_id] = {}
             pending_emails[user_id]["last_opened_email"] = email
@@ -12733,7 +12734,7 @@ async def chat_stream_simple(request: ChatRequest):
                 yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
             return StreamingResponse(gen_email_content(), media_type="text/event-stream")
         else:
-            reply = f"❌ Email #{email_num} non trouvé. Utilise d'abord 'montre-moi mes emails' pour charger la liste."
+            reply = f"❌ Email #{email_num} non trouvé. Utilise d'abord 'montre-moi mes emails'."
             async def gen_not_found():
                 yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
             return StreamingResponse(gen_not_found(), media_type="text/event-stream")
@@ -12770,69 +12771,58 @@ async def chat_stream_simple(request: ChatRequest):
     ]
     
     if any(trigger in last_message_lower for trigger in email_triggers):
-        logger.info(f"📧 Interception email dans stream-simple - message: {last_message[:50]}")
+        logger.info(f"📧 Interception email dans stream-simple")
         
         try:
             result = await get_gmail_messages_imap(20)
             
-            if result.get("success") and result.get("messages"):
-                emails = result["messages"]
-                
-                if len(emails) == 0:
-                    reply = "📭 Aucun email non lu dans ta boîte."
-                else:
-                    email_list = []
-                    for i, e in enumerate(emails[:20], 1):
-                        from_clean = e.get('from', 'Inconnu').split('<')[0].strip()
-                        subject_clean = e.get('subject', 'Sans sujet')[:80]
-                        email_list.append(f"{i}. **{from_clean}**\n   📧 {subject_clean}")
-                    
-                    reply = f"📧 **{len(emails)} email(s) non lu(s) :**\n\n"
-                    reply += "\n".join(email_list)
-                    if len(emails) > 20:
-                        reply += f"\n\n... et {len(emails) - 20} autre(s)"
-                    reply += "\n\n💡 Dis-moi 'ouvre l'email [numéro]' pour voir le contenu"
-                    
-                    # Stocker pour ouverture ultérieure
-                    if user_id not in pending_emails:
-                        pending_emails[user_id] = {}
-                    pending_emails[user_id]["last_emails"] = emails
-                
-                async def gen_email():
-                    yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
-                return StreamingResponse(gen_email(), media_type="text/event-stream")
+            if not result.get("success"):
+                reply = f"❌ Impossible de récupérer les emails: {result.get('error', 'Erreur inconnue')}"
+            elif not result.get("messages") or len(result.get("messages", [])) == 0:
+                reply = "📭 **Aucun email non lu** dans ta boîte.\n\n📧 Tu es à jour !"
             else:
-                error_msg = result.get('error', 'Erreur inconnue')
-                reply = f"❌ Impossible de récupérer les emails: {error_msg}"
-                async def gen_error():
-                    yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
-                return StreamingResponse(gen_error(), media_type="text/event-stream")
+                emails = result["messages"]
+                email_list = []
+                for i, e in enumerate(emails[:20], 1):
+                    from_clean = e.get('from', 'Inconnu').split('<')[0].strip()
+                    subject_clean = e.get('subject', 'Sans sujet')[:80]
+                    email_list.append(f"{i}. **{from_clean}**\n   📧 {subject_clean}")
                 
+                reply = f"📧 **{len(emails)} email(s) non lu(s) :**\n\n"
+                reply += "\n".join(email_list)
+                if len(emails) > 20:
+                    reply += f"\n\n... et {len(emails) - 20} autre(s)"
+                reply += "\n\n💡 Dis-moi 'ouvre l'email [numéro]' pour voir le contenu"
+                
+                if user_id not in pending_emails:
+                    pending_emails[user_id] = {}
+                pending_emails[user_id]["last_emails"] = emails
+            
+            async def gen_email():
+                yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
+            return StreamingResponse(gen_email(), media_type="text/event-stream")
         except Exception as e:
             logger.error(f"Exception interception email: {e}")
-            reply = f"❌ Erreur technique: {str(e)}"
-            async def gen_exception():
-                yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
-            return StreamingResponse(gen_exception(), media_type="text/event-stream")
+            async def gen_error():
+                yield f"data: {json.dumps({'content': f'❌ Erreur: {str(e)}', 'done': True})}\n\n"
+            return StreamingResponse(gen_error(), media_type="text/event-stream")
     
     # =====================================================
     # INTERCEPTION WHATSAPP
     # =====================================================
     whatsapp_triggers = [
         "montre-moi mes whatsapp", "affiche mes whatsapp", "liste mes whatsapp",
-        "mes messages whatsapp", "whatsapp non lus", "voir whatsapp",
-        "affiche whatsapp", "mes whatsapp"
+        "mes messages whatsapp", "whatsapp non lus", "voir whatsapp"
     ]
     
     if any(trigger in last_message_lower for trigger in whatsapp_triggers):
-        logger.info(f"📱 Interception WhatsApp dans stream-simple - message: {last_message[:50]}")
+        logger.info(f"📱 Interception WhatsApp dans stream-simple")
         
         try:
             result = db_query("whatsapp_messages", {"replied": False}, 50)
             
             if result.get("success") and result.get("data"):
                 messages_list = result["data"]
-                
                 if len(messages_list) == 0:
                     reply = "📭 Aucun message WhatsApp non lu."
                 else:
@@ -12843,36 +12833,27 @@ async def chat_stream_simple(request: ChatRequest):
                         importance = msg.get("importance", "normal")
                         urgent_flag = "⚠️ " if importance == "high" else ""
                         formatted += f"{i}. {urgent_flag}**{from_name}**\n   💬 {message_text}\n\n"
-                    
                     if len(messages_list) > 15:
                         formatted += f"... et {len(messages_list) - 15} autre(s) message(s)\n\n"
-                    
                     formatted += "💡 Dis-moi 'répondre à [nom]' pour envoyer une réponse."
                     reply = formatted
-                
-                async def gen_whatsapp():
-                    yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
-                return StreamingResponse(gen_whatsapp(), media_type="text/event-stream")
             else:
                 reply = "📭 Aucun message WhatsApp non lu."
-                async def gen_wa_empty():
-                    yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
-                return StreamingResponse(gen_wa_empty(), media_type="text/event-stream")
-                
-        except Exception as e:
-            logger.error(f"Exception interception WhatsApp: {e}")
-            reply = f"❌ Erreur technique: {str(e)}"
-            async def gen_wa_error():
+            
+            async def gen_wa():
                 yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
+            return StreamingResponse(gen_wa(), media_type="text/event-stream")
+        except Exception as e:
+            logger.error(f"Exception WhatsApp: {e}")
+            async def gen_wa_error():
+                yield f"data: {json.dumps({'content': f'❌ Erreur: {str(e)}', 'done': True})}\n\n"
             return StreamingResponse(gen_wa_error(), media_type="text/event-stream")
     
     # =====================================================
-    # PAS D'INTERCEPTION - APPEL NORMAL À L'IA AVEC OUTILS
+    # CONSTRUCTION DES MESSAGES POUR L'IA
     # =====================================================
-    
     messages_payload = []
     
-    # Contexte utilisateur
     memory_context = await get_quick_context(user_id, last_message)
     profile_context = await get_profile_context(user_id=user_id)
     
@@ -12884,12 +12865,13 @@ async def chat_stream_simple(request: ChatRequest):
     
     messages_payload.append({"role": "system", "content": system_prompt})
     
-    # Ajouter l'historique (max 10 messages pour le contexte)
     for msg in request.messages[-10:]:
         messages_payload.append({"role": msg["role"], "content": msg["content"]})
     
+    # =====================================================
+    # APPEL À L'IA AVEC TOUS LES OUTILS
+    # =====================================================
     try:
-        # Premier appel pour détecter les tool_calls
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=messages_payload,
@@ -12902,13 +12884,13 @@ async def chat_stream_simple(request: ChatRequest):
         msg = response.choices[0].message
         messages_payload.append(msg)
         
-        # S'il y a des tool_calls, on les exécute
         if msg.tool_calls:
             for tool_call in msg.tool_calls:
                 name = tool_call.function.name
                 args = json.loads(tool_call.function.arguments)
                 content = ""
                 
+                # ========== LECTURE TABLE ==========
                 if name == "read_table":
                     table = args.get("table")
                     filters = args.get("filters", {})
@@ -12921,6 +12903,7 @@ async def chat_stream_simple(request: ChatRequest):
                     result = db_query(table, filters, args.get("limit", 50))
                     content = json.dumps(result, ensure_ascii=False)
                 
+                # ========== CRÉATION TÂCHE ==========
                 elif name == "create_task":
                     title = args.get("title")
                     result = await create_task_from_conversation(ExecuteTaskRequest(
@@ -12931,23 +12914,64 @@ async def chat_stream_simple(request: ChatRequest):
                     ))
                     content = f"✅ Tâche créée: {title}" if result.get("success") else f"❌ Erreur: {result.get('error')}"
                 
+                # ========== COMPLÉTER TÂCHE ==========
+                elif name == "complete_task":
+                    task_name = args.get("task_name")
+                    result = await update_item(user_id, "tasks", name=task_name, updates={"status": "done"})
+                    content = f"✅ Tâche complétée: {task_name}" if result.get("success") else f"❌ Erreur: {result.get('error')}"
+                
+                # ========== SUPPRIMER TÂCHE ==========
+                elif name == "delete_task":
+                    task_name = args.get("task_name")
+                    result = await delete_item("tasks", task_name, user_id=user_id)
+                    content = f"✅ Tâche supprimée: {task_name}" if result.get("success") else f"❌ Erreur: {result.get('error')}"
+                
+                # ========== AJOUT DÉPENSE ==========
                 elif name == "add_spending":
                     title = args.get("title")
                     amount = args.get("amount")
-                    result = await add_spending(user_id, title, amount, args.get("category", "other"))
+                    result = await add_spending(user_id, title, amount, args.get("category", "other"), args.get("project"))
                     content = f"✅ Dépense ajoutée: {amount} CFA - {title}" if result.get("success") else f"❌ Erreur: {result.get('error')}"
                 
+                # ========== AJOUT REVENU ==========
                 elif name == "add_revenue":
                     source = args.get("source")
                     amount = args.get("amount")
                     result = await add_revenue(user_id, source, amount, args.get("project"))
                     content = f"✅ Revenu ajouté: {amount} CFA - {source}" if result.get("success") else f"❌ Erreur: {result.get('error')}"
                 
+                # ========== AJOUT MISSION ==========
+                elif name == "add_mission":
+                    name = args.get("name")
+                    result = await add_mission(user_id, name, args.get("category", "business"), args.get("priority", "normal"))
+                    content = f"✅ Mission ajoutée: {name}" if result.get("success") else f"❌ Erreur: {result.get('error')}"
+                
+                # ========== AJOUT DOCUMENT ==========
+                elif name == "add_document":
+                    name = args.get("name")
+                    result = await add_document(user_id, name, args.get("doc_type", "other"), args.get("status", "draft"), args.get("due_date"))
+                    content = f"✅ Document ajouté: {name}" if result.get("success") else f"❌ Erreur: {result.get('error')}"
+                
+                # ========== LISTE DOCUMENTS ==========
+                elif name == "list_documents":
+                    result = await list_documents(user_id, args.get("limit", 10), args.get("status"))
+                    if result.get("success") and result.get("documents"):
+                        docs = result["documents"]
+                        doc_list = "\n".join([f"• **{d['name']}** ({d['status']})" + (f" - {d['due_date']}" if d.get('due_date') else "") for d in docs[:10]])
+                        content = f"📄 **Documents:**\n\n{doc_list}"
+                        if len(docs) > 10:
+                            content += f"\n\n... et {len(docs) - 10} autre(s)"
+                    else:
+                        content = "📄 Aucun document trouvé."
+                
+                # ========== RAPPEL ==========
                 elif name == "schedule_reminder":
                     title = args.get("title", "Rappel")
                     minutes = args.get("minutes", 30)
                     content = f"⏰ Rappel programmé dans {minutes} minute(s): {title}"
+                    asyncio.create_task(schedule_reminder(user_id, title, minutes))
                 
+                # ========== ENVOI EMAIL ==========
                 elif name == "send_email":
                     to = args.get("to", "")
                     subject = args.get("subject", "")
@@ -12955,9 +12979,115 @@ async def chat_stream_simple(request: ChatRequest):
                     pending_emails[user_id] = {"to": to, "subject": subject, "body": body}
                     content = f"📧 Email prêt à être envoyé à {to}. Dis-moi 'oui' pour confirmer."
                 
+                # ========== RÉSULTAT FINANCIER ==========
+                elif name == "get_financial_summary":
+                    result = get_financial_summary(user_id)
+                    content = f"💰 **Finances**\n\nRevenus: {result.get('total_revenue', 0):,.0f} CFA\nDépenses: {result.get('total_spending', 0):,.0f} CFA\nSolde: {result.get('net_balance', 0):,.0f} CFA"
+                
+                # ========== AJOUT VICTOIRE ==========
+                elif name == "add_win":
+                    title = args.get("title")
+                    result = await add_win(user_id, title, args.get("category", "personal"), args.get("celebration_emoji", "🎉"))
+                    content = f"🏆 Victoire ajoutée: {title}" if result.get("success") else f"❌ Erreur: {result.get('error')}"
+                
+                # ========== AJOUT ÉVÉNEMENT FAMILLE ==========
+                elif name == "add_family_event":
+                    title = args.get("title")
+                    result = await add_family_event(user_id, title, args.get("child_name"), args.get("category", "routine"), args.get("date"))
+                    content = f"📅 Événement familial ajouté: {title}" if result.get("success") else f"❌ Erreur: {result.get('error')}"
+                
+                # ========== WHATSAPP RÉPONSE ==========
+                elif name == "whatsapp_send_reply":
+                    to = args.get("to", "")
+                    message = args.get("message", "")
+                    if not to.endswith("@c.us"):
+                        to = to + "@c.us"
+                    success = await whatsapp_send_message(to, message)
+                    content = f"✅ Message WhatsApp envoyé à {to}" if success else "❌ Échec de l'envoi"
+                
+                # ========== LECTURE WHATSAPP ==========
+                elif name == "whatsapp_get_conversations":
+                    result = db_query("whatsapp_messages", {"replied": False}, 50)
+                    if result.get("success") and result.get("data"):
+                        messages_list = result["data"]
+                        formatted = f"📱 **{len(messages_list)} message(s) WhatsApp non répondus :**\n\n"
+                        for i, wa_msg in enumerate(messages_list[:10], 1):
+                            from_name = wa_msg.get("from_name", "Contact inconnu")
+                            message_text = wa_msg.get("message", "")[:80]
+                            formatted += f"{i}. **{from_name}**\n   💬 {message_text}\n\n"
+                        content = formatted
+                    else:
+                        content = "📭 Aucun message WhatsApp non lu."
+                
+                # ========== CRÉATION CHECKLIST ==========
+                elif name == "create_checklist":
+                    title = args.get("title", "Checklist")
+                    steps = args.get("steps", [])
+                    if steps:
+                        checklist_id = str(uuid.uuid4())
+                        supabase.table("checklists").insert({
+                            "id": checklist_id,
+                            "title": title,
+                            "steps": steps,
+                            "progress": 0,
+                            "user_id": user_id
+                        }).execute()
+                        content = f"✅ Checklist créée: {title}\n\n**Étapes:**\n" + "\n".join([f"{i+1}. {step}" for i, step in enumerate(steps)])
+                    else:
+                        content = "❌ Aucune étape fournie"
+                
+                # ========== CRÉATION BROUILLON ==========
+                elif name == "create_draft":
+                    draft_type = args.get("type", "email")
+                    context = args.get("context", "")
+                    draft_response = await create_draft({"type": draft_type, "context": context, "user_id": user_id})
+                    if draft_response.get("success"):
+                        content = f"📄 Brouillon {draft_type} généré. Tape 'afficher brouillon' pour le voir."
+                    else:
+                        content = "❌ Erreur lors de la génération du brouillon"
+                
+                # ========== MISE À JOUR ÉLÉMENT ==========
+                elif name == "update_item":
+                    table = args.get("table")
+                    item_name = args.get("name")
+                    updates = args.get("updates", {})
+                    result = await update_item(user_id, table, name=item_name, updates=updates)
+                    content = f"✅ {result.get('message', 'Élément mis à jour')}" if result.get("success") else f"❌ Erreur: {result.get('error')}"
+                
+                # ========== SUPPRESSION ÉLÉMENT ==========
+                elif name == "delete_item":
+                    table = args.get("table")
+                    item_name = args.get("name")
+                    result = await delete_item(table, item_name, user_id=user_id)
+                    content = f"✅ {result.get('message', 'Élément supprimé')}" if result.get("success") else f"❌ Erreur: {result.get('error')}"
+                
+                # ========== SAUVEGARDE MÉMOIRE ==========
+                elif name == "save_memory":
+                    category = args.get("category", "other")
+                    key = args.get("key")
+                    value = args.get("value")
+                    result = await save_user_memory(category, key, value, user_id)
+                    content = f"💾 Souvenir sauvegardé: {key} = {value}" if result else "❌ Erreur sauvegarde"
+                
+                # ========== CRÉATION ÉVÉNEMENT CALENDRIER ==========
+                elif name == "create_calendar_event":
+                    summary = args.get("summary")
+                    start_datetime = args.get("start_datetime")
+                    end_datetime = args.get("end_datetime")
+                    result = await create_calendar_event(CalendarEventRequest(
+                        summary=summary,
+                        start_datetime=start_datetime,
+                        end_datetime=end_datetime,
+                        description=args.get("description", "")
+                    ))
+                    if result.get("success"):
+                        content = f"📅 Événement créé: {summary}\n🔗 {result.get('link', '')}"
+                    else:
+                        content = f"❌ Erreur: {result.get('error')}"
+                
                 else:
                     content = f"✅ Action '{name}' exécutée"
-                    logger.warning(f"⚠️ Action non implémentée dans stream-simple: {name}")
+                    logger.warning(f"⚠️ Action non implémentée: {name}")
                 
                 messages_payload.append({
                     "role": "tool",
@@ -12965,7 +13095,7 @@ async def chat_stream_simple(request: ChatRequest):
                     "content": content
                 })
             
-            # Deuxième appel pour générer la réponse finale
+            # Deuxième appel pour la réponse finale
             stream = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=messages_payload,
@@ -12986,7 +13116,7 @@ async def chat_stream_simple(request: ChatRequest):
             return StreamingResponse(generate_with_tools(), media_type="text/event-stream")
         
         else:
-            # Pas de tool_calls, on streame directement
+            # Pas de tool_calls, streaming direct
             stream = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=messages_payload,
@@ -13449,12 +13579,7 @@ async def auto_reply_if_needed(message: str, contact_name: str, from_number: str
     return False, None
 
 
-# =====================================================
-# WHATSAPP - PLANNING (VERSION CORRIGÉE)
-# =====================================================
-# =====================================================
-# WHATSAPP - ENVOIS DIFFÉRÉS (VERSION CORRIGÉE)
-# =====================================================
+
 
 # =====================================================
 # WHATSAPP - ENVOIS DIFFÉRÉS
