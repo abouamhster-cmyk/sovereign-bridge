@@ -4366,7 +4366,19 @@ async def get_gmail_messages_imap(limit: int = 10):
         logger.error(f"Erreur IMAP Gmail: {e}")
         return {"success": False, "error": str(e), "messages": [], "count": 0}
         
-        
+
+
+@app.get("/test-gmail")
+async def test_gmail():
+    """Endpoint de test pour Gmail"""
+    result = await get_gmail_messages_imap(5)
+    return {
+        "success": result.get("success"),
+        "error": result.get("error"),
+        "count": result.get("count"),
+        "first_email": result.get("messages", [])[0] if result.get("messages") else None
+    }
+
 async def update_document(user_id: str, document_id: str = None, name: str = None, 
                           updates: dict = None) -> Dict:
     """Met à jour un document existant"""
