@@ -12849,8 +12849,9 @@ async def chat_stream_simple(request: ChatRequest):
                 yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
             return StreamingResponse(gen_not_found(), media_type="text/event-stream")
 
+
     # =====================================================
-    # INTERCEPTION DES EMAILS AVEC CONTENU ET PRIORITÉ
+    # INTERCEPTION DES EMAILS - VERSION CORRIGÉE
     # =====================================================
     email_triggers = [
         "montre-moi mes emails", "affiche mes emails", "liste mes emails",
@@ -12863,64 +12864,57 @@ async def chat_stream_simple(request: ChatRequest):
         logger.info(f"📧 Interception email dans stream-simple")
         
         try:
+            # Utiliser l'endpoint de test qui fonctionne
             result = await get_gmail_messages_imap(20)
+            
+            # Debug: afficher le résultat brut
+            logger.info(f"📧 Résultat brut: success={result.get('success')}, count={result.get('count', 0)}")
             
             if result.get("success") and result.get("messages"):
                 emails = result["messages"]
                 
                 if len(emails) == 0:
-                    reply = "📭 Aucun email non lu dans ta boîte."
+                    reply = "📭 **Aucun email non lu** dans ta boîte.\n\n📧 Tu es à jour !"
                 else:
-                    # Analyser chaque email pour en extraire un résumé et une priorité
-                    email_list = []
+                    # Construction simple et fiable de la réponse
+                    email_lines = []
                     high_count = 0
                     
                     for i, e in enumerate(emails[:15], 1):
-                        from_clean = e.get('from', 'Inconnu').split('<')[0].strip()
-                        subject = e.get('subject', 'Sans sujet')
-                        snippet = e.get('snippet', '')[:150]
+                        from_clean = e.get('from', 'Inconnu')
+                        # Nettoyer le from
+                        if '<' in from_clean:
+                            from_clean = from_clean.split('<')[0].strip()
+                        subject = e.get('subject', 'Sans sujet')[:60]
+                        date = e.get('date', 'Date inconnue')[:16]
                         
-                        # Déterminer la priorité basée sur le contenu
+                        # Détection priorité
                         priority_emoji = "🟡"
                         subject_lower = subject.lower()
-                        snippet_lower = snippet.lower()
-                        
-                        if any(word in subject_lower or word in snippet_lower for word in 
-                              ["urgent", "important", "alerte", "attention", "deadline", "échéance", "impayé", "rappel"]):
+                        if any(word in subject_lower for word in ["urgent", "important", "alerte"]):
                             priority_emoji = "🔴"
                             high_count += 1
-                        elif any(word in subject_lower or word in snippet_lower for word in
-                               ["newsletter", "promo", "offre", "publicité", "facebook", "linkedin"]):
+                        elif any(word in subject_lower for word in ["newsletter", "promo", "offre"]):
                             priority_emoji = "🟢"
                         
-                        # Générer un résumé intelligent
-                        if snippet:
-                            summary = snippet[:100].replace('\n', ' ')
-                            if len(snippet) > 100:
-                                summary += "..."
-                        else:
-                            summary = "Aucun aperçu disponible"
-                        
-                        email_list.append(
-                            f"{i}. {priority_emoji} **{from_clean}**\n"
-                            f"   📧 {subject}\n"
-                            f"   📝 {summary}\n"
-                        )
+                        email_lines.append(f"{i}. {priority_emoji} **{from_clean}**")
+                        email_lines.append(f"   📧 {subject}")
+                        email_lines.append(f"   📅 {date}")
+                        email_lines.append("")
                     
                     reply = f"📧 **{len(emails)} email(s) non lu(s)**"
                     if high_count > 0:
                         reply += f" (⚠️ {high_count} prioritaire(s))"
                     reply += " :\n\n"
-                    reply += "\n".join(email_list)
+                    reply += "\n".join(email_lines)
                     
                     if len(emails) > 15:
-                        reply += f"\n\n... et {len(emails) - 15} autre(s)"
+                        reply += f"\n... et {len(emails) - 15} autre(s)\n"
                     
-                    reply += "\n\n💡 **Actions possibles :**\n"
+                    reply += "\n💡 **Actions possibles :**\n"
                     reply += "• 'ouvre l'email [numéro]' → voir le contenu complet\n"
-                    reply += "• 'résumé email [numéro]' → analyse détaillée + priorité\n"
-                    reply += "• 'marque l'email [numéro] comme lu' → archiver\n"
-                    reply += "• 'réponds à l'email [numéro]' → envoyer une réponse"
+                    reply += "• 'réponds à l'email [numéro]' → envoyer une réponse\n"
+                    reply += "• 'marque l'email [numéro] comme lu' → archiver"
                     
                     # Stocker pour ouverture ultérieure
                     if user_id not in pending_emails:
@@ -14544,3 +14538,5 @@ async def get_execution_progress(plan_id: str, user_id: Optional[str] = None):
     except Exception as e:
         logger.error(f"Erreur récupération progression: {e}")
         return {"success": False, "error": str(e)}
+
+
