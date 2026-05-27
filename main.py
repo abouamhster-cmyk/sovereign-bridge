@@ -12700,6 +12700,45 @@ async def chat_stream_simple(request: ChatRequest):
     
     user_id = require_user_id(request.user_id)
     last_message = request.messages[-1].get("content", "") if request.messages else ""
+    last_message_lower = last_message.lower()
+    
+    # =====================================================
+    # INTERCEPTION POUR OUVRIR UN EMAIL SPÉCIFIQUE
+    # =====================================================
+    import re
+    email_open_pattern = r'ouvre\s+(?:le |l\'|le )?email\s+(\d+)'
+    match = re.search(email_open_pattern, last_message_lower, re.IGNORECASE)
+    
+    if match:
+        email_num = int(match.group(1))
+        logger.info(f"📧 Demande d'ouverture de l'email #{email_num}")
+        
+        stored_emails = None
+        if user_id in pending_emails and "last_emails" in pending_emails[user_id]:
+            stored_emails = pending_emails[user_id]["last_emails"]
+        
+        if stored_emails and 1 <= email_num <= len(stored_emails):
+            email = stored_emails[email_num - 1]
+            from_clean = email.get('from', 'Inconnu').split('<')[0].strip()
+            subject = email.get('subject', 'Sans sujet')
+            snippet = email.get('snippet', '[Contenu non disponible]')
+            
+            reply = f"📧 **Email #{email_num}**\n\n"
+            reply += f"**De :** {from_clean}\n"
+            reply += f"**Objet :** {subject}\n\n"
+            reply += f"**Contenu :**\n{snippet}\n\n"
+            reply += "---\n💡 Dis-moi :\n"
+            reply += "• 'réponds à cet email' → envoyer une réponse\n"
+            reply += "• 'marque comme lu' → archiver"
+            
+            async def gen_email():
+                yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
+            return StreamingResponse(gen_email(), media_type="text/event-stream")
+        else:
+            reply = f"❌ Email #{email_num} non trouvé. Utilise d'abord 'montre-moi mes emails'."
+            async def gen_not_found():
+                yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
+            return StreamingResponse(gen_not_found(), media_type="text/event-stream")
     
     # =====================================================
     # CONSTRUCTION DES MESSAGES POUR L'IA
@@ -12722,6 +12761,7 @@ async def chat_stream_simple(request: ChatRequest):
 
 ## EMAILS
 - get_emails : "montre-moi mes emails", "affiche mes mails", "je veux voir mes emails", "check mails", "email non lus"
+- get_email_content : "ouvre l'email [numéro]", "affiche le contenu de l'email"
 - send_email : "envoie un email à..."
 - create_draft : "rédige un email", "prépare un email"
 
@@ -12827,6 +12867,56 @@ Tu es Becks. Proactive, concrète, efficace. Tous les outils sont à ta disposit
                     else:
                         content = "❌ Impossible de récupérer les emails"
                 
+                elif name == "get_email_content":
+                    email_number = args.get("email_number", 1)
+                    
+                    stored_emails = None
+                    if user_id in pending_emails and "last_emails" in pending_emails[user_id]:
+                        stored_emails = pending_emails[user_id]["last_emails"]
+                    
+                    if not stored_emails:
+                        result = await get_gmail_messages_imap(20)
+                        if result.get("success") and result.get("messages"):
+                            stored_emails = result["messages"]
+                            if user_id not in pending_emails:
+                                pending_emails[user_id] = {}
+                            pending_emails[user_id]["last_emails"] = stored_emails
+                    
+                    if stored_emails and 1 <= email_number <= len(stored_emails):
+                        email = stored_emails[email_number - 1]
+                        from_clean = email.get('from', 'Inconnu').split('<')[0].strip()
+                        subject = email.get('subject', 'Sans sujet')
+                        snippet = email.get('snippet', '[Contenu non disponible]')
+                        date = email.get('date', 'Date inconnue')
+                        
+                        summary = f"📧 **Email #{email_number}**\n\n"
+                        summary += f"**De :** {from_clean}\n"
+                        summary += f"**Email :** {email.get('from', 'Inconnu')}\n"
+                        summary += f"**Objet :** {subject}\n"
+                        summary += f"**Date :** {date}\n\n"
+                        
+                        subject_lower = subject.lower()
+                        snippet_lower = snippet.lower()
+                        if any(word in subject_lower or word in snippet_lower for word in ["urgent", "important", "alerte"]):
+                            summary += "⚠️ **Priorité : ÉLEVÉE** - À traiter rapidement.\n\n"
+                        elif any(word in subject_lower or word in snippet_lower for word in ["newsletter", "promo"]):
+                            summary += "📬 **Priorité : FAIBLE** - Peut être lu plus tard.\n\n"
+                        else:
+                            summary += "🟡 **Priorité : NORMALE**\n\n"
+                        
+                        summary += f"**Contenu :**\n{snippet}\n\n"
+                        summary += "---\n💡 **Actions :**\n"
+                        summary += "• 'réponds à cet email' → envoyer une réponse\n"
+                        summary += "• 'marque comme lu' → archiver"
+                        
+                        if user_id not in pending_emails:
+                            pending_emails[user_id] = {}
+                        pending_emails[user_id]["last_opened_email"] = email
+                        
+                        content = summary
+                    else:
+                        content = f"❌ Email #{email_number} non trouvé. Utilise d'abord 'montre-moi mes emails'."
+                
                 # ========== WHATSAPP ==========
                 elif name == "whatsapp_get_conversations":
                     result = db_query("whatsapp_messages", {"replied": False}, 50)
@@ -12885,15 +12975,12 @@ Tu es Becks. Proactive, concrète, efficace. Tous les outils sont à ta disposit
                 elif name == "add_revenue":
                     source = args.get("source")
                     amount = args.get("amount")
-                    # Vérifier si c'est une vraie réception d'argent
                     revenue_keywords = ["reçu", "encaissé", "payé", "virement", "versement", "recu", "encaisse", "client a payé"]
                     if any(keyword in source.lower() for keyword in revenue_keywords):
                         result = await add_revenue(user_id, source, amount, args.get("project"))
                         content = f"✅ Revenu ajouté: {amount} CFA - {source}" if result.get("success") else f"❌ Erreur: {result.get('error')}"
                     else:
-                        # C'est une opportunité, pas un revenu
                         content = f"💰 Je note l'opportunité de {amount} CFA. Ce n'est pas encore un revenu, c'est un potentiel."
-                        # Créer une tâche de suivi
                         await create_task_from_conversation(ExecuteTaskRequest(
                             title=f"Suivre l'opportunité: {source}",
                             priority="high",
@@ -12944,7 +13031,6 @@ Tu es Becks. Proactive, concrète, efficace. Tous les outils sont à ta disposit
                     title = args.get("title")
                     steps = args.get("steps", [])
                     plan_id = str(uuid.uuid4())
-                    # Sauvegarder le plan
                     supabase.table("execution_plans").insert({
                         "id": plan_id,
                         "title": title,
@@ -13108,9 +13194,9 @@ Tu es Becks. Proactive, concrète, efficace. Tous les outils sont à ta disposit
     except Exception as e:
         logger.error(f"Erreur stream-simple: {e}")
         async def generate_error():
-            yield f"data: {json.dumps({'error': str(e), 'done': True})}\n\n"
+            error_msg = str(e) if e else "Erreur inconnue"
+            yield f"data: {json.dumps({'error': error_msg, 'done': True})}\n\n"
         return StreamingResponse(generate_error(), media_type="text/event-stream")
-
 
 @app.get("/api/gmail/direct-test")
 async def direct_gmail_test():
