@@ -12694,7 +12694,6 @@ async def chat_stream_endpoint(request: ChatRequest):
     return StreamingResponse(generate_stream(), media_type="text/event-stream")
 
 
-
 @app.post("/chat/stream-simple")
 async def chat_stream_simple(request: ChatRequest):
     """Version complète du chat avec streaming - Délégation totale à l'IA"""
@@ -12773,20 +12772,6 @@ async def chat_stream_simple(request: ChatRequest):
 3. OPPORTUNITÉ ≠ REVENU : Ne jamais utiliser add_revenue pour une opportunité
 4. Pour toute demande d'emails, utilise get_emails immédiatement
 5. Pour toute demande WhatsApp, utilise whatsapp_get_conversations immédiatement
-
-🚨 EXEMPLES DE RÉPONSES CORRECTES :
-
-Utilisateur : "montre-moi mes emails"
-→ Appel direct de get_emails, puis affichage des résultats
-
-Utilisateur : "j'ai une opportunité à 5 millions"
-→ "💰 Je note l'opportunité. [ACTION:create_task pour le suivi]" (PAS add_revenue)
-
-Utilisateur : "crée une checklist pour ma journée"
-→ [ACTION:create_execution_plan avec les étapes]
-
-Utilisateur : "rappelle-moi de manger dans 30 min"
-→ [ACTION:schedule_reminder]
 
 Tu es Becks. Proactive, concrète, efficace. Tous les outils sont à ta disposition."""
     
@@ -12907,7 +12892,13 @@ Tu es Becks. Proactive, concrète, efficace. Tous les outils sont à ta disposit
                         content = f"✅ Revenu ajouté: {amount} CFA - {source}" if result.get("success") else f"❌ Erreur: {result.get('error')}"
                     else:
                         # C'est une opportunité, pas un revenu
-                        content = f"💰 Je note l'opportunité de {amount} CFA. Ce n'est pas encore un revenu, c'est un potentiel.\n\n[ACTION:{\"type\":\"create_task\",\"params\":{\"title\":\"Suivre l'opportunité: {source}\",\"priority\":\"high\"},\"label\":\"📋 Créer une tâche de suivi\"}]"
+                        content = f"💰 Je note l'opportunité de {amount} CFA. Ce n'est pas encore un revenu, c'est un potentiel."
+                        # Créer une tâche de suivi
+                        await create_task_from_conversation(ExecuteTaskRequest(
+                            title=f"Suivre l'opportunité: {source}",
+                            priority="high",
+                            user_id=user_id
+                        ))
                 
                 elif name == "get_financial_summary":
                     result = get_financial_summary(user_id)
@@ -13119,6 +13110,7 @@ Tu es Becks. Proactive, concrète, efficace. Tous les outils sont à ta disposit
         async def generate_error():
             yield f"data: {json.dumps({'error': str(e), 'done': True})}\n\n"
         return StreamingResponse(generate_error(), media_type="text/event-stream")
+
 
 @app.get("/api/gmail/direct-test")
 async def direct_gmail_test():
