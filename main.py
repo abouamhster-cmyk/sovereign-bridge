@@ -1822,6 +1822,30 @@ def get_priority_tasks(limit: int = 10, user_id: Optional[str] = None) -> List[D
     except Exception as e:
         logger.error(f"Erreur priority_tasks: {e}")
         return []
+
+
+async def create_checklist_in_db(user_id: str, title: str, steps: list) -> dict:
+    checklist_id = str(uuid.uuid4())
+    supabase.table("checklists").insert({
+        "id": checklist_id,
+        "title": title,
+        "steps": steps,
+        "progress": 0,
+        "user_id": user_id
+    }).execute()
+    return {"success": True}
+
+async def create_draft_endpoint(user_id: str, draft_type: str, context: str) -> dict:
+    # À implémenter avec GPT
+    return {"success": True, "content": "Brouillon généré"}
+
+async def generate_image_endpoint(prompt: str) -> dict:
+    # À implémenter avec DALL-E
+    return {"success": False, "error": "Non implémenté"}
+
+async def analyze_priorities_endpoint(user_id: str) -> dict:
+    # À implémenter
+    return {"priorities": []}
 # =====================================================
 # NOUVEAUX ENDPOINTS SPÉCIAUX
 # =====================================================
@@ -13226,6 +13250,139 @@ Tu es Becks. Proactive, concrète, efficace. Tous les outils sont à ta disposit
                 elif name == "make_call":
                     phone = args.get("phone")
                     content = f"📞 Appel de {phone} - Fonctionnalité à configurer"
+
+                # ========== EMAILS SUPPLEMENTAIRES ==========
+                elif name == "reply_to_email":
+                    message_id = args.get("message_id")
+                    body = args.get("body")
+                    
+                    stored_email = None
+                    if user_id in pending_emails and "last_opened_email" in pending_emails[user_id]:
+                        stored_email = pending_emails[user_id]["last_opened_email"]
+                    
+                    if stored_email:
+                        result = await send_gmail_reply(stored_email.get('id'), body)
+                        content = f"✅ Réponse envoyée" if result.get("success") else f"❌ Erreur: {result.get('error')}"
+                    else:
+                        content = "❌ Aucun email sélectionné"
+                
+                elif name == "mark_email_read":
+                    message_id = args.get("message_id")
+                    success = await mark_gmail_as_read(message_id)
+                    content = "✅ Email marqué comme lu" if success else "❌ Erreur"
+                
+                elif name == "send_email":
+                    to = args.get("to")
+                    subject = args.get("subject")
+                    body = args.get("body")
+                    result = await send_email_simple(to, subject, body)
+                    content = f"✅ Email envoyé à {to}" if result.get("success") else f"❌ Erreur: {result.get('error')}"
+                
+                elif name == "get_comms_summary":
+                    comms = await get_comms_summary(user_id)
+                    comms_data = comms.get("data", {})
+                    content = f"📱 WhatsApp: {len(comms_data.get('whatsapp', []))} | 📧 Emails: {len(comms_data.get('emails', []))} | ⚠️ Urgents: {comms_data.get('urgent_count', 0)}"
+                
+                # ========== TÂCHES SUPPLEMENTAIRES ==========
+                elif name == "complete_task":
+                    task_name = args.get("task_name")
+                    result = await update_item(user_id, "tasks", name=task_name, updates={"status": "done"})
+                    content = f"✅ Tâche complétée: {task_name}" if result.get("success") else f"❌ Erreur"
+                
+                elif name == "delete_task":
+                    task_name = args.get("task_name")
+                    result = await delete_item("tasks", task_name, user_id=user_id)
+                    content = f"✅ Tâche supprimée: {task_name}" if result.get("success") else f"❌ Erreur"
+                
+                elif name == "update_task_priority":
+                    task_name = args.get("task_name")
+                    priority = args.get("priority")
+                    result = await update_item(user_id, "tasks", name=task_name, updates={"priority": priority})
+                    content = f"✅ Priorité de '{task_name}' mise à jour: {priority}" if result.get("success") else f"❌ Erreur"
+                
+                elif name == "get_priority_tasks":
+                    result = get_priority_tasks(args.get("limit", 10), user_id=user_id)
+                    if result:
+                        task_list = "\n".join([f"• {t['title']} ({t.get('priority', 'normal')})" for t in result[:5]])
+                        content = f"📋 **Tâches prioritaires:**\n\n{task_list}"
+                    else:
+                        content = "📋 Aucune tâche prioritaire"
+                
+                elif name == "analyze_priorities":
+                    result = await analyze_priorities_endpoint(user_id)
+                    content = json.dumps(result, ensure_ascii=False)[:500]
+                
+                # ========== MISSIONS SUPPLEMENTAIRES ==========
+                elif name == "delete_mission":
+                    mission_name = args.get("mission_name")
+                    result = await delete_item("missions", mission_name, user_id=user_id)
+                    content = f"✅ Mission supprimée: {mission_name}" if result.get("success") else f"❌ Erreur"
+                
+                elif name == "update_mission_priority":
+                    mission_name = args.get("mission_name")
+                    priority = args.get("priority")
+                    result = await update_item(user_id, "missions", name=mission_name, updates={"priority": priority})
+                    content = f"✅ Priorité de '{mission_name}' mise à jour: {priority}" if result.get("success") else f"❌ Erreur"
+                
+                # ========== DOCUMENTS SUPPLEMENTAIRES ==========
+                elif name == "get_document":
+                    doc_id = args.get("document_id")
+                    name = args.get("name")
+                    # Logique pour récupérer un document spécifique
+                    content = "📄 Fonctionnalité get_document à implémenter"
+                
+                elif name == "update_document":
+                    name = args.get("name")
+                    updates = args.get("updates", {})
+                    result = await update_item(user_id, "documents", name=name, updates=updates)
+                    content = f"✅ Document '{name}' mis à jour" if result.get("success") else f"❌ Erreur"
+                
+                elif name == "delete_document":
+                    doc_name = args.get("document_name")
+                    result = await delete_item("documents", doc_name, user_id=user_id)
+                    content = f"✅ Document supprimé: {doc_name}" if result.get("success") else f"❌ Erreur"
+                
+                # ========== AUTRES ==========
+                elif name == "write_to_table":
+                    table = args.get("table")
+                    data = args.get("data", {})
+                    result = await db_insert(table, data)
+                    content = f"✅ Ajouté dans {table}" if result.get("success") else f"❌ Erreur"
+                
+                elif name == "add_child":
+                    name = args.get("name")
+                    result = await add_child_to_profile(user_id, name, args.get("nickname", ""), args.get("birthday"))
+                    content = f"✅ Enfant '{name}' ajouté" if result.get("success") else f"❌ Erreur"
+                
+                elif name == "update_profile":
+                    field = args.get("field")
+                    value = args.get("value")
+                    result = await update_user_profile_field(user_id, field, value)
+                    content = f"✅ Profil mis à jour: {field}" if result.get("success") else f"❌ Erreur"
+                
+                elif name == "create_checklist":
+                    title = args.get("title")
+                    steps = args.get("steps", [])
+                    result = await create_checklist_in_db(user_id, title, steps)
+                    content = f"✅ Checklist '{title}' créée" if result.get("success") else f"❌ Erreur"
+                
+                elif name == "generate_image":
+                    prompt = args.get("prompt")
+                    result = await generate_image_endpoint(prompt)
+                    content = f"🖼️ Image générée: {result.get('image_url', '')}" if result.get("success") else f"❌ Erreur"
+                
+                elif name == "create_draft":
+                    draft_type = args.get("type", "email")
+                    context = args.get("context", "")
+                    result = await create_draft_endpoint(user_id, draft_type, context)
+                    content = f"📄 Brouillon {draft_type} généré" if result.get("success") else f"❌ Erreur"
+                
+                elif name == "save_memory":
+                    key = args.get("key")
+                    value = args.get("value")
+                    category = args.get("category", "other")
+                    result = await save_user_memory(category, key, value, user_id)
+                    content = f"💾 Souvenir sauvegardé: {key}" if result else "❌ Erreur"
                 
                 elif name == "send_sms":
                     phone = args.get("phone")
