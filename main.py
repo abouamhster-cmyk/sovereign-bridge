@@ -12693,7 +12693,6 @@ async def chat_stream_endpoint(request: ChatRequest):
     
     return StreamingResponse(generate_stream(), media_type="text/event-stream")
 
-
 @app.post("/chat/stream-simple")
 async def chat_stream_simple(request: ChatRequest):
     """Version complète du chat avec streaming - Délégation totale à l'IA"""
@@ -12701,6 +12700,77 @@ async def chat_stream_simple(request: ChatRequest):
     user_id = require_user_id(request.user_id)
     last_message = request.messages[-1].get("content", "") if request.messages else ""
     last_message_lower = last_message.lower()
+    
+    # =====================================================
+    # INTERCEPTION DIRECTE DES EMAILS (AVANT L'IA)
+    # =====================================================
+    email_direct_triggers = [
+        "je veux mes mails non lus", "montre-moi mes emails", "affiche mes emails",
+        "mes emails non lus", "voir mes emails", "email non lus", "mes mails",
+        "affiche mes mails", "montre mes mails", "liste mes emails", "quels emails"
+    ]
+    
+    if any(trigger in last_message_lower for trigger in email_direct_triggers):
+        logger.info(f"📧 Interception directe des emails")
+        result = await get_gmail_messages_imap(20)
+        
+        if result.get("success") and result.get("messages"):
+            emails = result["messages"]
+            if len(emails) == 0:
+                reply = "📭 **Aucun email non lu** dans ta boîte.\n\n📧 Tu es à jour !"
+            else:
+                email_list = []
+                for i, e in enumerate(emails[:15], 1):
+                    from_clean = e.get('from', 'Inconnu').split('<')[0].strip()
+                    subject = e.get('subject', 'Sans sujet')[:60]
+                    email_list.append(f"{i}. **{from_clean}** - {subject}")
+                reply = f"📧 **{len(emails)} email(s) non lu(s) :**\n\n" + "\n".join(email_list)
+                if len(emails) > 15:
+                    reply += f"\n\n... et {len(emails) - 15} autre(s)"
+                reply += "\n\n💡 Dis-moi 'ouvre l'email [numéro]' pour voir le contenu"
+                
+                # Stocker pour ouverture ultérieure
+                if user_id not in pending_emails:
+                    pending_emails[user_id] = {}
+                pending_emails[user_id]["last_emails"] = emails
+        else:
+            reply = "❌ Impossible de récupérer les emails. Vérifie ta connexion."
+        
+        async def gen_direct():
+            yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
+        return StreamingResponse(gen_direct(), media_type="text/event-stream")
+    
+    # =====================================================
+    # INTERCEPTION DIRECTE WHATSAPP (AVANT L'IA)
+    # =====================================================
+    whatsapp_direct_triggers = [
+        "montre-moi mes whatsapp", "affiche mes whatsapp", "liste mes whatsapp",
+        "mes messages whatsapp", "whatsapp non lus", "voir whatsapp", "mes whatsapp"
+    ]
+    
+    if any(trigger in last_message_lower for trigger in whatsapp_direct_triggers):
+        logger.info(f"📱 Interception directe WhatsApp")
+        result = db_query("whatsapp_messages", {"replied": False}, 50)
+        
+        if result.get("success") and result.get("data"):
+            messages_list = result["data"]
+            if len(messages_list) == 0:
+                reply = "📭 **Aucun message WhatsApp non lu.**"
+            else:
+                formatted = f"📱 **{len(messages_list)} message(s) WhatsApp :**\n\n"
+                for i, msg in enumerate(messages_list[:15], 1):
+                    from_name = msg.get("from_name", "Inconnu")
+                    message_text = msg.get("message", "")[:80]
+                    importance = msg.get("importance", "normal")
+                    urgent_flag = "⚠️ " if importance == "high" else ""
+                    formatted += f"{i}. {urgent_flag}**{from_name}**\n   💬 {message_text}\n\n"
+                reply = formatted
+        else:
+            reply = "📭 Aucun message WhatsApp."
+        
+        async def gen_wa_direct():
+            yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
+        return StreamingResponse(gen_wa_direct(), media_type="text/event-stream")
     
     # =====================================================
     # INTERCEPTION POUR OUVRIR UN EMAIL SPÉCIFIQUE
@@ -12860,7 +12930,6 @@ Tu es Becks. Proactive, concrète, efficace. Tous les outils sont à ta disposit
                             content = f"📧 **{len(emails)} email(s) non lu(s) :**\n\n" + "\n".join(email_list)
                             if len(emails) > 15:
                                 content += f"\n\n... et {len(emails) - 15} autre(s)"
-                            # Stocker pour ouverture ultérieure
                             if user_id not in pending_emails:
                                 pending_emails[user_id] = {}
                             pending_emails[user_id]["last_emails"] = emails
