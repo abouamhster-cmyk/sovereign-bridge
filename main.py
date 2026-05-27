@@ -12714,6 +12714,11 @@ async def chat_stream_simple(request: ChatRequest):
     if any(trigger in last_message_lower for trigger in email_direct_triggers):
         logger.info(f"📧 Interception directe des emails")
         result = await get_gmail_messages_imap(20)
+
+        # LOGS DE DEBUG
+        logger.info(f"📧 Résultat brut: {result}")
+        logger.info(f"📧 Success: {result.get('success')}")
+        logger.info(f"📧 Messages count: {len(result.get('messages', []))}")
         
         # CORRECTION ICI : Vérifier correctement les messages
         if result.get("success"):
