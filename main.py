@@ -12714,32 +12714,53 @@ async def chat_stream_simple(request: ChatRequest):
     if any(trigger in last_message_lower for trigger in email_direct_triggers):
         logger.info(f"📧 Interception directe des emails")
         result = await get_gmail_messages_imap(20)
-
-        # LOGS DE DEBUG
-        logger.info(f"📧 Résultat brut: {result}")
-        logger.info(f"📧 Success: {result.get('success')}")
-        logger.info(f"📧 Messages count: {len(result.get('messages', []))}")
         
-        # CORRECTION ICI : Vérifier correctement les messages
         if result.get("success"):
             emails = result.get("messages", [])
             if emails and len(emails) > 0:
-                email_list = []
-                for i, e in enumerate(emails[:15], 1):
+                # Si un seul email, afficher directement son contenu
+                if len(emails) == 1:
+                    e = emails[0]
                     from_clean = e.get('from', 'Inconnu').split('<')[0].strip()
-                    subject = e.get('subject', 'Sans sujet')[:60]
-                    email_list.append(f"{i}. **{from_clean}** - {subject}")
-                reply = f"📧 **{len(emails)} email(s) non lu(s) :**\n\n" + "\n".join(email_list)
-                if len(emails) > 15:
-                    reply += f"\n\n... et {len(emails) - 15} autre(s)"
-                reply += "\n\n💡 Dis-moi 'ouvre l'email [numéro]' pour voir le contenu"
-                
-                # Stocker pour ouverture ultérieure
-                if user_id not in pending_emails:
-                    pending_emails[user_id] = {}
-                pending_emails[user_id]["last_emails"] = emails
+                    subject = e.get('subject', 'Sans sujet')
+                    snippet = e.get('snippet', '[Contenu non disponible]')
+                    date = e.get('date', 'Date inconnue')
+                    
+                    reply = f"📧 **1 email non lu :**\n\n"
+                    reply += f"**De :** {from_clean}\n"
+                    reply += f"**Objet :** {subject}\n"
+                    reply += f"**Date :** {date}\n\n"
+                    reply += f"**Contenu :**\n{snippet}\n\n"
+                    reply += "---\n💡 Dis-moi :\n"
+                    reply += "• 'réponds à cet email' → envoyer une réponse\n"
+                    reply += "• 'marque comme lu' → archiver"
+                    
+                    if user_id not in pending_emails:
+                        pending_emails[user_id] = {}
+                    pending_emails[user_id]["last_emails"] = emails
+                    pending_emails[user_id]["last_opened_email"] = e
+                else:
+                    # Plusieurs emails, afficher la liste
+                    email_list = []
+                    for i, e in enumerate(emails[:15], 1):
+                        from_clean = e.get('from', 'Inconnu').split('<')[0].strip()
+                        subject = e.get('subject', 'Sans sujet')[:60]
+                        snippet = e.get('snippet', '')[:100]
+                        email_list.append(f"{i}. **{from_clean}**")
+                        email_list.append(f"   📧 {subject}")
+                        if snippet:
+                            email_list.append(f"   📝 {snippet[:80]}...")
+                        email_list.append("")
+                    
+                    reply = f"📧 **{len(emails)} email(s) non lu(s) :**\n\n" + "\n".join(email_list)
+                    if len(emails) > 15:
+                        reply += f"\n... et {len(emails) - 15} autre(s)"
+                    reply += "\n💡 Dis-moi 'ouvre l'email [numéro]' pour voir le contenu complet"
+                    
+                    if user_id not in pending_emails:
+                        pending_emails[user_id] = {}
+                    pending_emails[user_id]["last_emails"] = emails
             else:
-                # Aucun email non lu
                 reply = "📭 **Aucun email non lu** dans ta boîte.\n\n📧 Tu es à jour !"
         else:
             error_msg = result.get('error', 'Erreur inconnue')
