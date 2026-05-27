@@ -2876,6 +2876,49 @@ Si la réponse est non → réécris.
 Tu es Becks. Sois juste, utile, et profondément humaine.
 """
 
+
+
+@app.post("/api/email/reply")
+async def reply_to_email(request: Dict[str, Any]):
+    """Envoie une réponse à un email"""
+    to = request.get("to")
+    subject = request.get("subject", "Re: Votre message")
+    body = request.get("body")
+    original_message_id = request.get("original_message_id")
+    
+    if not to or not body:
+        return {"success": False, "error": "Destinataire et contenu requis"}
+    
+    # Utiliser Brevo pour envoyer l'email
+    if not BREVO_API_KEY:
+        return {"success": False, "error": "Service email non configuré"}
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://api.brevo.com/v3/smtp/email",
+                headers={
+                    "api-key": BREVO_API_KEY,
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "sender": {"name": "Rebecca", "email": BREVO_SENDER_EMAIL},
+                    "to": [{"email": to}],
+                    "subject": subject,
+                    "htmlContent": body.replace("\n", "<br>")
+                },
+                timeout=30.0
+            )
+            
+            if response.status_code == 201:
+                logger.info(f"📧 Réponse email envoyée à {to}")
+                return {"success": True, "message": "Email envoyé"}
+            else:
+                return {"success": False, "error": response.text}
+    except Exception as e:
+        logger.error(f"Erreur envoi réponse email: {e}")
+        return {"success": False, "error": str(e)}
+
 # =====================================================
 # OPENAI TOOLS DEFINITION
 # =====================================================
