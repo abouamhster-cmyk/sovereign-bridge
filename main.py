@@ -12723,16 +12723,28 @@ async def chat_stream_simple(request: ChatRequest):
                     e = emails[0]
                     from_clean = e.get('from', 'Inconnu').split('<')[0].strip()
                     subject = e.get('subject', 'Sans sujet')
-                    snippet = e.get('snippet', '[Contenu non disponible]')
                     date = e.get('date', 'Date inconnue')
                     
-                    reply = f"📧 **1 email non lu :**\n\n"
-                    reply += f"**De :** {from_clean}\n"
-                    reply += f"**Objet :** {subject}\n"
-                    reply += f"**Date :** {date}\n\n"
-                    reply += f"**Contenu :**\n{snippet}\n\n"
-                    reply += "---\n💡 Dis-moi :\n"
-                    reply += "• 'réponds à cet email' → envoyer une réponse\n"
+                    # Nettoyer le snippet
+                    raw_snippet = e.get('snippet', '')
+                    import re
+                    if raw_snippet:
+                        # Enlever le HTML et les espaces en trop
+                        clean_snippet = re.sub(r'<[^>]+>', '', raw_snippet)
+                        clean_snippet = re.sub(r'\s+', ' ', clean_snippet).strip()
+                        # Limiter à 200 caractères
+                        if len(clean_snippet) > 200:
+                            clean_snippet = clean_snippet[:200] + "..."
+                    else:
+                        clean_snippet = "[Aucun aperçu disponible]"
+                    
+                    reply = f"📧 **1 email non lu - {from_clean}**\n\n"
+                    reply += f"📧 {subject}\n"
+                    reply += f"📅 {date[:16]}\n\n"
+                    reply += f"📝 **Résumé :** {clean_snippet}\n\n"
+                    reply += "---\n💡 **Actions :**\n"
+                    reply += "• 'ouvre l'email complet' → voir tout le contenu\n"
+                    reply += "• 'réponds' → envoyer une réponse\n"
                     reply += "• 'marque comme lu' → archiver"
                     
                     if user_id not in pending_emails:
