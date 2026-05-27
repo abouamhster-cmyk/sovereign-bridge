@@ -12701,6 +12701,7 @@ async def chat_stream_simple(request: ChatRequest):
     last_message = request.messages[-1].get("content", "") if request.messages else ""
     last_message_lower = last_message.lower()
     
+
     # =====================================================
     # INTERCEPTION DIRECTE DES EMAILS (AVANT L'IA)
     # =====================================================
@@ -12714,11 +12715,10 @@ async def chat_stream_simple(request: ChatRequest):
         logger.info(f"📧 Interception directe des emails")
         result = await get_gmail_messages_imap(20)
         
-        if result.get("success") and result.get("messages"):
-            emails = result["messages"]
-            if len(emails) == 0:
-                reply = "📭 **Aucun email non lu** dans ta boîte.\n\n📧 Tu es à jour !"
-            else:
+        # CORRECTION ICI : Vérifier correctement les messages
+        if result.get("success"):
+            emails = result.get("messages", [])
+            if emails and len(emails) > 0:
                 email_list = []
                 for i, e in enumerate(emails[:15], 1):
                     from_clean = e.get('from', 'Inconnu').split('<')[0].strip()
@@ -12733,8 +12733,12 @@ async def chat_stream_simple(request: ChatRequest):
                 if user_id not in pending_emails:
                     pending_emails[user_id] = {}
                 pending_emails[user_id]["last_emails"] = emails
+            else:
+                # Aucun email non lu
+                reply = "📭 **Aucun email non lu** dans ta boîte.\n\n📧 Tu es à jour !"
         else:
-            reply = "❌ Impossible de récupérer les emails. Vérifie ta connexion."
+            error_msg = result.get('error', 'Erreur inconnue')
+            reply = f"❌ Impossible de récupérer les emails: {error_msg}"
         
         async def gen_direct():
             yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
