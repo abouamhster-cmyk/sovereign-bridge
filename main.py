@@ -13268,16 +13268,12 @@ async def chat_stream_simple(request: ChatRequest):
                 yield f"data: {json.dumps({'content': '', 'done': True, 'full_response': full_response})}\n\n"
             
             return StreamingResponse(generate_direct(), media_type="text/event-stream")
-    
     except Exception as e:
         logger.error(f"Erreur stream-simple: {e}")
         async def generate_error():
-            yield f"data: {json.dumps({'error': str(e), 'done': True})}\n\n"
+            error_msg = str(e) if e else "Erreur inconnue"
+            yield f"data: {json.dumps({'error': error_msg, 'done': True})}\n\n"
         return StreamingResponse(generate_error(), media_type="text/event-stream")
-
-
-
-
 
 @app.get("/api/gmail/direct-test")
 async def direct_gmail_test():
@@ -14539,4 +14535,18 @@ async def get_execution_progress(plan_id: str, user_id: Optional[str] = None):
         logger.error(f"Erreur récupération progression: {e}")
         return {"success": False, "error": str(e)}
 
-
+async def schedule_reminder(user_id: str, title: str, minutes: int):
+    """Programme un rappel asynchrone"""
+    try:
+        await asyncio.sleep(minutes * 60)
+        # Envoyer une notification
+        send_notification_sync({
+            "title": "🔔 Rappel",
+            "body": title,
+            "url": "/",
+            "type": "reminder",
+            "user_id": user_id
+        })
+        logger.info(f"⏰ Rappel exécuté: {title} après {minutes} minutes")
+    except Exception as e:
+        logger.error(f"Erreur dans schedule_reminder: {e}")
