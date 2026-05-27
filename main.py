@@ -5111,13 +5111,25 @@ Réponds par 'oui' pour envoyer, 'non' pour annuler.
                     content = f"❌ Erreur: {result.get('error')}"
             
             elif name == "add_revenue":
-                source = args.get("source")
-                amount = args.get("amount")
-                result = await add_revenue(user_id, source, amount, args.get("project"))
-                if result.get("success"):
-                    content = f"✅ Revenu ajouté: {amount} CFA - {source}"
+                source = args.get("source", "")
+                amount = args.get("amount", 0)
+                
+                # Vérifier si c'est une vraie réception d'argent
+                revenue_keywords = ["reçu", "encaissé", "payé", "virement", "versement", "recu", "encaisse"]
+                if not any(keyword in source.lower() for keyword in revenue_keywords):
+                    # Ce n'est pas un revenu réel, c'est une opportunité ou un potentiel
+                    content = f"💡 Je note l'opportunité de {amount} CFA. Ce n'est pas encore un revenu, c'est un potentiel. Veux-tu que je crée une tâche pour la suivre ?"
+                    
+                    # Créer une tâche de suivi d'opportunité
+                    await create_task_from_conversation(ExecuteTaskRequest(
+                        title=f"Suivre opportunité: {source}",
+                        priority="high",
+                        user_id=user_id
+                    ))
                 else:
-                    content = f"❌ Erreur: {result.get('error')}"
+                    # Vrai revenu
+                    result = await add_revenue(user_id, source, amount, args.get("project"))
+                    content = f"✅ Revenu ajouté: {amount} CFA - {source}" if result.get("success") else f"❌ Erreur: {result.get('error')}"
             
             elif name == "add_mission":
                 name = args.get("name")
@@ -13068,10 +13080,25 @@ async def chat_stream_simple(request: ChatRequest):
                 
                 # ========== AJOUT REVENU ==========
                 elif name == "add_revenue":
-                    source = args.get("source")
-                    amount = args.get("amount")
-                    result = await add_revenue(user_id, source, amount, args.get("project"))
-                    content = f"✅ Revenu ajouté: {amount} CFA - {source}" if result.get("success") else f"❌ Erreur: {result.get('error')}"
+                    source = args.get("source", "")
+                    amount = args.get("amount", 0)
+                    
+                    # Vérifier si c'est une vraie réception d'argent
+                    revenue_keywords = ["reçu", "encaissé", "payé", "virement", "versement", "recu", "encaisse"]
+                    if not any(keyword in source.lower() for keyword in revenue_keywords):
+                        # Ce n'est pas un revenu réel, c'est une opportunité ou un potentiel
+                        content = f"💡 Je note l'opportunité de {amount} CFA. Ce n'est pas encore un revenu, c'est un potentiel. Veux-tu que je crée une tâche pour la suivre ?"
+                        
+                        # Créer une tâche de suivi d'opportunité
+                        await create_task_from_conversation(ExecuteTaskRequest(
+                            title=f"Suivre opportunité: {source}",
+                            priority="high",
+                            user_id=user_id
+                        ))
+                    else:
+                        # Vrai revenu
+                        result = await add_revenue(user_id, source, amount, args.get("project"))
+                        content = f"✅ Revenu ajouté: {amount} CFA - {source}" if result.get("success") else f"❌ Erreur: {result.get('error')}"
                 
                 # ========== AJOUT MISSION ==========
                 elif name == "add_mission":
